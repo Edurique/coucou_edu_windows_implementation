@@ -1410,10 +1410,13 @@ input[type="range"]::-webkit-slider-thumb {
   transition: --wash 0.45s ease-out;
 }
 
-/* Lower and flatter than the island's own wash: a light on the floor of the
-   card, behind the content, rather than a glow climbing up into it. */
+/* Unlike the island's own wash, which rises from the floor, this light hangs
+   from the top, behind the head that names the screen: the floor belongs to
+   the list's fade (.gh-list.more), and a row fading into a glow reads as
+   neither. Sized in px so it reaches the head and no further, whatever the
+   card's height. */
 .gh-card.wash::after {
-  background: radial-gradient(380px 190px at 50% 132%, var(--wash) 0%, rgba(0, 0, 0, 0) 72%);
+  background: radial-gradient(420px 150px at 50% -60px, var(--wash) 0%, rgba(0, 0, 0, 0) 72%);
 }
 
 .gh-head-badge {

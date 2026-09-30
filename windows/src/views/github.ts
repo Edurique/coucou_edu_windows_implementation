@@ -1414,7 +1414,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clear(badge);
     if (look) {
       badge.append(roundIcon(look.color, look.icon()));
-      card.style.setProperty("--wash", `${look.color}40`);
+      // Stronger than the floor wash: the light is smaller, and partly behind the head.
+      card.style.setProperty("--wash", `${look.color}73`);
     } else {
       badge.append(dot(GITHUB_RED, 7));
       card.style.setProperty("--wash", "rgba(0,0,0,0)");
