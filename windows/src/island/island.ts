@@ -169,6 +169,7 @@ export class Island {
       },
       openSettingsWindow: () => void Bridge.openSettingsWindow(),
       blip: () => Sound.play("blip"),
+      emote: (e) => this.engine.triggerEmote(e),
     };
 
     this.wakeStrip = h("div", { id: "wake-strip" });

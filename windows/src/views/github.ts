@@ -12,6 +12,7 @@ import {
   type GithubActivity, type GithubBuild, type GithubDeploy, type GithubProject, type GithubPull,
   type GithubRepo,
 } from "../core/bridge";
+import type { BotEmoteName } from "../core/layout";
 import { State } from "../core/state";
 import type { ViewActions, ViewHost } from "./views";
 
@@ -40,43 +41,86 @@ interface Sheet {
   data: GithubProject | null;
   error: string | null;
   loading: boolean;
+  /** The loader is up — only for a fetch slow enough to notice. */
+  waiting: boolean;
+  /** News just arrived after a visible wait: Mochi reacts on the next draw. */
+  react: boolean;
 }
 let sheet: Sheet | null = null;
 /** Bumped on every change to the sheet, so the view knows to redraw it. */
 let sheetStamp = 0;
+
+/** An answer from the minute of cache comes back at once: no loader for that. */
+const LOADER_DELAY_MS = 150;
 
 function touchSheet() {
   sheetStamp += 1;
   State.notify();
 }
 
-async function loadSheet(fullName: string, force: boolean) {
-  if (sheet?.fullName !== fullName) return;
-  sheet.loading = true;
+/**
+ * While a sheet is fetched Mochi searches — eyes sweeping, indigo, the "…"
+ * badge — the look he has whenever something is being looked up. Only from
+ * idle, so a finished or failed state from the pollers is never talked over.
+ */
+let searchingFor: Sheet | null = null;
+
+function startSearching(for_: Sheet) {
+  searchingFor = for_;
+  const task = State.tasks.find((t) => t.id === ID);
+  if (task?.state === "idle") State.updateTask(ID, "searching");
+}
+
+function stopSearching(for_: Sheet | null) {
+  if (!searchingFor || (for_ && searchingFor !== for_)) return;
+  searchingFor = null;
+  const task = State.tasks.find((t) => t.id === ID);
+  if (task?.state === "searching") State.updateTask(ID, "idle");
+}
+
+async function loadSheet(current: Sheet, force: boolean) {
+  current.loading = true;
   touchSheet();
-  try {
-    const data = await Bridge.githubProject(fullName, force);
-    // Another project may have been opened while this one was loading.
-    if (sheet?.fullName === fullName) {
-      sheet.data = data;
-      sheet.error = null;
-    }
-  } catch (err) {
-    if (sheet?.fullName === fullName) sheet.error = String(err).replace(/^Error:\s*/, "");
-  } finally {
-    if (sheet?.fullName === fullName) sheet.loading = false;
+  const loader = window.setTimeout(() => {
+    if (sheet !== current || !current.loading) return;
+    current.waiting = true;
+    startSearching(current);
     touchSheet();
+  }, LOADER_DELAY_MS);
+  try {
+    const data = await Bridge.githubProject(current.fullName, force);
+    current.data = data;
+    current.error = null;
+    current.react = current.waiting;
+  } catch (err) {
+    current.error = String(err).replace(/^Error:\s*/, "");
+  } finally {
+    window.clearTimeout(loader);
+    current.loading = false;
+    current.waiting = false;
+    stopSearching(current);
+    // Another project may have been opened meanwhile; it has its own draw.
+    if (sheet === current) touchSheet();
   }
 }
 
 function openSheet(fullName: string) {
-  sheet = { fullName, data: null, error: null, loading: true };
-  void loadSheet(fullName, false);
+  sheet = { fullName, data: null, error: null, loading: false, waiting: false, react: false };
+  void loadSheet(sheet, false);
 }
 
 function closeSheet() {
+  stopSearching(null);
   sheet = null;
   touchSheet();
+}
+
+/** What Mochi makes of a sheet: stars for all green, a start for a failure. */
+function mood(p: GithubProject): BotEmoteName {
+  const failed = p.runs[0]?.state === "failure" || p.deploy?.state === "failure";
+  if (failed) return "surprised";
+  const green = p.runs[0]?.state === "success" && (!p.deploy || p.deploy.state === "success");
+  return green ? "proud" : "happy";
 }
 
 /**
@@ -407,6 +451,20 @@ function languageBar(p: GithubProject): HTMLElement | null {
   return h("div", { class: "gh-langs" }, bar, legend);
 }
 
+/**
+ * What stands in for the sheet while Mochi looks: the island's shimmering
+ * text, over three ghosts of the blocks that are coming.
+ */
+function sheetLoader(name: string): HTMLElement {
+  const loader = h("div", { class: "gh-loader" }, h("div", { class: "gh-loader-text shimmer", text: `Mochi is looking into ${name}…` }));
+  for (let i = 0; i < 3; i++) {
+    const ghost = h("div", { class: "gh-ghost" }, h("i"), h("div", {}, h("b"), h("span")));
+    ghost.style.setProperty("--i", String(i));
+    loader.append(ghost);
+  }
+  return loader;
+}
+
 function projectSheet(p: GithubProject): HTMLElement {
   const facts = h("div", { class: "gh-facts" });
   const addFact = (...children: (Node | string)[]) => facts.append(h("span", {}, ...children));
@@ -419,7 +477,7 @@ function projectSheet(p: GithubProject): HTMLElement {
     facts.append(h("button", { class: "gh-host", text: hostOf(homepage), onclick: () => void Bridge.openUrl(homepage) }));
   }
 
-  return h(
+  const el = h(
     "div",
     { class: "gh-sheet" },
     p.description ? h("div", { class: "gh-desc", text: p.description }) : null,
@@ -429,6 +487,9 @@ function projectSheet(p: GithubProject): HTMLElement {
     deployBlock(p),
     languageBar(p),
   );
+  // Each part's place in the cascade when the sheet arrives.
+  Array.from(el.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+  return el;
 }
 
 export function buildGithub(actions: ViewActions): ViewHost {
@@ -507,14 +568,22 @@ export function buildGithub(actions: ViewActions): ViewHost {
     who.textContent = repoName(open.fullName, login);
     sub.textContent = open.data?.languages[0]?.name ?? "";
     clear(status);
-    if (open.error) {
-      status.append(dot(GITHUB_RED, 5), h("span", { text: open.error }));
-    } else if (!open.data) {
-      status.append(h("span", { text: "Loading…" }));
-    }
+    if (open.error) status.append(dot(GITHUB_RED, 5), h("span", { text: open.error }));
     listTab = null;
     clear(list);
-    if (open.data) list.append(projectSheet(open.data));
+    if (open.data) {
+      const content = projectSheet(open.data);
+      if (open.react) {
+        // Fresh news after a wait: the blocks come in one by one, and Mochi
+        // says what he thinks of them.
+        open.react = false;
+        content.classList.add("enter");
+        actions.emote(mood(open.data));
+      }
+      list.append(content);
+    } else if (open.waiting) {
+      list.append(sheetLoader(repoName(open.fullName, login)));
+    }
     list.scrollTop = 0;
     updateFade();
   }
@@ -523,7 +592,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     if (refreshing || sheet?.loading) return;
     actions.blip();
     if (sheet) {
-      void loadSheet(sheet.fullName, true);
+      void loadSheet(sheet, true);
       return;
     }
     refreshing = true;

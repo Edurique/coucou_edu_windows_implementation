@@ -1642,6 +1642,96 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 0 0 10px;
 }
 
+/* Arriving after a wait: the parts come in one after another, on the island's
+   own entrance curve (.view.on). */
+.gh-sheet.enter > * {
+  animation: gh-rise 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+@keyframes gh-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* While Mochi looks: the shimmering line of the searching view, over ghosts
+   of the blocks to come. */
+.gh-loader {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.gh-loader-text {
+  font: 500 11.5px var(--font);
+  padding: 0 8px 4px;
+}
+
+.gh-ghost {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.075) 50%,
+    rgba(255, 255, 255, 0.03) 100%
+  );
+  background-size: 220% 100%;
+  animation: gh-ghost 1.6s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 0.14s);
+}
+
+.gh-ghost > i {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: rgba(99, 102, 241, 0.22);
+}
+
+.gh-ghost > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.gh-ghost b,
+.gh-ghost span {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.gh-ghost b {
+  width: 46%;
+}
+
+.gh-ghost span {
+  width: 72%;
+}
+
+@keyframes gh-ghost {
+  from {
+    background-position: 110% 0;
+  }
+  to {
+    background-position: -110% 0;
+  }
+}
+
 .gh-desc {
   font: 400 11.5px/1.4 var(--font);
   color: #c5c8cd;

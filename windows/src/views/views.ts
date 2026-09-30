@@ -6,7 +6,7 @@ import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
 import { State, type AgentTask } from "../core/state";
-import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
+import { washRGBA, type BotEmoteName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
@@ -27,6 +27,8 @@ export interface ViewActions {
   setAutoClose(seconds: number): void;
   openSettingsWindow(): void;
   blip(): void;
+  /** Mochi reacts to something a view just showed (the GitHub panel's news). */
+  emote(e: BotEmoteName): void;
 }
 
 export interface ViewHost {

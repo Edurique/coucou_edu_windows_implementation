@@ -90,7 +90,12 @@ const sheet: GithubProject = {
   },
   missing: params.has("locked") ? ["deployments"] : [],
 };
-Bridge.githubProject = async () => sheet;
+// `slow` stands in for a real network, long enough to watch Mochi search.
+Bridge.githubProject = async () => {
+  const ms = Number(params.get("slow"));
+  if (params.has("slow")) await new Promise((r) => setTimeout(r, ms > 100 ? ms : 2500));
+  return sheet;
+};
 
 State.loadIntegrationTasks();
 State.integrations.integration_github = {
