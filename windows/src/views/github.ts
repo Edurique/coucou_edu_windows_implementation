@@ -226,15 +226,18 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
 
 // ── Contribution graph ────────────────────────────────────────────────────────
 //
-// GitHub's year of squares, redrawn as the island draws everything else: tiny
-// squircles — Mochi's own shape — in Mochi's `finished` green, growing and
-// brightening with GitHub's own levels. Under the mouse, Mochi takes the colour
-// of the day.
+// GitHub's year of squares, in GitHub's own colours, drawn as tiny squircles —
+// Mochi's shape. Under the mouse, Mochi takes the colour of the day.
 
 const DAY_MS = 86_400_000;
 
-/** Mochi's `finished` green — the colour of work done. */
-const GRAPH_GREEN = "#34D399";
+/**
+ * GitHub's dark-theme contribution colours, level 0 to 4 (Primer's
+ * contribution-default-bgColor-*). The empty day is lifted a shade, since the
+ * island's card is a little lighter than GitHub's page and #151B23 would
+ * vanish on it.
+ */
+const GITHUB_LEVELS = ["#1C2128", "#033A16", "#196C2E", "#2EA043", "#56D364"];
 /** Mochi at rest, the `idle` colour: what an empty day turns him. */
 const IDLE = "#E6E9EE";
 
@@ -251,13 +254,14 @@ function mixHex(a: string, b: string, t: number): string {
 }
 
 /**
- * Per GitHub level, 0 (nothing) to 4 (busiest): how big and how green the cell
- * is, and how green Mochi turns — with how bright his glow — over that day.
+ * Per GitHub level, 0 (nothing) to 4 (busiest): the cell's colour, and how
+ * green Mochi turns — with how bright his glow — over that day. Mochi's shades
+ * run from his resting colour to GitHub's brightest green, never through the
+ * dark ones: his eyes are ink-dark and would vanish on a dark green body.
  */
 const LEVEL_LOOK = [0, 0.4, 0.6, 0.8, 1].map((t, level) => ({
-  scale: [0.42, 0.62, 0.76, 0.9, 1][level],
-  cell: level === 0 ? "rgba(255,255,255,0.1)" : `${GRAPH_GREEN}${Math.round((0.25 + 0.75 * t) * 255).toString(16).padStart(2, "0")}`,
-  mochi: mixHex(IDLE, GRAPH_GREEN, t),
+  cell: GITHUB_LEVELS[level],
+  mochi: mixHex(IDLE, GITHUB_LEVELS[4], t),
   glow: 0.15 + 0.5 * t,
 }));
 
@@ -320,7 +324,6 @@ function contributionGraph(
     const look = LEVEL_LOOK[level] ?? LEVEL_LOOK[0];
     const classes = [level > 0 ? "lit" : "", i === c.counts.length - 1 ? "today" : ""].join(" ").trim();
     const cell = h("i", { class: classes, "data-i": String(i) });
-    cell.style.setProperty("--s", String(look.scale));
     cell.style.setProperty("--c", look.cell);
     cell.style.setProperty("--col", String(Math.floor((offset + i) / 7)));
     grid.append(cell);
@@ -330,7 +333,15 @@ function contributionGraph(
   const summary =
     `${c.total.toLocaleString()} contribution${c.total === 1 ? "" : "s"} in the last year` +
     (streak >= 2 ? ` · ${streak} days in a row` : "");
-  const caption = h("div", { class: "gh-caption", text: summary });
+  const caption = h("span", { class: "gh-caption", text: summary });
+  // GitHub's key, so the colours read the same as on the profile page.
+  const legend = h("span", { class: "gh-legend" }, "Less");
+  for (const color of GITHUB_LEVELS) {
+    const swatch = h("i");
+    swatch.style.setProperty("--c", color);
+    legend.append(swatch);
+  }
+  legend.append("More");
 
   // Hovering a day says what it holds and turns Mochi that day's green;
   // leaving the grid gives the year back, and Mochi his own colour.
@@ -349,7 +360,7 @@ function contributionGraph(
     tint(null);
   });
 
-  return h("div", { class: "gh-graph" }, months, grid, caption);
+  return h("div", { class: "gh-graph" }, months, grid, h("div", { class: "gh-graph-foot" }, caption, legend));
 }
 
 // ── Project sheet ─────────────────────────────────────────────────────────────

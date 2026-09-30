@@ -1666,29 +1666,23 @@ input[type="range"]::-webkit-slider-thumb {
   row-gap: 2px;
 }
 
-/* Each day is a tiny Mochi-shaped squircle, sized by its level. Hover grows it
-   with the `scale` property, so it adds to the level's `transform` instead of
-   fighting the entrance and breathing animations over it. */
+/* Each day is a tiny Mochi-shaped squircle in GitHub's colour for its level.
+   Hover grows it with the `scale` property, which composes with `transform`
+   instead of fighting the entrance and breathing animations over it. */
 .gh-grid i {
   aspect-ratio: 1;
   border-radius: 34%;
   background: var(--c);
-  transform: scale(var(--s));
   transition: scale 0.14s ease-out, box-shadow 0.14s ease-out;
-}
-
-/* Lit days get the soft top light of Mochi's own body. */
-.gh-grid i.lit {
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--c), #fff 22%), var(--c));
 }
 
 .gh-grid i:not(.pad):hover {
   scale: 1.45;
 }
 
-/* …and glow in their green, the way a pill glows in its colour. */
+/* …and glow in GitHub's green, the way a pill glows in its colour. */
 .gh-grid i.lit:hover {
-  box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+  box-shadow: 0 0 6px rgba(86, 211, 100, 0.7);
 }
 
 .gh-grid i.pad {
@@ -1707,7 +1701,7 @@ input[type="range"]::-webkit-slider-thumb {
     transform: scale(0);
   }
   to {
-    transform: scale(var(--s));
+    transform: scale(1);
   }
 }
 
@@ -1726,18 +1720,54 @@ input[type="range"]::-webkit-slider-thumb {
 @keyframes gh-breathe {
   0%,
   100% {
-    transform: scale(var(--s));
+    transform: scale(1);
   }
   50% {
-    transform: scale(calc(var(--s) * 1.2));
+    transform: scale(0.8);
   }
 }
 
+.gh-graph-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 3px;
+}
+
 .gh-caption {
+  flex: 1 1 auto;
+  min-width: 0;
   font: 400 10.5px var(--font);
   color: var(--dim-2);
-  padding-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+}
+
+/* GitHub's "Less ▪▪▪▪▪ More". */
+.gh-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  font: 400 9.5px var(--font);
+  color: var(--dim-3);
+}
+
+.gh-legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 34%;
+  background: var(--c);
+}
+
+.gh-legend i:first-of-type {
+  margin-left: 2px;
+}
+
+.gh-legend i:last-of-type {
+  margin-right: 2px;
 }
 
 .gh-caption.day {
