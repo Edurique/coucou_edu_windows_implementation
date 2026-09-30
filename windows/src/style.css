@@ -1409,11 +1409,11 @@ input[type="range"]::-webkit-slider-thumb {
 .gh-side {
   position: relative;
   z-index: 1;
-  flex: 0 0 106px;
+  flex: 0 0 113px;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 90px 8px 12px 13px;
+  padding: 119px 8px 12px 13px;
 }
 
 .gh-side-who {
@@ -1424,7 +1424,7 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .gh-side-who b {
-  font: 600 13px var(--font);
+  font: 600 14px var(--font);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
@@ -1432,7 +1432,7 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .gh-side-who span {
-  font: 400 11px var(--font);
+  font: 400 12px var(--font);
   color: var(--dim-2);
   white-space: nowrap;
   overflow: hidden;
@@ -1443,22 +1443,22 @@ input[type="range"]::-webkit-slider-thumb {
 .gh-trail {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  margin-top: 16px;
+  gap: 1.5px;
+  margin-top: 11px;
   min-width: 0;
 }
 
 .gh-step {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   height: 21px;
   min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--dim-3);
-  font: 500 12px var(--font);
+  font: 500 12.5px var(--font);
   text-align: left;
   cursor: default;
   transition: color 0.12s ease-out;
@@ -1473,8 +1473,10 @@ button.gh-step:hover {
   font-weight: 600;
 }
 
+/* The marks hang a little left of the words above them, as in the session view. */
 .gh-step > i {
   width: 14px;
+  margin-left: -2px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -1508,7 +1510,7 @@ button.gh-step:hover {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  margin: 8px 8px 8px 0;
+  margin: 7px 8px 7px 0;
   display: flex;
   flex-direction: column;
   border-radius: 14px;
@@ -1539,22 +1541,29 @@ button.gh-step:hover {
   gap: 6px;
   min-width: 0;
   flex: 0 0 auto;
-  height: 34px;
-  padding: 0 7px 0 6px;
+  height: 25px;
+  padding: 0 4px 0 7px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* What is open, as an editor names its file: a tab with a mark and a name. */
+/* What is open, as an editor names its file: a tab standing on the head's
+   line, with a mark and a name. */
 .gh-tab {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   flex: 0 1 auto;
+  align-self: flex-end;
   height: 22px;
-  padding: 0 9px 0 4px;
-  border-radius: 7px;
+  padding: 0 10px 0 6px;
+  border-radius: 7px 7px 0 0;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.gh-head .gh-icon {
+  width: 19px;
+  height: 19px;
 }
 
 .gh-tab b {
@@ -1789,14 +1798,14 @@ button.gh-step:hover {
   padding: 2px 8px 6px;
 }
 
-/* --cell and --gap are set from the graph's width in whole device pixels (see
-   contributionGraph), so every day is drawn the same size; these are only the
-   values before that first fit. */
+/* --cell, --gap and --columns are set from the graph's width in whole device
+   pixels (see contributionGraph): every day is drawn the same size, and each
+   week's column carries the gap after it, so the weeks fill the width to the
+   pixel. The fallbacks only hold until that first fit. */
 .gh-months,
 .gh-grid {
   display: grid;
-  grid-template-columns: repeat(var(--weeks, 53), var(--cell, 7px));
-  column-gap: var(--gap, 2px);
+  grid-template-columns: var(--columns, repeat(var(--weeks, 53), calc(var(--cell, 7px) + var(--gap, 2px))));
 }
 
 .gh-months {
@@ -1820,6 +1829,7 @@ button.gh-step:hover {
    Hover grows it with the `scale` property, which composes with `transform`
    instead of fighting the entrance and breathing animations over it. */
 .gh-grid i {
+  width: var(--cell, 7px);
   border-radius: 34%;
   background: var(--c);
   cursor: default;

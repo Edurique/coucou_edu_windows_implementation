@@ -196,11 +196,6 @@ function popTo(depth: number) {
   touch();
 }
 
-/** One level back. */
-function pop() {
-  popTo(stack.length - 1);
-}
-
 function clearStack() {
   for (const screen of stack) stopSearching(screen);
   stack = [];
@@ -628,17 +623,32 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
   graph.style.setProperty("--weeks", String(weeks));
 
   // Cells sized as fractions of the width landed on fractions of a screen
-  // pixel, so at 125 % some were drawn a pixel wider than others. Sizing them
-  // in whole device pixels draws every one alike; the grid is refitted
-  // whenever its width changes (a scrollbar appearing, for one).
+  // pixel, so at 125 % some were drawn a pixel wider than others: every day
+  // is sized in whole device pixels, all alike. Whole cells leave up to a
+  // pixel per week unused — 35 px of empty grid at the right edge — so what
+  // is left over goes to the gaps between weeks instead, one device pixel
+  // more here and there, spread evenly: a pixel of spacing reads as nothing
+  // where a pixel of cell read as a crooked grid. Refitted whenever the
+  // width changes (a scrollbar appearing, for one).
   new ResizeObserver(() => {
     const available = grid.clientWidth;
     if (!available) return;
     const ratio = window.devicePixelRatio || 1;
+    const width = Math.floor(available * ratio);
     const gap = Math.max(1, Math.round(1.6 * ratio));
-    const pitch = Math.floor((available * ratio + gap) / weeks);
-    graph.style.setProperty("--cell", `${(pitch - gap) / ratio}px`);
+    const cell = Math.floor((width - (weeks - 1) * gap) / weeks);
+    // Fewer than one pixel per gap: never more than one extra in any of them.
+    const spare = width - weeks * cell - (weeks - 1) * gap;
+    const share = (i: number) => Math.floor((i * spare) / (weeks - 1));
+    const columns: string[] = [];
+    for (let i = 0; i < weeks; i++) {
+      // A week's column is its cell and the gap after it; the last has none.
+      const after = i < weeks - 1 ? gap + share(i + 1) - share(i) : 0;
+      columns.push(`${(cell + after) / ratio}px`);
+    }
+    graph.style.setProperty("--cell", `${cell / ratio}px`);
     graph.style.setProperty("--gap", `${gap / ratio}px`);
+    graph.style.setProperty("--columns", columns.join(" "));
   }).observe(grid);
 
   return graph;
@@ -1583,20 +1593,6 @@ function diffView(file: GithubFile, url: string): HTMLElement {
 }
 
 export function buildGithub(actions: ViewActions): ViewHost {
-  const back = h(
-    "button",
-    {
-      class: "int-back",
-      title: "Back",
-      // One level back through the sheets; from the lists, back to the card.
-      onclick: () => {
-        actions.blip();
-        if (stack.length > 0) pop();
-        else actions.setView("overview");
-      },
-    },
-    svg(ICONS.chevronLeft, 10, { stroke: 2.4 }),
-  );
   const who = h("b", { text: "GitHub" });
   const sub = h("span", { class: "gh-sub" });
   const refreshBtn = h("button", { class: "gh-icon", title: "Refresh" }, svg(ICONS.refresh, 12, { stroke: 2 }));
@@ -1625,10 +1621,11 @@ export function buildGithub(actions: ViewActions): ViewHost {
   // GitHub's red dot on the lists; the screen's own badge over them.
   const badge = h("span", { class: "gh-head-badge" });
   // Like an editor's tab: what is open on the left, where it sits on the right.
+  // No ‹ here: the column's trail steps back, the island's house goes home.
   const head = h(
     "div",
     { class: "gh-head" },
-    back, h("div", { class: "gh-tab" }, badge, who), h("div", { class: "grow" }), sub, refreshBtn, openBtn,
+    h("div", { class: "gh-tab" }, badge, who), h("div", { class: "grow" }), sub, refreshBtn, openBtn,
   );
   const status = h("div", { class: "gh-status" });
   const list = h("div", { class: "gh-list" });
