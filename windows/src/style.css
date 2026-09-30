@@ -1673,12 +1673,23 @@ input[type="range"]::-webkit-slider-thumb {
   aspect-ratio: 1;
   border-radius: 34%;
   background: var(--c);
-  transition: scale 0.14s ease-out;
+  cursor: default;
+  transition: scale 0.14s ease-out, opacity 0.2s ease-out;
 }
 
-/* The day under the mouse just grows a little; no glow. */
-.gh-grid i:not(.pad):hover {
+/* The day under the mouse, and the picked day, just grow a little; no glow. */
+.gh-grid i:not(.pad):hover,
+.gh-grid i.on {
   scale: 1.45;
+}
+
+/* A picked day: the rest of the year steps back, as on GitHub. */
+.gh-grid.picked i:not(.pad):not(.on) {
+  opacity: 0.3;
+}
+
+.gh-grid.picked i:not(.pad):not(.on):hover {
+  opacity: 0.7;
 }
 
 .gh-grid i.pad {
@@ -1770,6 +1781,41 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--ink-2);
 }
 
+/* A picked day, under the graph: a head like a sheet's, then the day's rows. */
+.gh-day {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 0 0 auto;
+  padding-bottom: 8px;
+}
+
+.gh-day-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 2px 8px;
+  font: 500 11px var(--font);
+  color: var(--ink-2);
+}
+
+.gh-day-head span {
+  flex: 1 1 auto;
+}
+
+.gh-day-close {
+  width: 22px;
+  height: 22px;
+}
+
+.gh-day .gh-loader-text {
+  padding-top: 2px;
+}
+
+.gh-row.muted {
+  color: var(--dim-3);
+}
+
 /* ── GitHub panel: a project's sheet ────────────────────────────────────── */
 
 .gh-sheet {
@@ -1781,7 +1827,8 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* Arriving after a wait: the parts come in one after another, on the island's
    own entrance curve (.view.on). */
-.gh-sheet.enter > * {
+.gh-sheet.enter > *,
+.gh-day.enter > * {
   animation: gh-rise 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
   animation-delay: calc(var(--i, 0) * 45ms);
 }

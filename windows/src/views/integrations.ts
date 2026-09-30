@@ -222,7 +222,7 @@ export function githubData(): GithubData | null {
  * colours rather than GitHub's: a merged PR is green like `finished`, a push
  * blue like `working`, an open issue amber like `approval`.
  */
-export const ACTIVITY_STYLE: Record<GithubActivityKind, { icon: string; color: string }> = {
+export const ACTIVITY_STYLE: Record<GithubActivityKind | "review", { icon: string; color: string }> = {
   push: { icon: ICONS.commit, color: "#3B9EFF" },
   pr_opened: { icon: ICONS.pullRequest, color: "#6366F1" },
   pr_merged: { icon: ICONS.merge, color: "#34D399" },
@@ -231,6 +231,8 @@ export const ACTIVITY_STYLE: Record<GithubActivityKind, { icon: string; color: s
   issue_closed: { icon: ICONS.issue, color: "#6B7079" },
   release: { icon: ICONS.tag, color: "#22D3EE" },
   create: { icon: ICONS.add, color: "#9398A1" },
+  // A review asked for your eyes, like a question: Mochi's `question` cyan.
+  review: { icon: ICONS.pullRequest, color: "#22D3EE" },
 };
 
 /** "edu/coucou" → "coucou" for your own repositories, the full name otherwise. */

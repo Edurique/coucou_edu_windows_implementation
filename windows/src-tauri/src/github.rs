@@ -1148,6 +1148,158 @@ fn parse_project(repo: &Value, runs: Vec<Run>, missing: Vec<&'static str>) -> Op
     })
 }
 
+// ── One day of the graph (a click on a day) ───────────────────────────────────
+//
+// What GitHub's profile page lists under the graph when a day is clicked:
+// contributionsCollection narrowed to that day. The events feed can't do it —
+// it only goes back thirty days.
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Day {
+    pub items: Vec<DayItem>,
+    /// Contributions that day in repositories the token can't see into.
+    pub private_count: i64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DayItem {
+    /// push (commits), pr_opened, pr_merged, review, issue_opened or create.
+    pub kind: &'static str,
+    /// "owner/name".
+    pub repo: String,
+    pub title: String,
+    pub detail: Option<String>,
+    pub url: String,
+}
+
+const DAY_QUERY: &str = "query($from: DateTime!, $to: DateTime!) { viewer { \
+    contributionsCollection(from: $from, to: $to) { restrictedContributionsCount \
+    commitContributionsByRepository(maxRepositories: 10) { repository { nameWithOwner url } contributions { totalCount } } \
+    pullRequestContributions(first: 10) { nodes { pullRequest { number title url merged repository { nameWithOwner } } } } \
+    pullRequestReviewContributions(first: 10) { nodes { pullRequest { number title url repository { nameWithOwner } } } } \
+    issueContributions(first: 10) { nodes { issue { number title url repository { nameWithOwner } } } } \
+    repositoryContributions(first: 10) { nodes { repository { nameWithOwner url } } } } } }";
+
+/// A day that's over doesn't change; today still can.
+const PAST_DAY_TTL: u64 = 3600;
+const TODAY_TTL: u64 = 60;
+
+static DAYS: LazyLock<Mutex<HashMap<String, (u64, Day)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// An ISO 8601 timestamp and nothing else: it goes to GitHub as a variable.
+fn is_timestamp(s: &str) -> bool {
+    (10..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit() || "-:T.Z+".contains(c))
+}
+
+/// `from` and `to` bound the day in the user's own time zone, worked out by
+/// the island, so the list matches the day they clicked on.
+pub async fn day(from: &str, to: &str, today: bool) -> Result<Day, String> {
+    if !is_timestamp(from) || !is_timestamp(to) {
+        return Err("Unknown day".into());
+    }
+    let key = format!("{from}/{to}");
+    let now = unix_now();
+    let ttl = if today { TODAY_TTL } else { PAST_DAY_TTL };
+    if let Some((at, cached)) = DAYS.lock().unwrap().get(&key) {
+        if now.saturating_sub(*at) < ttl {
+            return Ok(cached.clone());
+        }
+    }
+
+    let gh = Gh::from_store().map_err(|e| e.message())?;
+    let (data, _) = gh
+        .graphql_with(DAY_QUERY, json!({ "from": from, "to": to }))
+        .await
+        .map_err(|e| e.message())?;
+    let collection = data
+        .pointer("/viewer/contributionsCollection")
+        .ok_or_else(|| GhError::BadResponse.message())?;
+    let day = parse_day(collection);
+    DAYS.lock().unwrap().insert(key, (now, day.clone()));
+    Ok(day)
+}
+
+fn nodes<'a>(collection: &'a Value, field: &str) -> impl Iterator<Item = &'a Value> {
+    collection
+        .pointer(&format!("/{field}/nodes"))
+        .and_then(Value::as_array)
+        .map(|a| a.as_slice())
+        .unwrap_or_default()
+        .iter()
+}
+
+fn parse_day(collection: &Value) -> Day {
+    let mut items = Vec::new();
+
+    // Commits come grouped by repository, as on the profile page.
+    for group in collection
+        .get("commitContributionsByRepository")
+        .and_then(Value::as_array)
+        .map(|a| a.as_slice())
+        .unwrap_or_default()
+    {
+        let (Some(repo), Some(count)) = (
+            text(group.pointer("/repository/nameWithOwner")),
+            group.pointer("/contributions/totalCount").and_then(Value::as_i64),
+        ) else {
+            continue;
+        };
+        let url = text(group.pointer("/repository/url")).unwrap_or_else(|| format!("https://github.com/{repo}"));
+        let title = if count == 1 { "1 commit".to_string() } else { format!("{count} commits") };
+        items.push(DayItem { kind: "push", repo, title, detail: None, url: format!("{url}/commits") });
+    }
+
+    let pull = |node: &Value, kind_for: &dyn Fn(bool) -> &'static str| -> Option<DayItem> {
+        let pr = node.get("pullRequest")?;
+        let merged = pr.get("merged").and_then(Value::as_bool).unwrap_or(false);
+        let number = pr.get("number")?.as_u64()?;
+        Some(DayItem {
+            kind: kind_for(merged),
+            repo: text(pr.pointer("/repository/nameWithOwner"))?,
+            title: text(pr.get("title")).unwrap_or_else(|| format!("Pull request #{number}")),
+            detail: Some(format!("#{number}")),
+            url: text(pr.get("url"))?,
+        })
+    };
+    items.extend(nodes(collection, "pullRequestContributions").filter_map(|n| {
+        pull(n, &|merged| if merged { "pr_merged" } else { "pr_opened" })
+    }));
+    items.extend(nodes(collection, "pullRequestReviewContributions").filter_map(|n| pull(n, &|_| "review")));
+
+    items.extend(nodes(collection, "issueContributions").filter_map(|n| {
+        let issue = n.get("issue")?;
+        let number = issue.get("number")?.as_u64()?;
+        Some(DayItem {
+            kind: "issue_opened",
+            repo: text(issue.pointer("/repository/nameWithOwner"))?,
+            title: text(issue.get("title")).unwrap_or_else(|| format!("Issue #{number}")),
+            detail: Some(format!("#{number}")),
+            url: text(issue.get("url"))?,
+        })
+    }));
+
+    items.extend(nodes(collection, "repositoryContributions").filter_map(|n| {
+        let repo = text(n.pointer("/repository/nameWithOwner"))?;
+        Some(DayItem {
+            kind: "create",
+            url: text(n.pointer("/repository/url")).unwrap_or_else(|| format!("https://github.com/{repo}")),
+            repo,
+            title: "Created the repository".into(),
+            detail: None,
+        })
+    }));
+
+    Day {
+        items,
+        private_count: collection
+            .get("restrictedContributionsCount")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+    }
+}
+
 // ── Connection test (settings window) ─────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -1516,6 +1668,58 @@ mod tests {
     fn no_calendar_means_no_graph() {
         assert_eq!(parse_contributions(None), None);
         assert_eq!(parse_contributions(Some(&json!({ "weeks": [] }))), None);
+    }
+
+    #[test]
+    fn a_day_lists_commits_by_repository_then_pull_requests_reviews_issues_and_repos() {
+        let collection = json!({
+            "restrictedContributionsCount": 3,
+            "commitContributionsByRepository": [
+                { "repository": { "nameWithOwner": "edu/coucou", "url": "https://github.com/edu/coucou" }, "contributions": { "totalCount": 4 } },
+                { "repository": { "nameWithOwner": "edu/notes", "url": "https://github.com/edu/notes" }, "contributions": { "totalCount": 1 } },
+            ],
+            "pullRequestContributions": { "nodes": [
+                { "pullRequest": { "number": 12, "title": "Panel", "url": "https://github.com/edu/coucou/pull/12", "merged": true, "repository": { "nameWithOwner": "edu/coucou" } } },
+            ]},
+            "pullRequestReviewContributions": { "nodes": [
+                { "pullRequest": { "number": 3, "title": "Typo", "url": "https://github.com/louis/coucou/pull/3", "repository": { "nameWithOwner": "louis/coucou" } } },
+            ]},
+            "issueContributions": { "nodes": [
+                { "issue": { "number": 4, "title": "Crash", "url": "https://github.com/edu/coucou/issues/4", "repository": { "nameWithOwner": "edu/coucou" } } },
+            ]},
+            "repositoryContributions": { "nodes": [
+                { "repository": { "nameWithOwner": "edu/sandbox", "url": "https://github.com/edu/sandbox" } },
+            ]},
+        });
+        let day = parse_day(&collection);
+        let summary: Vec<(&str, &str)> = day.items.iter().map(|i| (i.kind, i.title.as_str())).collect();
+        assert_eq!(summary, [
+            ("push", "4 commits"),
+            ("push", "1 commit"),
+            ("pr_merged", "Panel"),
+            ("review", "Typo"),
+            ("issue_opened", "Crash"),
+            ("create", "Created the repository"),
+        ]);
+        assert_eq!(day.items[0].url, "https://github.com/edu/coucou/commits");
+        assert_eq!(day.items[3].repo, "louis/coucou");
+        assert_eq!(day.private_count, 3);
+    }
+
+    #[test]
+    fn an_empty_day_is_empty() {
+        let day = parse_day(&json!({ "restrictedContributionsCount": 0 }));
+        assert!(day.items.is_empty());
+        assert_eq!(day.private_count, 0);
+    }
+
+    #[test]
+    fn only_timestamps_go_to_github() {
+        assert!(is_timestamp("2026-09-29T22:00:00.000Z"));
+        assert!(is_timestamp("2026-09-30T00:00:00+02:00"));
+        for bad in ["", "yesterday", "2026-09-30\") { x }", "2026-09-30T00:00:00Z; drop"] {
+            assert!(!is_timestamp(bad), "{bad}");
+        }
     }
 
     #[test]

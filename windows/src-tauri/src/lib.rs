@@ -305,6 +305,13 @@ async fn github_project(full_name: String, force: bool) -> Result<github::Projec
     github::project(&full_name, force).await
 }
 
+/// A click on a day of the contribution graph: what was done that day, between
+/// the island's local midnights. On demand only, cached.
+#[tauri::command]
+async fn github_day(from: String, to: String, today: bool) -> Result<github::Day, String> {
+    github::day(&from, &to, today).await
+}
+
 /// Opens the configured n8n instance — the URL lives in the Credential Manager.
 #[tauri::command]
 fn open_n8n() {
@@ -431,6 +438,7 @@ pub fn run() {
             secret_clear,
             github_test,
             github_project,
+            github_day,
             refresh_integration,
             open_n8n,
             open_settings_window,

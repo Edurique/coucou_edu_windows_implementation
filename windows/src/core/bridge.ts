@@ -104,7 +104,24 @@ export const Bridge = {
   /** A project's sheet, fetched on the click. `force` skips the minute of cache. */
   githubProject: (fullName: string, force: boolean) =>
     callOrThrow<GithubProject>("github_project", { fullName, force }),
+  /** What was done on one day of the graph, between two local midnights (ISO). */
+  githubDay: (from: string, to: string, today: boolean) =>
+    callOrThrow<GithubDay>("github_day", { from, to, today }),
 };
+
+/** A clicked day of the contribution graph — the Day struct in github.rs. */
+export interface GithubDay {
+  items: {
+    kind: GithubActivityKind | "review";
+    /** "owner/name". */
+    repo: string;
+    title: string;
+    detail: string | null;
+    url: string;
+  }[];
+  /** Contributions that day in repositories the token can't see into. */
+  privateCount: number;
+}
 
 /** The sheet behind a click on a project — the Project struct in github.rs. */
 export interface GithubProject {

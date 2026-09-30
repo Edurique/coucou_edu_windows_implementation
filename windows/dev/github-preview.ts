@@ -3,7 +3,9 @@
 // Not part of the app bundle. `npm run dev`, then /dev/github-preview.html.
 
 import "../src/style.css";
-import { Bridge, type GithubActivity, type GithubData, type GithubProject, type GithubRepo } from "../src/core/bridge";
+import {
+  Bridge, type GithubActivity, type GithubData, type GithubDay, type GithubProject, type GithubRepo,
+} from "../src/core/bridge";
 import { State } from "../src/core/state";
 import { Island } from "../src/island/island";
 
@@ -118,6 +120,21 @@ Bridge.githubProject = async () => {
   const ms = Number(params.get("slow"));
   if (params.has("slow")) await new Promise((r) => setTimeout(r, ms > 100 ? ms : 2500));
   return sheet;
+};
+
+// Any clicked day gets this one, after a short wait so the loader shows.
+const aDay: GithubDay = {
+  items: [
+    { kind: "push", repo: "mochi/coucou", title: "4 commits", detail: null, url: "https://github.com" },
+    { kind: "push", repo: "mochi/tour-convention-geneve", title: "1 commit", detail: null, url: "https://github.com" },
+    { kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com" },
+    { kind: "review", repo: "louis-cfm/coucou", title: "Fix the hook timeout", detail: "#31", url: "https://github.com" },
+  ],
+  privateCount: 2,
+};
+Bridge.githubDay = async () => {
+  await new Promise((r) => setTimeout(r, 900));
+  return aDay;
 };
 
 State.loadIntegrationTasks();

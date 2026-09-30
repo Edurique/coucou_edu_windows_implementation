@@ -9,7 +9,7 @@ import { ICONS } from "./icons";
 import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
   Bridge,
-  type GithubActivity, type GithubBuild, type GithubContributions, type GithubDeploy,
+  type GithubActivity, type GithubBuild, type GithubContributions, type GithubDay, type GithubDeploy,
   type GithubProject, type GithubPull, type GithubRepo,
 } from "../core/bridge";
 import type { BotEmoteName } from "../core/layout";
@@ -35,84 +35,148 @@ const BUILD_STYLE: Record<GithubBuild["state"], { color: string; label: string }
   neutral: { color: "#6B7079", label: "stopped" },
 };
 
-/** The project whose sheet is open, fetched on the click that opened it. */
-interface Sheet {
-  fullName: string;
-  data: GithubProject | null;
+/**
+ * Something the panel fetches on a click — a project's sheet, a day of the
+ * graph — and how that fetch is going.
+ */
+interface Pending<T> {
+  data: T | null;
   error: string | null;
   loading: boolean;
   /** The loader is up — only for a fetch slow enough to notice. */
   waiting: boolean;
-  /** News just arrived after a visible wait: Mochi reacts on the next draw. */
+  /** Arrived after a visible wait: the next draw makes an entrance of it. */
   react: boolean;
 }
-let sheet: Sheet | null = null;
-/** Bumped on every change to the sheet, so the view knows to redraw it. */
-let sheetStamp = 0;
 
-/** An answer from the minute of cache comes back at once: no loader for that. */
+function pending<T>(): Pending<T> {
+  return { data: null, error: null, loading: false, waiting: false, react: false };
+}
+
+/** The project whose sheet is open. */
+interface Sheet extends Pending<GithubProject> {
+  fullName: string;
+}
+
+/** The day picked on the graph, by its index in the calendar. */
+interface DayPick extends Pending<GithubDay> {
+  index: number;
+  /** "YYYY-MM-DD". */
+  date: string;
+}
+
+let sheet: Sheet | null = null;
+let day: DayPick | null = null;
+/** Bumped on every change to a sheet or a day, so the view knows to redraw. */
+let stamp = 0;
+
+/** An answer from the cache comes back at once: no loader for that. */
 const LOADER_DELAY_MS = 150;
 
-function touchSheet() {
-  sheetStamp += 1;
+function touch() {
+  stamp += 1;
   State.notify();
 }
 
 /**
- * While a sheet is fetched Mochi searches — eyes sweeping, indigo, the "…"
+ * While something is fetched Mochi searches — eyes sweeping, indigo, the "…"
  * badge — the look he has whenever something is being looked up. Only from
  * idle, so a finished or failed state from the pollers is never talked over.
  */
-let searchingFor: Sheet | null = null;
+let searchingFor: object | null = null;
 
-function startSearching(for_: Sheet) {
+function startSearching(for_: object) {
   searchingFor = for_;
   const task = State.tasks.find((t) => t.id === ID);
   if (task?.state === "idle") State.updateTask(ID, "searching");
 }
 
-function stopSearching(for_: Sheet | null) {
-  if (!searchingFor || (for_ && searchingFor !== for_)) return;
+function stopSearching(for_: object) {
+  if (searchingFor !== for_) return;
   searchingFor = null;
   const task = State.tasks.find((t) => t.id === ID);
   if (task?.state === "searching") State.updateTask(ID, "idle");
 }
 
-async function loadSheet(current: Sheet, force: boolean) {
-  current.loading = true;
-  touchSheet();
+/**
+ * Fetches into `target`, with the loader and Mochi's search once it has taken
+ * long enough to notice. `isCurrent` says whether `target` is still what's on
+ * screen: another click may have replaced it, and then it gets no draw.
+ */
+async function load<T>(target: Pending<T>, isCurrent: () => boolean, fetch: () => Promise<T>) {
+  target.loading = true;
+  touch();
   const loader = window.setTimeout(() => {
-    if (sheet !== current || !current.loading) return;
-    current.waiting = true;
-    startSearching(current);
-    touchSheet();
+    if (!isCurrent() || !target.loading) return;
+    target.waiting = true;
+    startSearching(target);
+    touch();
   }, LOADER_DELAY_MS);
   try {
-    const data = await Bridge.githubProject(current.fullName, force);
-    current.data = data;
-    current.error = null;
-    current.react = current.waiting;
+    target.data = await fetch();
+    target.error = null;
+    target.react = target.waiting;
   } catch (err) {
-    current.error = String(err).replace(/^Error:\s*/, "");
+    target.error = String(err).replace(/^Error:\s*/, "");
   } finally {
     window.clearTimeout(loader);
-    current.loading = false;
-    current.waiting = false;
-    stopSearching(current);
-    // Another project may have been opened meanwhile; it has its own draw.
-    if (sheet === current) touchSheet();
+    target.loading = false;
+    target.waiting = false;
+    stopSearching(target);
+    if (isCurrent()) touch();
   }
 }
 
+function loadSheet(current: Sheet, force: boolean) {
+  return load(current, () => sheet === current, () => Bridge.githubProject(current.fullName, force));
+}
+
 function openSheet(fullName: string) {
-  sheet = { fullName, data: null, error: null, loading: false, waiting: false, react: false };
-  void loadSheet(sheet, false);
+  const opened: Sheet = { ...pending<GithubProject>(), fullName };
+  sheet = opened;
+  void loadSheet(opened, false);
 }
 
 function closeSheet() {
-  stopSearching(null);
+  if (sheet) stopSearching(sheet);
   sheet = null;
-  touchSheet();
+  touch();
+}
+
+/** A day's bounds as the island's clock sees it: local midnight to midnight. */
+function localDay(date: string): { from: string; to: string; today: boolean } {
+  const [y, m, d] = date.split("-").map(Number);
+  const from = new Date(y, m - 1, d);
+  const next = new Date(y, m - 1, d + 1);
+  const now = Date.now();
+  return {
+    from: from.toISOString(),
+    to: new Date(next.getTime() - 1000).toISOString(),
+    today: now >= from.getTime() && now < next.getTime(),
+  };
+}
+
+function loadDay(current: DayPick) {
+  const { from, to, today } = localDay(current.date);
+  return load(current, () => day === current, () => Bridge.githubDay(from, to, today));
+}
+
+/** A second click on the same day lets go of it, as on GitHub. */
+function pickDay(index: number, date: string) {
+  if (day?.index === index) {
+    unpickDay();
+    return;
+  }
+  if (day) stopSearching(day);
+  const picked: DayPick = { ...pending<GithubDay>(), index, date };
+  day = picked;
+  void loadDay(picked);
+}
+
+function unpickDay() {
+  if (day) stopSearching(day);
+  day = null;
+  touch();
 }
 
 /** What Mochi makes of a sheet: stars for all green, a start for a failure. */
@@ -137,24 +201,36 @@ let sweepNext = true;
  */
 export function enterGithubPanel() {
   sweepNext = true;
+  // A day picked last time goes too: the panel opens on the lists.
+  if (day) stopSearching(day);
+  day = null;
   // Either way the view gets a new stamp, so it redraws — and sweeps.
   if (sheet) closeSheet();
-  else touchSheet();
+  else touch();
   const d = githubData();
   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);
 }
 
-function activityRow(a: GithubActivity, login: string): HTMLElement {
-  const style = ACTIVITY_STYLE[a.kind];
-  const where = [repoName(a.repo, login), a.detail].filter(Boolean).join(" · ");
+/** One line of GitHub activity — the recent feed, or a picked day. */
+function eventRow(
+  item: { kind: keyof typeof ACTIVITY_STYLE; repo: string; title: string; detail: string | null; url: string },
+  login: string,
+  ago?: string,
+): HTMLElement {
+  const style = ACTIVITY_STYLE[item.kind];
+  const where = [repoName(item.repo, login), item.detail].filter(Boolean).join(" · ");
   return h(
     "button",
-    { class: "gh-row", onclick: () => void Bridge.openUrl(a.url) },
+    { class: "gh-row", onclick: () => void Bridge.openUrl(item.url) },
     h("i", { class: "gh-row-icon", style: `color:${style.color}` }, svg(style.icon, 12, { stroke: 2 })),
-    h("span", { class: "gh-row-title", text: a.title }),
+    h("span", { class: "gh-row-title", text: item.title }),
     h("span", { class: "gh-row-where", text: where }),
-    h("span", { class: "int-ago", text: timeAgo(a.at) }),
+    ago != null ? h("span", { class: "int-ago", text: ago }) : null,
   );
+}
+
+function activityRow(a: GithubActivity, login: string): HTMLElement {
+  return eventRow(a, login, timeAgo(a.at));
 }
 
 /** The last Actions run as a small round badge; it opens the run itself. */
@@ -288,11 +364,21 @@ function currentStreak(counts: number[]): number {
   return days;
 }
 
-function contributionGraph(
-  c: GithubContributions,
-  sweep: boolean,
-  tint: ViewActions["tintMochi"],
-): HTMLElement {
+/** A calendar day's colour for Mochi, by its index. */
+function mochiShade(c: GithubContributions, i: number): string {
+  return (LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0]).mochi;
+}
+
+interface GraphOptions {
+  sweep: boolean;
+  tint: ViewActions["tintMochi"];
+  /** The picked day, if any: the others fade, as on GitHub. */
+  picked: number | null;
+  onPick(index: number, date: string): void;
+}
+
+function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement {
+  const { sweep, tint, picked } = o;
   // Sunday-first columns, like the profile page; GitHub's first week is partial.
   const offset = dayDate(c.start, 0).getUTCDay();
   const weeks = Math.ceil((offset + c.counts.length) / 7);
@@ -315,13 +401,19 @@ function contributionGraph(
     previousMonth = month;
   }
 
-  const grid = h("div", { class: sweep ? "gh-grid sweep" : "gh-grid" });
+  const grid = h("div", {
+    class: ["gh-grid", sweep ? "sweep" : "", picked != null ? "picked" : ""].join(" ").trim(),
+  });
   grid.style.gridTemplateColumns = columns;
   for (let i = 0; i < offset; i++) grid.append(h("i", { class: "pad" }));
   c.counts.forEach((_, i) => {
     const level = c.levels[i] ?? 0;
     const look = LEVEL_LOOK[level] ?? LEVEL_LOOK[0];
-    const classes = [level > 0 ? "lit" : "", i === c.counts.length - 1 ? "today" : ""].join(" ").trim();
+    const classes = [
+      level > 0 ? "lit" : "",
+      i === c.counts.length - 1 ? "today" : "",
+      i === picked ? "on" : "",
+    ].join(" ").trim();
     const cell = h("i", { class: classes, "data-i": String(i) });
     cell.style.setProperty("--c", look.cell);
     cell.style.setProperty("--col", String(Math.floor((offset + i) / 7)));
@@ -343,22 +435,81 @@ function contributionGraph(
   legend.append("More");
 
   // Hovering a day says what it holds and turns Mochi that day's green;
-  // leaving the grid gives the year back, and Mochi his own colour.
+  // leaving the grid gives the year back, and Mochi the picked day's colour,
+  // or his own. A click picks the day.
   grid.addEventListener("mouseover", (e) => {
     const index = (e.target as HTMLElement).dataset.i;
     if (index == null) return;
     const i = Number(index);
     caption.textContent = dayLabel(dayDate(c.start, i), c.counts[i] ?? 0);
     caption.classList.add("day");
-    tint((LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0]).mochi);
+    tint(mochiShade(c, i));
   });
   grid.addEventListener("mouseleave", () => {
     caption.textContent = summary;
     caption.classList.remove("day");
-    tint(null);
+    tint(picked != null ? mochiShade(c, picked) : null);
+  });
+  grid.addEventListener("click", (e) => {
+    const index = (e.target as HTMLElement).dataset.i;
+    if (index == null) return;
+    const i = Number(index);
+    o.onPick(i, dayDate(c.start, i).toISOString().slice(0, 10));
   });
 
   return h("div", { class: "gh-graph" }, months, grid, h("div", { class: "gh-graph-foot" }, caption, legend));
+}
+
+/**
+ * What stands under the graph once a day is picked, in place of the recent
+ * activity: that day's commits, pull requests, reviews, issues and new
+ * repositories, as GitHub's profile lists them.
+ */
+function daySection(pick: DayPick, login: string, onClose: () => void): HTMLElement {
+  const when = new Date(`${pick.date}T00:00:00Z`).toLocaleDateString(undefined, {
+    weekday: "long", day: "numeric", month: "long", timeZone: "UTC",
+  });
+  const section = h(
+    "div",
+    { class: "gh-day" },
+    h(
+      "div",
+      { class: "gh-day-head" },
+      h("span", { text: `Activity on ${when}` }),
+      h("button", { class: "int-back gh-day-close", title: "Back to recent activity", onclick: onClose }, svg(ICONS.xmark, 8)),
+    ),
+  );
+
+  if (pick.error) {
+    section.append(h("div", { class: "int-empty", text: pick.error }));
+    return section;
+  }
+  if (!pick.data) {
+    if (pick.waiting) section.append(h("div", { class: "gh-loader-text shimmer", text: "Mochi is looking at that day…" }));
+    return section;
+  }
+
+  for (const item of pick.data.items) section.append(eventRow(item, login));
+  if (pick.data.privateCount > 0) {
+    const n = pick.data.privateCount;
+    section.append(
+      h(
+        "div",
+        { class: "gh-row muted" },
+        h("i", { class: "gh-row-icon" }, svg(ICONS.lock, 10, { stroke: 2.2 })),
+        h("span", { class: "gh-row-where", text: `${n} contribution${n === 1 ? "" : "s"} in private repositories` }),
+      ),
+    );
+  }
+  if (pick.data.items.length === 0 && pick.data.privateCount === 0) {
+    section.append(h("div", { class: "int-empty", text: "Nothing public that day." }));
+  }
+  if (pick.react) {
+    pick.react = false;
+    section.classList.add("enter");
+    Array.from(section.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+  }
+  return section;
 }
 
 // ── Project sheet ─────────────────────────────────────────────────────────────
@@ -771,7 +922,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.
-      const next = [configured, error, d?.fetchedAt, d?.login, tab, sheetStamp].join("~");
+      const next = [configured, error, d?.fetchedAt, d?.login, tab, stamp].join("~");
       if (next === key) return;
       key = next;
 
@@ -839,12 +990,36 @@ export function buildGithub(actions: ViewActions): ViewHost {
           );
         }
       } else {
-        // The year first, then what happened lately.
-        if (d.contributions) list.append(contributionGraph(d.contributions, sweep, actions.tintMochi));
-        if (d.activity.length === 0) {
-          list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
+        // The year first, then what happened lately — or on the picked day.
+        const picked = day && d.contributions ? day : null;
+        if (d.contributions) {
+          list.append(
+            contributionGraph(d.contributions, {
+              sweep,
+              tint: actions.tintMochi,
+              picked: picked?.index ?? null,
+              onPick: (index, date) => {
+                actions.blip();
+                pickDay(index, date);
+              },
+            }),
+          );
+          // Mochi wears the picked day's colour for as long as it is picked.
+          if (picked) actions.tintMochi(mochiShade(d.contributions, picked.index));
         }
-        for (const a of d.activity) list.append(activityRow(a, d.login));
+        if (picked) {
+          list.append(
+            daySection(picked, d.login, () => {
+              actions.blip();
+              unpickDay();
+            }),
+          );
+        } else {
+          if (d.activity.length === 0) {
+            list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
+          }
+          for (const a of d.activity) list.append(activityRow(a, d.login));
+        }
       }
       list.scrollTop = scroll;
       updateFade();
