@@ -1414,7 +1414,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clear(badge);
     if (look) {
       badge.append(roundIcon(look.color, look.icon()));
-      card.style.setProperty("--wash", `${look.color}52`);
+      card.style.setProperty("--wash", `${look.color}40`);
     } else {
       badge.append(dot(GITHUB_RED, 7));
       card.style.setProperty("--wash", "rgba(0,0,0,0)");

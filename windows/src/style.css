@@ -1410,6 +1410,12 @@ input[type="range"]::-webkit-slider-thumb {
   transition: --wash 0.45s ease-out;
 }
 
+/* Lower and flatter than the island's own wash: a light on the floor of the
+   card, behind the content, rather than a glow climbing up into it. */
+.gh-card.wash::after {
+  background: radial-gradient(380px 190px at 50% 132%, var(--wash) 0%, rgba(0, 0, 0, 0) 72%);
+}
+
 .gh-head-badge {
   display: grid;
   place-items: center;
@@ -2259,7 +2265,9 @@ button.gh-host:hover {
   padding: 7px 8px;
   border: 0;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
+  /* The same grey as a white wash over the card, but solid: a translucent tile
+     let the card's glow show through and read as lying on top of it. */
+  background: color-mix(in srgb, var(--card), #fff 3.5%);
   font: inherit;
   color: inherit;
   text-align: left;
@@ -2268,7 +2276,7 @@ button.gh-host:hover {
 }
 
 button.gh-block:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--card), #fff 7%);
 }
 
 .gh-block.muted {
