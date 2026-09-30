@@ -1673,16 +1673,12 @@ input[type="range"]::-webkit-slider-thumb {
   aspect-ratio: 1;
   border-radius: 34%;
   background: var(--c);
-  transition: scale 0.14s ease-out, box-shadow 0.14s ease-out;
+  transition: scale 0.14s ease-out;
 }
 
+/* The day under the mouse just grows a little; no glow. */
 .gh-grid i:not(.pad):hover {
   scale: 1.45;
-}
-
-/* …and glow in GitHub's green, the way a pill glows in its colour. */
-.gh-grid i.lit:hover {
-  box-shadow: 0 0 6px rgba(86, 211, 100, 0.7);
 }
 
 .gh-grid i.pad {
