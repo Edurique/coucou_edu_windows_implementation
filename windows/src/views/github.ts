@@ -255,14 +255,13 @@ function mixHex(a: string, b: string, t: number): string {
 
 /**
  * Per GitHub level, 0 (nothing) to 4 (busiest): the cell's colour, and how
- * green Mochi turns — with how bright his glow — over that day. Mochi's shades
- * run from his resting colour to GitHub's brightest green, never through the
- * dark ones: his eyes are ink-dark and would vanish on a dark green body.
+ * green Mochi turns over that day. His shades run from his resting colour to
+ * GitHub's brightest green, never through the dark ones: his eyes are
+ * ink-dark and would vanish on a dark green body.
  */
 const LEVEL_LOOK = [0, 0.4, 0.6, 0.8, 1].map((t, level) => ({
   cell: GITHUB_LEVELS[level],
   mochi: mixHex(IDLE, GITHUB_LEVELS[4], t),
-  glow: 0.15 + 0.5 * t,
 }));
 
 function dayDate(start: string, i: number): Date {
@@ -351,8 +350,7 @@ function contributionGraph(
     const i = Number(index);
     caption.textContent = dayLabel(dayDate(c.start, i), c.counts[i] ?? 0);
     caption.classList.add("day");
-    const look = LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0];
-    tint({ color: look.mochi, glow: look.glow });
+    tint((LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0]).mochi);
   });
   grid.addEventListener("mouseleave", () => {
     caption.textContent = summary;

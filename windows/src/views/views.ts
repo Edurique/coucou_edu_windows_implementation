@@ -30,10 +30,10 @@ export interface ViewActions {
   /** Mochi reacts to something a view just showed (the GitHub panel's news). */
   emote(e: BotEmoteName): void;
   /**
-   * Mochi takes a colour while the mouse is on something (a day of the GitHub
-   * graph): `color` for his body and glow, `glow` its opacity. Null: his own.
+   * Mochi's body takes a colour (hex) while the mouse is on something — a day
+   * of the GitHub graph. Null gives him his own back.
    */
-  tintMochi(tint: { color: string; glow: number } | null): void;
+  tintMochi(color: string | null): void;
 }
 
 export interface ViewHost {

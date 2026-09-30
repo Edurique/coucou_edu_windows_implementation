@@ -1,7 +1,7 @@
 // The island: DOM shell, sizing animation, Mochi placement, mouse handling.
 // Mirrors IslandRootView.swift + IslandWindowController.swift.
 
-import { Tracked, Spring, clamp, lerp } from "../core/anim";
+import { Tracked, Spring, clamp, mixColor } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
@@ -62,8 +62,11 @@ export class Island {
   private engine = new BotEngine();
   private greeting = new Greeting();
 
-  /** A view asking Mochi to take a colour for a moment (a day of the GitHub graph). */
-  private tintRequest: { color: RGB; hex: string; glow: number } | null = null;
+  /**
+   * A view asking Mochi to take a colour for a moment (a day of the GitHub
+   * graph). His body only: the glow stays his own.
+   */
+  private tintRequest: RGB | null = null;
   /** The colour Mochi's body is drawn in, eased towards what it should be. */
   private bodyRGB: RGB | null = null;
 
@@ -175,8 +178,8 @@ export class Island {
       openSettingsWindow: () => void Bridge.openSettingsWindow(),
       blip: () => Sound.play("blip"),
       emote: (e) => this.engine.triggerEmote(e),
-      tintMochi: (tint) => {
-        this.tintRequest = tint ? { color: hexToRGB(tint.color), hex: tint.color, glow: tint.glow } : null;
+      tintMochi: (color) => {
+        this.tintRequest = color ? hexToRGB(color) : null;
         this.ensureRunning();
       },
     };
@@ -760,16 +763,14 @@ export class Island {
 
     if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive) {
       const d = p.diameter;
-      // A tint request lights the glow in its colour, as bright as it asks.
-      const tint = this.tintRequest;
-      const color = tint?.hex ?? botGlowColor(State.effectiveState);
+      const color = botGlowColor(State.effectiveState);
       this.botGlow.style.display = "block";
       this.botGlow.style.width = `${d * 2.2}px`;
       this.botGlow.style.height = `${d * 2.2}px`;
       this.botGlow.style.left = `${this.botCx.value - d * 1.1}px`;
       this.botGlow.style.top = `${this.botCy.value - d * 1.1}px`;
       this.botGlow.style.background = `radial-gradient(circle, ${color} 0%, transparent 62%)`;
-      this.botGlow.style.opacity = String(tint?.glow ?? botGlowOpacity(State.effectiveState));
+      this.botGlow.style.opacity = String(botGlowOpacity(State.effectiveState));
     } else {
       this.botGlow.style.display = "none";
     }
@@ -814,15 +815,17 @@ export class Island {
 
   /** The colour Mochi should be: a view's request, else his pill's colour. */
   private targetBodyColor(): RGB | null {
-    if (this.tintRequest) return this.tintRequest.color;
+    if (this.tintRequest) return this.tintRequest;
     const focus = State.focusTask;
     return focus?.isIntegration ? hexToRGB(focus.color) : null;
   }
 
   /**
    * Eases the body towards its target rather than jumping, so sliding the mouse
-   * across the graph reads as Mochi changing colour, not flickering. Null —
-   * his own cream gradient — can't be blended into, and is simply taken.
+   * across the graph reads as Mochi slowly changing colour, not flickering:
+   * about 90 % of the way in 0.4 s, blended in OKLab so red to green stays
+   * bright instead of dipping through brown. Null — his own cream gradient —
+   * can't be blended into, and is simply taken.
    */
   private easeBodyColor(dt: number): RGB | null {
     const target = this.targetBodyColor();
@@ -830,9 +833,7 @@ export class Island {
       this.bodyRGB = target;
       return target;
     }
-    const k = 1 - Math.exp(-dt * 14);
-    const [r, g, b] = this.bodyRGB;
-    this.bodyRGB = [lerp(r, target[0], k), lerp(g, target[1], k), lerp(b, target[2], k)];
+    this.bodyRGB = mixColor(this.bodyRGB, target, 1 - Math.exp(-dt * 5.5));
     return this.bodyRGB;
   }
 
