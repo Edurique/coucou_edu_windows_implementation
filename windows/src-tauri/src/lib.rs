@@ -2,6 +2,7 @@
 
 mod claude;
 mod files;
+mod github;
 mod hooks;
 mod integrations;
 mod island;
@@ -270,13 +271,31 @@ fn secret_present(key: String) -> bool {
 }
 
 #[tauri::command]
-fn secret_set(key: String, value: String) -> Result<(), String> {
-    secrets::set(&key, &value)
+fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    secrets::set(&key, &value)?;
+    secrets_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
-fn secret_clear(key: String) -> Result<(), String> {
-    secrets::clear(&key)
+fn secret_clear(app: AppHandle, key: String) -> Result<(), String> {
+    secrets::clear(&key)?;
+    secrets_changed(&app);
+    Ok(())
+}
+
+/// The island only learns which keys exist by asking, and used to ask once at
+/// launch: a key saved in the settings window left its pill saying "Key not
+/// configured" until a restart. This tells it to ask again.
+fn secrets_changed(app: &AppHandle) {
+    let _ = app.emit_to(island::WINDOW_LABEL, "secrets-changed", ());
+}
+
+/// Settings → GitHub → Test connection. Runs on the stored token and brings back
+/// the account and what the token can reach — never the token itself.
+#[tauri::command]
+async fn github_test() -> Result<github::Account, String> {
+    github::test().await
 }
 
 /// Opens the configured n8n instance — the URL lives in the Credential Manager.
@@ -403,6 +422,7 @@ pub fn run() {
             secret_present,
             secret_set,
             secret_clear,
+            github_test,
             refresh_integration,
             open_n8n,
             open_settings_window,

@@ -97,7 +97,21 @@ export const Bridge = {
 
   /** Tray → Pause. Stops the integration pollers, not just the island. */
   setPaused: (paused: boolean) => call<void>("set_paused", { paused }),
+
+  // ── GitHub ────────────────────────────────────────────────────────────────
+  /** Settings → Test connection. Runs on the stored token; the token never comes back. */
+  githubTest: () => callOrThrow<GithubAccount>("github_test"),
 };
+
+export interface GithubAccount {
+  login: string;
+  name: string | null;
+  profileUrl: string;
+  /** GitHub's `github-authentication-token-expiration` header, as sent. Null: no expiry. */
+  expiresAt: string | null;
+  /** One line per thing the panel needs, so a missing permission is named. */
+  checks: { label: string; ok: boolean; note: string | null }[];
+}
 
 export interface IntegrationUpdate {
   id: string;
