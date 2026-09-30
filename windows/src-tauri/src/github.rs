@@ -658,7 +658,7 @@ async fn latest_build(gh: &Gh, repo: &str) -> Result<Option<Build>, GhError> {
 
 /// Four states are all the island needs: it passed, it broke, it's going, or
 /// it ended without saying either (cancelled, skipped, waiting for a click).
-fn build_state(status: &str, conclusion: Option<&str>) -> &'static str {
+pub(crate) fn build_state(status: &str, conclusion: Option<&str>) -> &'static str {
     if status != "completed" {
         return "running";
     }

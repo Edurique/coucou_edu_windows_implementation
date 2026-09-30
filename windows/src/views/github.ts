@@ -10,9 +10,9 @@ import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integr
 import {
   Bridge,
   type GithubActivity, type GithubBuild, type GithubCommitsDetail, type GithubContributions, type GithubData, type GithubDay,
-  type GithubDeploy, type GithubDetail, type GithubFile, type GithubIssueDetail, type GithubLabel,
+  type GithubDeploy, type GithubDetail, type GithubFile, type GithubIssueDetail, type GithubJob, type GithubLabel,
   type GithubProject, type GithubPull, type GithubPullDetail, type GithubReleaseDetail, type GithubRepo,
-  type GithubTarget,
+  type GithubRunDetail, type GithubTarget, type GithubTimed,
 } from "../core/bridge";
 import type { BotEmoteName } from "../core/layout";
 import { Sound } from "../core/sound";
@@ -80,7 +80,17 @@ interface DiffScreen {
   url: string;
 }
 
-type Screen = ProjectScreen | DetailScreen | DiffScreen;
+/**
+ * One job of a run, step by step. Nothing to fetch: it reads its run's sheet,
+ * so a refresh of the run — by hand, or live while it runs — reaches it too.
+ */
+interface JobScreen {
+  type: "job";
+  run: DetailScreen;
+  jobId: number;
+}
+
+type Screen = ProjectScreen | DetailScreen | DiffScreen | JobScreen;
 
 /** The day picked on the graph, by its index in the calendar. */
 interface DayPick extends Pending<GithubDay> {
@@ -193,8 +203,51 @@ function loadProject(screen: ProjectScreen, force: boolean) {
   return load(screen, () => top() === screen, () => Bridge.githubProject(screen.fullName, force));
 }
 
+/** The sheet itself is up, or one of its run's jobs is. */
+function showing(screen: DetailScreen): boolean {
+  const s = top();
+  return s === screen || (s?.type === "job" && s.run === screen);
+}
+
 function loadDetail(screen: DetailScreen, force: boolean) {
-  return load(screen, () => top() === screen, () => Bridge.githubDetail(screen.target, force));
+  return load(screen, () => showing(screen), () => Bridge.githubDetail(screen.target, force));
+}
+
+/** What a screen fetches — a job fetches through its run; a diff has nothing to fetch. */
+function fetched(s: Screen): ProjectScreen | DetailScreen | null {
+  return s.type === "job" ? s.run : s.type === "diff" ? null : s;
+}
+
+/**
+ * A run still going asks again every few seconds while it is on screen, so its
+ * jobs finish one by one before your eyes. Quietly: no loader, no search from
+ * Mochi, the list stays where it was read. Only while the panel is open.
+ */
+const LIVE_MS = 10_000;
+let liveTimer: number | null = null;
+
+function liveRun(): DetailScreen | null {
+  const s = top();
+  const screen = s ? fetched(s) : null;
+  return screen?.type === "detail" && screen.data?.kind === "run" && screen.data.state === "running" ? screen : null;
+}
+
+function armLive() {
+  if (liveTimer != null || !liveRun()) return;
+  if (State.mode !== "expanded" || State.view !== "github") return;
+  liveTimer = window.setTimeout(async () => {
+    liveTimer = null;
+    const screen = liveRun();
+    if (!screen || screen.loading || State.mode !== "expanded" || State.view !== "github") return;
+    try {
+      screen.data = await Bridge.githubDetail(screen.target, true);
+      screen.error = null;
+    } catch {
+      // Offline for a moment: the next round tries again.
+    }
+    // Redraws, which arms the next round while the run still goes.
+    if (showing(screen)) touch();
+  }, LIVE_MS);
 }
 
 function openProject(fullName: string) {
@@ -220,6 +273,15 @@ function openTarget(target: GithubTarget | null, label: string, url: string) {
 
 function openDiff(file: GithubFile, url: string) {
   push({ type: "diff", file, url });
+}
+
+/** A run of Actions: its jobs and how long each took. */
+function openRun(repo: string, id: number, workflow: string, url: string) {
+  openTarget({ kind: "run", repo, id }, workflow, url);
+}
+
+function openJob(run: DetailScreen, job: GithubJob) {
+  push({ type: "job", run, jobId: job.id });
 }
 
 /** A day's bounds as the island's clock sees it: local midnight to midnight. */
@@ -316,18 +378,24 @@ function activityRow(a: GithubActivity, login: string): HTMLElement {
   return eventRow(a, login, timeAgo(a.at));
 }
 
-/** The last Actions run as a small round badge; it opens the run itself. */
-function buildBadge(build: GithubBuild | null): HTMLElement {
+/** A state's mark: a check, a cross, a dash — or, while it goes, a turning ring. */
+function stateMark(state: GithubBuild["state"], size: number): Element {
+  switch (state) {
+    case "running":
+      return h("i", { class: "gh-ring" });
+    case "success":
+      return svg(ICONS.check, size + 1, { stroke: 3 });
+    case "failure":
+      return svg(ICONS.xmark, size);
+    case "neutral":
+      return svg(ICONS.dash, size + 1, { stroke: 3 });
+  }
+}
+
+/** The last Actions run as a small round badge; it opens the run in the panel. */
+function buildBadge(build: GithubBuild | null, repo: string): HTMLElement {
   if (!build) return h("span", { class: "gh-build none" });
   const style = BUILD_STYLE[build.state];
-  const inner =
-    build.state === "running"
-      ? h("i", { class: "gh-ring" })
-      : build.state === "success"
-        ? svg(ICONS.check, 9, { stroke: 3 })
-        : build.state === "failure"
-          ? svg(ICONS.xmark, 8)
-          : svg(ICONS.dash, 9, { stroke: 3 });
   const where = build.branch ? ` on ${build.branch}` : "";
   const badge = h(
     "button",
@@ -336,10 +404,10 @@ function buildBadge(build: GithubBuild | null): HTMLElement {
       title: `${build.workflow}${where} · ${style.label} ${timeAgo(build.at)} ago`,
       onclick: (e: Event) => {
         e.stopPropagation();
-        void Bridge.openUrl(build.url);
+        openRun(repo, build.id, build.workflow, build.url);
       },
     },
-    inner,
+    stateMark(build.state, 8),
   );
   badge.style.setProperty("--c", style.color);
   badge.style.setProperty("--tint", `${style.color}26`);
@@ -361,8 +429,8 @@ function meta(icon: SVGSVGElement, count: number, onClick?: () => void): HTMLEle
 
 /**
  * Your own repositories by name; somebody else's with their owner in front.
- * The row opens the project's sheet; the badge and the PR count stay shortcuts
- * straight to GitHub.
+ * The row opens the project's sheet, the badge its last run; the PR count
+ * stays a shortcut straight to GitHub.
  */
 function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLElement {
   return h(
@@ -375,7 +443,7 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
     h(
       "span",
       { class: "gh-right" },
-      buildBadge(repo.build),
+      buildBadge(repo.build, repo.fullName),
       meta(svg(ICONS.star, 9), repo.stars),
       meta(svg(ICONS.pullRequest, 9, { stroke: 2 }), repo.openPrs, () => void Bridge.openUrl(`${repo.url}/pulls`)),
       h("span", { class: "int-ago", text: repo.pushedAt ? timeAgo(repo.pushedAt) : "" }),
@@ -626,15 +694,20 @@ function daySection(pick: DayPick, login: string, onClose: () => void): HTMLElem
 
 // ── Project sheet ─────────────────────────────────────────────────────────────
 
-/** "2m 14s", "45s", "1h 3m" — how long a run took, or has been going. */
-function duration(fromIso: string | null, toMs: number): string | null {
-  if (!fromIso) return null;
-  const seconds = Math.round((toMs - Date.parse(fromIso)) / 1000);
-  if (!Number.isFinite(seconds) || seconds < 0) return null;
+/** "2m 14s", "45s", "1h 3m". */
+function spoken(ms: number): string {
+  const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** How long a run took, or has been going. */
+function duration(fromIso: string | null, toMs: number): string | null {
+  if (!fromIso) return null;
+  const ms = toMs - Date.parse(fromIso);
+  return Number.isFinite(ms) && ms >= 0 ? spoken(ms) : null;
 }
 
 /** "just now" stays as is; everything else reads "2h ago". */
@@ -740,14 +813,6 @@ function ciBlock(p: GithubProject): HTMLElement {
     });
   }
   const style = BUILD_STYLE[run.state];
-  const icon =
-    run.state === "running"
-      ? h("i", { class: "gh-ring" })
-      : run.state === "success"
-        ? svg(ICONS.check, 10, { stroke: 3 })
-        : run.state === "failure"
-          ? svg(ICONS.xmark, 9)
-          : svg(ICONS.dash, 10, { stroke: 3 });
   const took = run.state === "running"
     ? duration(run.startedAt, Date.now())
     : duration(run.startedAt, Date.parse(run.updatedAt));
@@ -764,12 +829,12 @@ function ciBlock(p: GithubProject): HTMLElement {
   streak.append(h("span", { text: `${passed}/${p.runs.length}` }));
 
   return block({
-    icon: roundIcon(style.color, icon),
+    icon: roundIcon(style.color, stateMark(run.state, 9)),
     title: `${run.workflow} ${RUN_VERB[run.state]}${run.branch ? ` on ${run.branch}` : ""}`,
     right: run.state === "running" ? `for ${took ?? "a moment"}` : ago(run.updatedAt),
     sub: line(run.title && `“${run.title}”`, run.actor, run.state !== "running" && took && `in ${took}`),
     aside: streak,
-    url: run.url,
+    open: () => openRun(p.fullName, run.id, run.workflow, run.url),
   });
 }
 
@@ -987,23 +1052,15 @@ function fileList(files: GithubFile[], url: string, title: string): Node[] {
 }
 
 /** A run of Actions on a commit or a pull request, as a block that opens the run. */
-function runBlock(build: GithubBuild | null, missing: string[]): HTMLElement | null {
+function runBlock(build: GithubBuild | null, missing: string[], repo: string): HTMLElement | null {
   if (missing.includes("actions")) return notGranted("Actions", "Actions");
   if (!build) return null;
   const style = BUILD_STYLE[build.state];
-  const icon =
-    build.state === "running"
-      ? h("i", { class: "gh-ring" })
-      : build.state === "success"
-        ? svg(ICONS.check, 10, { stroke: 3 })
-        : build.state === "failure"
-          ? svg(ICONS.xmark, 9)
-          : svg(ICONS.dash, 10, { stroke: 3 });
   return block({
-    icon: roundIcon(style.color, icon),
+    icon: roundIcon(style.color, stateMark(build.state, 9)),
     title: `${build.workflow} ${RUN_VERB[build.state]}${build.branch ? ` on ${build.branch}` : ""}`,
     right: ago(build.at),
-    url: build.url,
+    open: () => openRun(repo, build.id, build.workflow, build.url),
   });
 }
 
@@ -1040,7 +1097,7 @@ function pullView(p: GithubPullDetail, login: string): HTMLElement {
     titleRow(`#${p.number} ${p.title}`, chip(p.state, style.color)),
     facts(p.repo, login, p.author && `by ${p.author}`, branches, when),
     labelChips(p.labels),
-    runBlock(p.ci, p.missing),
+    runBlock(p.ci, p.missing, p.repo),
     reviewBlock(p),
     block({
       icon: roundIcon("#9398A1", svg(ICONS.doc, 10)),
@@ -1109,7 +1166,7 @@ function commitsView(c: GithubCommitsDetail, login: string): HTMLElement {
     { class: "gh-sheet" },
     titleRow(title, single && newest ? chip(newest.sha, "#3B9EFF") : null),
     facts(c.repo, login, newest?.author && `by ${newest.author}`, newest?.at && ago(newest.at)),
-    runBlock(c.ci, c.missing),
+    runBlock(c.ci, c.missing, c.repo),
     ...(single ? [] : [heading("Commits"), ...rows, more]).filter((n): n is HTMLElement => n != null),
     ...(c.files.length ? [heading(single ? "Files" : "Latest commit", changed), ...c.files.map((f) => fileRow(f, newest?.url ?? c.url))] : []),
   );
@@ -1153,13 +1210,165 @@ function releaseView(r: GithubReleaseDetail, login: string): HTMLElement {
   );
 }
 
+// ── A run of Actions ──────────────────────────────────────────────────────────
+//
+// Every job of a run on one timeline, and every step of a job on another, the
+// way GitHub draws a run: where each part started, how long it went, which ones
+// ran side by side, and where the time went.
+
+interface Span {
+  from: number;
+  to: number;
+}
+
+/** When a part ran, in ms; a running one ends now, a waiting one hasn't begun. */
+function spanOf(t: GithubTimed, now: number): Span | null {
+  if (!t.startedAt || t.outcome === "skipped") return null;
+  const from = Date.parse(t.startedAt);
+  const to = t.endedAt ? Date.parse(t.endedAt) : now;
+  return Number.isFinite(from) && Number.isFinite(to) ? { from, to: Math.max(from, to) } : null;
+}
+
+/** From the first start to the last end: the width of the timeline. */
+function envelope(parts: GithubTimed[], now: number): Span | null {
+  const spans = parts.map((p) => spanOf(p, now)).filter((s): s is Span => s != null);
+  if (spans.length === 0) return null;
+  return { from: Math.min(...spans.map((s) => s.from)), to: Math.max(...spans.map((s) => s.to)) };
+}
+
+/** "2m 14s" — or, for what never ran, what it is: "queued", "skipped". */
+function took(t: GithubTimed, now: number): string {
+  const span = spanOf(t, now);
+  return span ? spoken(span.to - span.from) : t.outcome;
+}
+
+const WAITING = new Set(["queued", "waiting", "waiting for approval"]);
+
+/** "Took 3m 2s", "Running for 40s", "Queued". */
+function tookTitle(t: GithubTimed, now: number): string {
+  if (WAITING.has(t.outcome)) return t.outcome.charAt(0).toUpperCase() + t.outcome.slice(1);
+  return t.state === "running" ? `Running for ${took(t, now)}` : `Took ${took(t, now)}`;
+}
+
+/** A part's mark; a hollow circle for one still waiting for its turn. */
+function timedMark(t: GithubTimed): Element {
+  return WAITING.has(t.outcome) ? h("i", { class: "gh-wait" }) : stateMark(t.state, 8);
+}
+
+/** Where a part sits on its timeline: a bar that starts and ends when it did. */
+function bar(t: GithubTimed, whole: Span | null, now: number): HTMLElement {
+  const track = h("span", { class: "gh-bar" });
+  const span = spanOf(t, now);
+  if (!whole || !span) return track;
+  const length = Math.max(whole.to - whole.from, 1);
+  const segment = h("i", { class: t.state === "running" ? "live" : "" });
+  segment.style.left = `${((span.from - whole.from) / length) * 100}%`;
+  segment.style.width = `${((span.to - span.from) / length) * 100}%`;
+  segment.style.setProperty("--c", BUILD_STYLE[t.state].color);
+  track.append(segment);
+  return track;
+}
+
+/** A job or a step: its mark, its name, how long it took, and its bar under them. */
+function timedRow(
+  t: GithubTimed, name: string, where: string | null, whole: Span | null, now: number, open?: () => void,
+): HTMLElement {
+  const parts = [
+    h("i", { class: "gh-row-icon", style: `color:${BUILD_STYLE[t.state].color}` }, timedMark(t)),
+    h("span", { class: "gh-row-title", text: name }),
+    where ? h("span", { class: "gh-row-where", text: where }) : null,
+    h("span", { class: "int-ago gh-took", text: took(t, now) }),
+    bar(t, whole, now),
+  ];
+  return open
+    ? h("button", { class: "gh-row gh-timed", onclick: open }, ...parts)
+    : h("div", { class: "gh-row gh-timed" }, ...parts);
+}
+
+/** "3 passed · 1 failed". */
+function tally(parts: GithubTimed[]): string[] {
+  const counts = new Map<string, number>();
+  for (const p of parts) counts.set(p.outcome, (counts.get(p.outcome) ?? 0) + 1);
+  return [...counts].map(([word, n]) => `${n} ${word}`);
+}
+
+const EVENT_WORDS: Record<string, string> = {
+  push: "on push",
+  pull_request: "on a pull request",
+  pull_request_target: "on a pull request",
+  schedule: "on schedule",
+  workflow_dispatch: "started by hand",
+  release: "on a release",
+  merge_group: "in the merge queue",
+};
+
+function runView(r: GithubRunDetail, login: string, screen: DetailScreen): HTMLElement {
+  const now = Date.now();
+  const whole = envelope(r.jobs, now);
+  const style = BUILD_STYLE[r.state];
+  const count = r.jobs.length + r.moreJobs;
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(r.title ?? r.workflow, chip(r.outcome, style.color)),
+    facts(
+      r.repo, login,
+      r.branch && h("span", { class: "gh-sha", text: r.branch }),
+      r.event && (EVENT_WORDS[r.event] ?? r.event),
+      r.actor && `by ${r.actor}`,
+      r.attempt > 1 && `attempt ${r.attempt}`,
+      r.startedAt && `started ${ago(r.startedAt)}`,
+    ),
+    block({
+      icon: roundIcon(style.color, svg(ICONS.timer, 11)),
+      title: tookTitle(r, now),
+      right: count === 1 ? "1 job" : `${count} jobs`,
+      sub: r.jobs.length ? line(...tally(r.jobs)) : undefined,
+    }),
+    heading("Jobs"),
+    ...r.jobs.map((job) => {
+      // A failed job says where it broke; the others, what they ran on.
+      const broke = job.steps.find((s) => s.state === "failure");
+      return timedRow(job, job.name, broke ? `at “${broke.name}”` : job.runner, whole, now, () => openJob(screen, job));
+    }),
+    r.moreJobs > 0 ? h("div", { class: "int-empty", text: `and ${r.moreJobs} more on GitHub` }) : null,
+    r.jobs.length === 0
+      ? h("div", { class: "int-empty", text: r.state === "running" ? "Waiting for the first job…" : "No jobs to show." })
+      : null,
+  );
+}
+
+function jobView(job: GithubJob, run: GithubRunDetail): HTMLElement {
+  const now = Date.now();
+  const whole = envelope(job.steps, now);
+  const style = BUILD_STYLE[job.state];
+  const broke = job.steps.find((s) => s.state === "failure");
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(job.name, chip(job.outcome, style.color)),
+    h("div", { class: "gh-facts" }, ...line(run.workflow, job.runner, job.startedAt && `started ${ago(job.startedAt)}`)),
+    block({
+      icon: roundIcon(style.color, svg(ICONS.timer, 11)),
+      title: tookTitle(job, now),
+      right: job.steps.length === 1 ? "1 step" : `${job.steps.length} steps`,
+      sub: broke ? line(`broke at “${broke.name}”`) : job.steps.length ? line(...tally(job.steps)) : undefined,
+    }),
+    heading("Steps"),
+    ...job.steps.map((step) => timedRow(step, step.name, null, whole, now)),
+    job.steps.length === 0 ? h("div", { class: "int-empty", text: "No steps yet." }) : null,
+    h("button", { class: "gh-host", text: "Its logs are on GitHub", onclick: () => void Bridge.openUrl(job.url) }),
+  );
+}
+
 const LOCKED_WHAT: Record<string, string> = {
   "Pull requests": "Pull requests",
   Issues: "Issues",
   Contents: "Commits and releases",
+  Actions: "Actions runs",
 };
 
-function detailView(d: GithubDetail, login: string, url: string): HTMLElement {
+function detailView(d: GithubDetail, login: string, screen: DetailScreen): HTMLElement {
   switch (d.kind) {
     case "pull":
       return pullView(d, login);
@@ -1169,12 +1378,14 @@ function detailView(d: GithubDetail, login: string, url: string): HTMLElement {
       return commitsView(d, login);
     case "release":
       return releaseView(d, login);
+    case "run":
+      return runView(d, login, screen);
     case "locked":
       return h(
         "div",
         { class: "gh-sheet" },
         notGranted(LOCKED_WHAT[d.permission] ?? d.permission, d.permission),
-        h("button", { class: "gh-host", text: "Open it on GitHub instead", onclick: () => void Bridge.openUrl(url) }),
+        h("button", { class: "gh-host", text: "Open it on GitHub instead", onclick: () => void Bridge.openUrl(screen.url) }),
       );
   }
 }
@@ -1190,9 +1401,18 @@ function detailMood(d: GithubDetail): BotEmoteName | null {
       return d.state === "completed" ? "proud" : "happy";
     case "release":
       return "proud";
+    case "run":
+      return d.state === "failure" ? "surprised" : d.state === "success" ? "proud" : null;
     case "locked":
       return null;
   }
+}
+
+/** The job a job screen is about, in its run's latest sheet. */
+function jobOf(s: JobScreen): { job: GithubJob; run: GithubRunDetail } | null {
+  const run = s.run.data?.kind === "run" ? s.run.data : null;
+  const job = run?.jobs.find((j) => j.id === s.jobId);
+  return run && job ? { job, run } : null;
 }
 
 /**
@@ -1224,6 +1444,10 @@ function screenLook(screen: Screen): ScreenLook {
       icon: () => svg(ICONS.doc, 10),
     };
   }
+  if (screen.type === "job") {
+    const state = jobOf(screen)?.job.state;
+    return { label: "Job", color: state ? BUILD_STYLE[state].color : NEUTRAL, icon: () => svg(ICONS.timer, 11) };
+  }
   const d = screen.data;
   switch (screen.target.kind) {
     // Grey until the state is known, so a loading sheet doesn't wear one colour
@@ -1252,11 +1476,18 @@ function screenLook(screen: Screen): ScreenLook {
       return { label: "Release", color: "#22D3EE", icon: () => svg(ICONS.tag, 10, { stroke: 2.2 }) };
     case "project":
       return { label: "Project", color: NEUTRAL, icon: () => svg(ICONS.stack, 10) };
+    case "run":
+      return {
+        label: "Run",
+        color: d?.kind === "run" ? BUILD_STYLE[d.state].color : NEUTRAL,
+        icon: () => svg(ICONS.timer, 11),
+      };
   }
 }
 
-/** "#12", "#4", "Commits", "v0.2.0" — what the head says while a sheet is open. */
-function detailHead(target: GithubTarget): string {
+/** "#12", "#4", "Commits", "v0.2.0", "CI" — what the head says while a sheet is open. */
+function detailHead(screen: DetailScreen): string {
+  const target = screen.target;
   switch (target.kind) {
     case "pull":
     case "issue":
@@ -1267,6 +1498,9 @@ function detailHead(target: GithubTarget): string {
       return target.tag;
     case "project":
       return target.repo;
+    case "run":
+      // The workflow's name: the line that opened it said it already.
+      return screen.label;
   }
 }
 
@@ -1373,7 +1607,9 @@ export function buildGithub(actions: ViewActions): ViewHost {
             ? (s.data?.url ?? `https://github.com/${s.fullName}`)
             : s.type === "detail"
               ? (s.data && s.data.kind !== "locked" ? s.data.url : s.url)
-              : s.url;
+              : s.type === "job"
+                ? (jobOf(s)?.job.url ?? s.run.url)
+                : s.url;
         void Bridge.openUrl(target);
       },
     },
@@ -1511,17 +1747,29 @@ export function buildGithub(actions: ViewActions): ViewHost {
     if (emote) actions.emote(emote);
   }
 
+  /** The screen drawn last: drawn again (a refresh), it keeps its scroll. */
+  let drawn: Screen | null = null;
+
   /** A screen of the stack takes the list's place; the head names what it shows. */
   function drawScreen(screen: Screen, login: string) {
     tabs.style.display = "none";
     clear(status);
     listTab = null;
+    const scroll = screen === drawn ? list.scrollTop : 0;
+    drawn = screen;
     clearList();
     const look = screenLook(screen);
     dress(look);
     /** "Pull request · coucou": what kind of screen, then where. */
     const kind = (where: string) => (where ? `${look.label} · ${where}` : look.label);
-    if (screen.type === "diff") {
+    if (screen.type === "job") {
+      const found = jobOf(screen);
+      who.textContent = found?.job.name ?? "Job";
+      sub.textContent = kind(found?.run.workflow ?? "");
+      if (screen.run.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.run.error }));
+      if (found) list.append(jobView(found.job, found.run));
+      else list.append(h("div", { class: "int-empty", text: "This job is gone from the run." }));
+    } else if (screen.type === "diff") {
       const { dir, base } = splitPath(screen.file.path);
       who.textContent = base;
       sub.textContent = kind(dir);
@@ -1538,31 +1786,32 @@ export function buildGithub(actions: ViewActions): ViewHost {
         list.append(sheetLoader(repoName(screen.fullName, login)));
       }
     } else {
-      who.textContent = detailHead(screen.target);
+      who.textContent = detailHead(screen);
       sub.textContent = kind(repoName(screen.target.repo, login));
       if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
       if (screen.data) {
-        const content = detailView(screen.data, login, screen.url);
+        const content = detailView(screen.data, login, screen);
         arrive(content, screen, detailMood(screen.data));
         list.append(content);
       } else if (screen.waiting) {
         list.append(sheetLoader(screen.label));
       }
     }
-    list.scrollTop = 0;
+    list.scrollTop = scroll;
     updateFade();
   }
 
   refreshBtn.addEventListener("click", async () => {
     const s = top();
-    if (refreshing || (s && s.type !== "diff" && s.loading)) return;
+    const own = s ? fetched(s) : null;
+    if (refreshing || own?.loading) return;
     actions.blip();
-    if (s?.type === "project") {
-      void loadProject(s, true);
+    if (own?.type === "project") {
+      void loadProject(own, true);
       return;
     }
-    if (s?.type === "detail") {
-      void loadDetail(s, true);
+    if (own?.type === "detail") {
+      void loadDetail(own, true);
       return;
     }
     refreshing = true;
@@ -1585,9 +1834,11 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const error = info?.error ?? null;
 
       const s = top();
-      refreshBtn.classList.toggle("spin", refreshing || (s != null && s.type !== "diff" && s.loading));
+      const own = s ? fetched(s) : null;
+      refreshBtn.classList.toggle("spin", refreshing || own?.loading === true);
       // A diff is part of the sheet under it: nothing of its own to refresh.
       refreshBtn.style.display = configured && s?.type !== "diff" ? "" : "none";
+      armLive();
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.

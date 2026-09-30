@@ -1,6 +1,6 @@
 // GitHub, one level deeper: the sheet behind a line of activity — a pull
-// request, an issue, a push's commits, a release — so that GitHub's own site
-// is the last place to go, not the first.
+// request, an issue, a push's commits, a release, a run of Actions — so that
+// GitHub's own site is the last place to go, not the first.
 //
 // Fetched on the click only, never by the tick, and kept a minute. What to
 // fetch comes as a Target that github.rs built from GitHub's answers; it
@@ -13,7 +13,7 @@ use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::github::{is_timestamp, parse_run, split_full_name, text, unix_now, Build, Gh, GhError};
+use crate::github::{build_state, is_timestamp, parse_run, split_full_name, text, unix_now, Build, Gh, GhError};
 
 /// What a line of activity leads to.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -35,6 +35,8 @@ pub enum Target {
     Release { repo: String, tag: String },
     /// A repository: the island opens its project sheet; nothing to fetch here.
     Project { repo: String },
+    /// A run of Actions, from a CI line of a project, a pull request or a commit.
+    Run { repo: String, id: u64 },
 }
 
 /// A line's sheet. `Locked` is a sheet the token may not read, with the
@@ -46,6 +48,7 @@ pub enum Detail {
     Issue(IssueDetail),
     Commits(CommitsDetail),
     Release(ReleaseDetail),
+    Run(RunDetail),
     Locked { permission: &'static str },
 }
 
@@ -190,7 +193,68 @@ pub struct ReleaseDetail {
     pub downloads: i64,
 }
 
+/// A run, its jobs, and each job's steps, with when each one started and
+/// ended: how long everything took is worked out from those, by the island.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDetail {
+    pub repo: String,
+    pub id: u64,
+    pub workflow: String,
+    /// The commit or pull request title the run is about.
+    pub title: Option<String>,
+    pub branch: Option<String>,
+    /// What started it: push, pull_request, schedule, workflow_dispatch…
+    pub event: Option<String>,
+    pub actor: Option<String>,
+    /// success, failure, running or neutral — the colour.
+    pub state: &'static str,
+    /// passed, failed, running, queued, cancelled, skipped… — the word.
+    pub outcome: &'static str,
+    /// 2 and up for a re-run.
+    pub attempt: u64,
+    pub url: String,
+    pub started_at: Option<String>,
+    /// None while it runs.
+    pub ended_at: Option<String>,
+    pub jobs: Vec<Job>,
+    /// Jobs of the run beyond the ones carried.
+    pub more_jobs: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Job {
+    pub id: u64,
+    pub name: String,
+    pub state: &'static str,
+    pub outcome: &'static str,
+    /// The job's page on GitHub, with its logs.
+    pub url: String,
+    /// The machine it asked for, e.g. "ubuntu-latest".
+    pub runner: Option<String>,
+    /// None while it waits for a runner.
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub steps: Vec<Step>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub number: u64,
+    pub name: String,
+    pub state: &'static str,
+    pub outcome: &'static str,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+}
+
 const TTL: u64 = 60;
+/// A run still going is worth asking again sooner: its jobs finish one by one.
+const LIVE_TTL: u64 = 10;
+/// Jobs carried per run; a matrix can have hundreds.
+const MAX_JOBS: usize = 30;
 /// Descriptions and notes are a taste, not the whole text: GitHub has that.
 const EXCERPT: usize = 320;
 /// Files carried per sheet, and the most of one file's diff: enough to read on
@@ -220,7 +284,7 @@ pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
     let now = unix_now();
     if !force {
         if let Some((at, cached)) = CACHE.lock().unwrap().get(&key) {
-            if now.saturating_sub(*at) < TTL {
+            if now.saturating_sub(*at) < ttl(cached) {
                 return Ok(cached.clone());
             }
         }
@@ -234,11 +298,19 @@ pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
             commits(&gh, repo, head.as_deref(), *count, branch.clone(), author.as_deref(), from.as_deref(), to.as_deref()).await
         }
         Target::Release { repo, tag } => release(&gh, repo, tag).await,
+        Target::Run { repo, id } => run(&gh, repo, *id).await,
         Target::Project { .. } => Err(GhError::BadResponse),
     };
     let detail = fetched.map_err(|e| e.message())?;
     CACHE.lock().unwrap().insert(key, (now, detail.clone()));
     Ok(detail)
+}
+
+fn ttl(detail: &Detail) -> u64 {
+    match detail {
+        Detail::Run(run) if run.state == "running" => LIVE_TTL,
+        _ => TTL,
+    }
 }
 
 fn owner_name(repo: &str) -> Result<(&str, &str), GhError> {
@@ -599,6 +671,134 @@ fn parse_release(repo: &str, tag: &str, json: &Value) -> Option<ReleaseDetail> {
     })
 }
 
+// ── Run of Actions ────────────────────────────────────────────────────────────
+
+async fn run(gh: &Gh, repo: &str, id: u64) -> Result<Detail, GhError> {
+    owner_name(repo)?;
+    // The run says what it was about; its jobs, with their steps, say how long
+    // each part took.
+    let run = match gh.get(&format!("/repos/{repo}/actions/runs/{id}")).await {
+        Ok(reply) => reply.json,
+        // A private repository's runs need Actions; GitHub answers 404 as often
+        // as 403 for what a token may not see.
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => return Ok(Detail::Locked { permission: "Actions" }),
+        Err(e) => return Err(e),
+    };
+    let jobs = match gh.get(&format!("/repos/{repo}/actions/runs/{id}/jobs?per_page={MAX_JOBS}")).await {
+        Ok(reply) => reply.json,
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => Value::Null,
+        Err(e) => return Err(e),
+    };
+    parse_run_detail(repo, &run, &jobs).map(Detail::Run).ok_or(GhError::BadResponse)
+}
+
+/// The word for a run, a job or a step, finer than its colour: a cancelled run
+/// and a skipped step are both grey, but not the same news.
+fn outcome(status: &str, conclusion: Option<&str>) -> &'static str {
+    match status {
+        "completed" => match conclusion {
+            Some("success") => "passed",
+            Some("failure") => "failed",
+            Some("timed_out") => "timed out",
+            Some("startup_failure") => "failed to start",
+            Some("cancelled") => "cancelled",
+            Some("skipped") => "skipped",
+            Some("action_required") => "waiting for approval",
+            _ => "stopped",
+        },
+        "queued" | "requested" | "pending" => "queued",
+        "waiting" => "waiting",
+        _ => "running",
+    }
+}
+
+/// (state, outcome) of a run, a job or a step: the colour and the word.
+fn states(node: &Value) -> (&'static str, &'static str) {
+    let status = node.get("status").and_then(Value::as_str).unwrap_or("completed");
+    let conclusion = node.get("conclusion").and_then(Value::as_str);
+    (build_state(status, conclusion), outcome(status, conclusion))
+}
+
+/// The start of something still waiting for its turn. GitHub gives a queued
+/// job a start time already; drawn, it would look like it was running.
+fn start(node: &Value, outcome: &str) -> Option<String> {
+    if matches!(outcome, "queued" | "waiting") {
+        return None;
+    }
+    text(node.get("started_at"))
+}
+
+fn parse_run_detail(repo: &str, run: &Value, jobs: &Value) -> Option<RunDetail> {
+    let (state, outcome) = states(run);
+    let list: Vec<Job> = jobs
+        .get("jobs")
+        .and_then(Value::as_array)
+        .map(|jobs| jobs.iter().filter_map(parse_job).take(MAX_JOBS).collect())
+        .unwrap_or_default();
+    let total = jobs.get("total_count").and_then(Value::as_u64).unwrap_or(list.len() as u64);
+    // A finished run ends with its last job. `updated_at` moves on afterwards
+    // (logs expiring, a re-run's bookkeeping), so it is only the fallback.
+    let ended_at = if state == "running" {
+        None
+    } else {
+        list.iter()
+            .filter_map(|j| j.ended_at.clone())
+            .max()
+            .or_else(|| text(run.get("updated_at")))
+    };
+    Some(RunDetail {
+        repo: repo.to_string(),
+        id: run.get("id")?.as_u64()?,
+        workflow: text(run.get("name")).unwrap_or_else(|| "Workflow".into()),
+        title: text(run.get("display_title"))
+            .or_else(|| text(run.pointer("/head_commit/message")))
+            .and_then(|t| t.lines().next().map(str::to_string)),
+        branch: text(run.get("head_branch")),
+        event: text(run.get("event")),
+        actor: text(run.pointer("/triggering_actor/login")).or_else(|| text(run.pointer("/actor/login"))),
+        state,
+        outcome,
+        attempt: run.get("run_attempt").and_then(Value::as_u64).unwrap_or(1),
+        url: text(run.get("html_url"))?,
+        started_at: text(run.get("run_started_at")),
+        ended_at,
+        more_jobs: total.saturating_sub(list.len() as u64),
+        jobs: list,
+    })
+}
+
+fn parse_job(job: &Value) -> Option<Job> {
+    let (state, outcome) = states(job);
+    let steps = job
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|steps| steps.iter().filter_map(parse_step).collect())
+        .unwrap_or_default();
+    Some(Job {
+        id: job.get("id")?.as_u64()?,
+        name: text(job.get("name")).unwrap_or_else(|| "Job".into()),
+        state,
+        outcome,
+        url: text(job.get("html_url"))?,
+        runner: job.pointer("/labels/0").and_then(|l| text(Some(l))),
+        started_at: start(job, outcome),
+        ended_at: text(job.get("completed_at")),
+        steps,
+    })
+}
+
+fn parse_step(step: &Value) -> Option<Step> {
+    let (state, outcome) = states(step);
+    Some(Step {
+        number: step.get("number")?.as_u64()?,
+        name: text(step.get("name"))?,
+        state,
+        outcome,
+        started_at: start(step, outcome),
+        ended_at: text(step.get("completed_at")),
+    })
+}
+
 // ── Text ──────────────────────────────────────────────────────────────────────
 
 /// Markdown release notes read as plain text: headings, emphasis, code
@@ -752,6 +952,71 @@ mod tests {
         assert!(is_login("louis-cfm") && !is_login("a b") && !is_login("x&y"));
         assert!(is_tag("v0.1.1") && is_tag("windows/v1") && !is_tag("v1?x") && !is_tag("../x y"));
         assert_eq!(query_time("2026-09-30T00:00:00+02:00"), "2026-09-30T00:00:00%2B02:00");
+    }
+
+    #[test]
+    fn a_run_carries_each_job_and_step_with_its_times() {
+        let run = json!({
+            "id": 77, "name": "CI", "display_title": "Fix the hook\n\nBody", "head_branch": "main",
+            "event": "push", "status": "completed", "conclusion": "failure", "run_attempt": 2,
+            "html_url": "https://github.com/edu/coucou/actions/runs/77",
+            "run_started_at": "2026-09-30T10:00:00Z", "updated_at": "2026-09-30T11:30:00Z",
+            "actor": { "login": "edu" },
+        });
+        let jobs = json!({ "total_count": 3, "jobs": [
+            {
+                "id": 1, "name": "build", "status": "completed", "conclusion": "success",
+                "html_url": "https://github.com/edu/coucou/actions/runs/77/job/1", "labels": ["ubuntu-latest"],
+                "started_at": "2026-09-30T10:00:05Z", "completed_at": "2026-09-30T10:02:00Z",
+                "steps": [
+                    { "number": 1, "name": "Set up job", "status": "completed", "conclusion": "success",
+                      "started_at": "2026-09-30T10:00:05Z", "completed_at": "2026-09-30T10:00:08Z" },
+                    { "number": 2, "name": "Lint", "status": "completed", "conclusion": "skipped",
+                      "started_at": null, "completed_at": null },
+                ],
+            },
+            {
+                "id": 2, "name": "test", "status": "completed", "conclusion": "failure",
+                "html_url": "https://github.com/edu/coucou/actions/runs/77/job/2",
+                "started_at": "2026-09-30T10:02:03Z", "completed_at": "2026-09-30T10:04:40Z", "steps": [],
+            },
+        ]});
+        let r = parse_run_detail("edu/coucou", &run, &jobs).unwrap();
+        assert_eq!((r.state, r.outcome, r.attempt, r.more_jobs), ("failure", "failed", 2, 1));
+        assert_eq!((r.title.as_deref(), r.actor.as_deref()), (Some("Fix the hook"), Some("edu")));
+        // The run ends with its last job, not when GitHub last touched it.
+        assert_eq!(r.ended_at.as_deref(), Some("2026-09-30T10:04:40Z"));
+        assert_eq!(r.jobs[0].runner.as_deref(), Some("ubuntu-latest"));
+        assert_eq!((r.jobs[0].steps[1].state, r.jobs[0].steps[1].outcome), ("neutral", "skipped"));
+        assert_eq!((r.jobs[1].state, r.jobs[1].runner.as_deref()), ("failure", None));
+    }
+
+    #[test]
+    fn a_run_still_going_has_no_end_and_a_queued_job_no_start() {
+        let run = json!({
+            "id": 78, "name": "CI", "status": "in_progress", "conclusion": null,
+            "html_url": "https://github.com/edu/coucou/actions/runs/78",
+            "run_started_at": "2026-09-30T10:00:00Z", "updated_at": "2026-09-30T10:01:00Z",
+        });
+        let jobs = json!({ "total_count": 1, "jobs": [{
+            "id": 3, "name": "deploy", "status": "queued", "conclusion": null,
+            "html_url": "https://github.com/edu/coucou/actions/runs/78/job/3",
+            "started_at": "2026-09-30T10:00:30Z", "completed_at": null,
+        }]});
+        let r = parse_run_detail("edu/coucou", &run, &jobs).unwrap();
+        assert_eq!((r.state, r.outcome, r.ended_at.as_deref()), ("running", "running", None));
+        assert_eq!((r.jobs[0].outcome, r.jobs[0].started_at.as_deref()), ("queued", None));
+        assert_eq!(ttl(&Detail::Run(r)), LIVE_TTL);
+
+        // The jobs refused: the run still says what it was.
+        let bare = parse_run_detail("edu/coucou", &run, &Value::Null).unwrap();
+        assert!(bare.jobs.is_empty() && bare.more_jobs == 0);
+    }
+
+    #[test]
+    fn a_run_target_travels_by_its_id() {
+        let target: Target = serde_json::from_value(json!({ "kind": "run", "repo": "edu/coucou", "id": 77 })).unwrap();
+        assert_eq!(target, Target::Run { repo: "edu/coucou".into(), id: 77 });
     }
 
     #[test]

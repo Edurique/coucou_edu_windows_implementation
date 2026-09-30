@@ -121,7 +121,8 @@ export type GithubTarget =
       branch: string | null; author: string | null; from: string | null; to: string | null;
     }
   | { kind: "release"; repo: string; tag: string }
-  | { kind: "project"; repo: string };
+  | { kind: "project"; repo: string }
+  | { kind: "run"; repo: string; id: number };
 
 export interface GithubFile {
   path: string;
@@ -215,12 +216,60 @@ export interface GithubReleaseDetail {
   downloads: number;
 }
 
+/**
+ * A step of a job, a job of a run, a run: its colour (`state`), its word
+ * (`outcome`: passed, failed, running, queued, cancelled, skipped…), and when
+ * it started and ended — how long it took is worked out from those.
+ */
+export interface GithubTimed {
+  state: GithubBuild["state"];
+  outcome: string;
+  /** Null while it waits for its turn. */
+  startedAt: string | null;
+  /** Null while it runs. */
+  endedAt: string | null;
+}
+
+export interface GithubStep extends GithubTimed {
+  number: number;
+  name: string;
+}
+
+export interface GithubJob extends GithubTimed {
+  id: number;
+  name: string;
+  /** The job's page on GitHub, with its logs. */
+  url: string;
+  /** The machine it asked for, e.g. "ubuntu-latest". */
+  runner: string | null;
+  steps: GithubStep[];
+}
+
+export interface GithubRunDetail extends GithubTimed {
+  kind: "run";
+  repo: string;
+  id: number;
+  workflow: string;
+  title: string | null;
+  branch: string | null;
+  /** push, pull_request, schedule, workflow_dispatch… */
+  event: string | null;
+  actor: string | null;
+  /** 2 and up for a re-run. */
+  attempt: number;
+  url: string;
+  jobs: GithubJob[];
+  /** Jobs of the run beyond the ones carried. */
+  moreJobs: number;
+}
+
 /** A line's sheet, or the permission the token lacks to read it. */
 export type GithubDetail =
   | GithubPullDetail
   | GithubIssueDetail
   | GithubCommitsDetail
   | GithubReleaseDetail
+  | GithubRunDetail
   | { kind: "locked"; permission: string };
 
 /** A clicked day of the contribution graph — the Day struct in github.rs. */

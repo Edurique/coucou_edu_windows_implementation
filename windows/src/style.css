@@ -2391,6 +2391,58 @@ button.gh-block:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── GitHub panel: a run's timeline ─────────────────────────────────────── */
+
+/* A job or a step: its line, then its bar under the words, where it ran. */
+.gh-timed {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding-bottom: 6px;
+}
+
+.gh-timed .gh-took {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Under the words, not under the mark: the bars line up with the names. */
+.gh-bar {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(100% - 21px);
+  margin-left: 21px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.gh-bar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 3px;
+  border-radius: 2px;
+  background: var(--c);
+}
+
+/* Still going: the bar breathes, like Mochi does. */
+.gh-bar i.live {
+  animation: gh-live 1.6s ease-in-out infinite;
+}
+
+@keyframes gh-live {
+  50% { opacity: 0.5; }
+}
+
+/* Waiting for its turn: an empty ring. */
+.gh-wait {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.6px solid currentColor;
+  opacity: 0.7;
+}
+
 .gh-langs {
   display: flex;
   flex-direction: column;

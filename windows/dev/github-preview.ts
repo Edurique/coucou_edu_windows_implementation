@@ -5,7 +5,7 @@
 import "../src/style.css";
 import {
   Bridge, type GithubActivity, type GithubBuild, type GithubData, type GithubDay, type GithubDetail,
-  type GithubFile, type GithubProject, type GithubRepo, type GithubTarget,
+  type GithubFile, type GithubJob, type GithubProject, type GithubRepo, type GithubRunDetail, type GithubStep, type GithubTarget,
 } from "../src/core/bridge";
 import { State } from "../src/core/state";
 import { Island } from "../src/island/island";
@@ -59,7 +59,53 @@ const files: GithubFile[] = [
 const ci = (state: "success" | "failure" | "running" | "neutral"): GithubBuild => ({
   id: 1, state, workflow: "CI", branch: "windows-github-panel", url: "https://github.com", at: minutesAgo(6),
 });
+// A run with its jobs side by side; `running` catches it halfway.
+const live = params.has("running");
+const runStart = Date.now() - (live ? 100 : 7 * 60) * 1000;
+const t = (s: number) => new Date(runStart + s * 1000).toISOString();
+const step = (number: number, name: string, from: number, to: number | null, outcome = "passed"): GithubStep => ({
+  number, name, outcome,
+  state: outcome === "failed" ? "failure" : outcome === "skipped" ? "neutral" : to == null ? "running" : "success",
+  startedAt: outcome === "skipped" ? null : t(from), endedAt: to == null ? null : t(to),
+});
+const jobs: GithubJob[] = [
+  {
+    id: 1, name: "lint", state: "success", outcome: "passed", url: "https://github.com", runner: "ubuntu-latest",
+    startedAt: t(4), endedAt: t(46),
+    steps: [step(1, "Set up job", 4, 6), step(2, "Checkout", 6, 8), step(3, "npm ci", 8, 31), step(4, "Type-check", 31, 45), step(5, "Complete job", 45, 46)],
+  },
+  {
+    id: 2, name: "build (windows)", state: live ? "running" : "success", outcome: live ? "running" : "passed",
+    url: "https://github.com", runner: "windows-latest", startedAt: t(5), endedAt: live ? null : t(212),
+    steps: [
+      step(1, "Set up job", 5, 9), step(2, "Checkout", 9, 12), step(3, "Set up Rust", 12, 41), step(4, "Restore cache", 41, 52),
+      live ? step(5, "cargo build --release", 52, null) : step(5, "cargo build --release", 52, 198),
+      ...(live ? [] : [step(6, "Save cache", 198, 210), step(7, "Complete job", 210, 212)]),
+    ],
+  },
+  {
+    id: 3, name: "test", state: live ? "running" : "failure", outcome: live ? "running" : "failed",
+    url: "https://github.com", runner: "ubuntu-latest", startedAt: t(5), endedAt: live ? null : t(141),
+    steps: [
+      step(1, "Set up job", 5, 7), step(2, "Checkout", 7, 9), step(3, "Set up Rust", 9, 35),
+      live ? step(4, "cargo test", 35, null) : step(4, "cargo test", 35, 139, "failed"),
+      ...(live ? [] : [step(5, "Upload report", 139, 139, "skipped"), step(6, "Complete job", 139, 141)]),
+    ],
+  },
+  {
+    id: 4, name: "deploy", state: live ? "running" : "neutral", outcome: live ? "queued" : "skipped",
+    url: "https://github.com", runner: null, startedAt: null, endedAt: null, steps: [],
+  },
+];
+const runDetail: GithubRunDetail = {
+  kind: "run", repo: "mochi/coucou", id: 1, workflow: "CI", title: "Keep the last snapshot through an error",
+  branch: "windows-github-panel", event: "push", actor: "mochi", attempt: 1, url: "https://github.com",
+  state: live ? "running" : "failure", outcome: live ? "running" : "failed",
+  startedAt: t(0), endedAt: live ? null : t(212), jobs, moreJobs: 0,
+};
+
 const details: Record<GithubTarget["kind"], GithubDetail> = {
+  run: runDetail,
   pull: {
     kind: "pull", repo: "mochi/coucou", number: 12, title: "GitHub panel for the Windows island", url: "https://github.com",
     state: "merged", author: "mochi", base: "main", head: "windows-github-panel",
