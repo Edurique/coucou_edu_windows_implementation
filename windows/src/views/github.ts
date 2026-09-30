@@ -82,9 +82,14 @@ function closeSheet() {
 /**
  * On the way into the panel from the card: start from the lists, and refetch
  * when what they hold is old news.
+ *
+ * The sheet is closed through closeSheet(), never by setting it to null here:
+ * the view redraws only when its key changes, and a sheet dropped without a
+ * new stamp left the old one on screen — with ‹ then leaving the panel, since
+ * as far as it knew no sheet was open.
  */
 export function enterGithubPanel() {
-  sheet = null;
+  if (sheet) closeSheet();
   const d = githubData();
   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);
 }
@@ -483,6 +488,15 @@ export function buildGithub(actions: ViewActions): ViewHost {
   const body = h("div", { class: "gh-body" }, head, status, tabs, list);
   const el = h("div", { class: "view" }, h("div", { class: "card" }, body));
 
+  /** The bottom fade says "there's more": it goes once the end is on screen. */
+  const updateFade = () => {
+    const more = list.scrollTop + list.clientHeight < list.scrollHeight - 2;
+    list.classList.toggle("more", more);
+  };
+  list.addEventListener("scroll", updateFade, { passive: true });
+  // The island grows and shrinks around the list as it opens and closes.
+  new ResizeObserver(updateFade).observe(list);
+
   let refreshing = false;
   let key = "";
   let listTab: Tab | null = null;
@@ -502,6 +516,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clear(list);
     if (open.data) list.append(projectSheet(open.data));
     list.scrollTop = 0;
+    updateFade();
   }
 
   refreshBtn.addEventListener("click", async () => {
@@ -583,7 +598,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const scroll = tab === listTab ? list.scrollTop : 0;
       listTab = tab;
       clear(list);
-      if (!d || !configured) return;
+      if (!d || !configured) {
+        updateFade();
+        return;
+      }
       if (tab === "projects") {
         if (d.repos.length === 0) {
           list.append(h("div", { class: "int-empty", text: "No repositories yet." }));
@@ -602,6 +620,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
         for (const a of d.activity) list.append(activityRow(a, d.login));
       }
       list.scrollTop = scroll;
+      updateFade();
     },
   };
 }

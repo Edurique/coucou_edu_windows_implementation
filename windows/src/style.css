@@ -1502,7 +1502,11 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 1px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
-  /* Like the overview ticker: the last row fades out instead of being cut. */
+}
+
+/* Like the overview ticker, a row cut by the bottom edge fades out — but only
+   while there is more below. At the end of the list nothing is hidden. */
+.gh-list.more {
   -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
 }
