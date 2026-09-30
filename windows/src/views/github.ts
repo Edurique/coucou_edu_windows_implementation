@@ -382,10 +382,8 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
   // Sunday-first columns, like the profile page; GitHub's first week is partial.
   const offset = dayDate(c.start, 0).getUTCDay();
   const weeks = Math.ceil((offset + c.counts.length) / 7);
-  const columns = `repeat(${weeks}, 1fr)`;
 
   const months = h("div", { class: "gh-months" });
-  months.style.gridTemplateColumns = columns;
   let previousMonth = -1;
   for (let col = 0; col < weeks; col++) {
     const month = dayDate(c.start, col * 7 - offset).getUTCMonth();
@@ -404,7 +402,6 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
   const grid = h("div", {
     class: ["gh-grid", sweep ? "sweep" : "", picked != null ? "picked" : ""].join(" ").trim(),
   });
-  grid.style.gridTemplateColumns = columns;
   for (let i = 0; i < offset; i++) grid.append(h("i", { class: "pad" }));
   c.counts.forEach((_, i) => {
     const level = c.levels[i] ?? 0;
@@ -424,7 +421,13 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
   const summary =
     `${c.total.toLocaleString()} contribution${c.total === 1 ? "" : "s"} in the last year` +
     (streak >= 2 ? ` · ${streak} days in a row` : "");
-  const caption = h("span", { class: "gh-caption", text: summary });
+  const caption = h("span", { class: "gh-caption" });
+  /** What the caption says when no day is hovered: the picked day, or the year. */
+  const restCaption = () => {
+    caption.textContent = picked != null ? dayLabel(dayDate(c.start, picked), c.counts[picked] ?? 0) : summary;
+    caption.classList.toggle("day", picked != null);
+  };
+  restCaption();
   // GitHub's key, so the colours read the same as on the profile page.
   const legend = h("span", { class: "gh-legend" }, "Less");
   for (const color of GITHUB_LEVELS) {
@@ -446,8 +449,7 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
     tint(mochiShade(c, i));
   });
   grid.addEventListener("mouseleave", () => {
-    caption.textContent = summary;
-    caption.classList.remove("day");
+    restCaption();
     tint(picked != null ? mochiShade(c, picked) : null);
   });
   grid.addEventListener("click", (e) => {
@@ -457,7 +459,24 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
     o.onPick(i, dayDate(c.start, i).toISOString().slice(0, 10));
   });
 
-  return h("div", { class: "gh-graph" }, months, grid, h("div", { class: "gh-graph-foot" }, caption, legend));
+  const graph = h("div", { class: "gh-graph" }, months, grid, h("div", { class: "gh-graph-foot" }, caption, legend));
+  graph.style.setProperty("--weeks", String(weeks));
+
+  // Cells sized as fractions of the width landed on fractions of a screen
+  // pixel, so at 125 % some were drawn a pixel wider than others. Sizing them
+  // in whole device pixels draws every one alike; the grid is refitted
+  // whenever its width changes (a scrollbar appearing, for one).
+  new ResizeObserver(() => {
+    const available = grid.clientWidth;
+    if (!available) return;
+    const ratio = window.devicePixelRatio || 1;
+    const gap = Math.max(1, Math.round(1.6 * ratio));
+    const pitch = Math.floor((available * ratio + gap) / weeks);
+    graph.style.setProperty("--cell", `${(pitch - gap) / ratio}px`);
+    graph.style.setProperty("--gap", `${gap / ratio}px`);
+  }).observe(grid);
+
+  return graph;
 }
 
 /**

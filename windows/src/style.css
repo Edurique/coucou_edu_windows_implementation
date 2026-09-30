@@ -1643,10 +1643,14 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 2px 8px 6px;
 }
 
+/* --cell and --gap are set from the graph's width in whole device pixels (see
+   contributionGraph), so every day is drawn the same size; these are only the
+   values before that first fit. */
 .gh-months,
 .gh-grid {
   display: grid;
-  column-gap: 2px;
+  grid-template-columns: repeat(var(--weeks, 53), var(--cell, 7px));
+  column-gap: var(--gap, 2px);
 }
 
 .gh-months {
@@ -1661,16 +1665,15 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .gh-grid {
-  grid-template-rows: repeat(7, auto);
+  grid-template-rows: repeat(7, var(--cell, 7px));
   grid-auto-flow: column;
-  row-gap: 2px;
+  row-gap: var(--gap, 2px);
 }
 
 /* Each day is a tiny Mochi-shaped squircle in GitHub's colour for its level.
    Hover grows it with the `scale` property, which composes with `transform`
    instead of fighting the entrance and breathing animations over it. */
 .gh-grid i {
-  aspect-ratio: 1;
   border-radius: 34%;
   background: var(--c);
   cursor: default;
