@@ -23,6 +23,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::github_detail::Target;
 use crate::integrations::{emit, IntegrationUpdate};
 use crate::log;
 use crate::secrets;
@@ -70,7 +71,7 @@ impl GhError {
     }
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -136,7 +137,7 @@ fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
     headers.get(name)?.to_str().ok()?.trim().parse().ok()
 }
 
-fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)?
         .to_str()
@@ -386,6 +387,8 @@ pub struct Activity {
     pub url: String,
     /// ISO 8601, as GitHub sends it.
     pub at: String,
+    /// The sheet a click on the line opens in the panel; None: straight to GitHub.
+    pub target: Option<Target>,
 }
 
 /// Enough for the panel, with room left for the kinds we skip.
@@ -666,7 +669,7 @@ fn build_state(status: &str, conclusion: Option<&str>) -> &'static str {
     }
 }
 
-fn parse_run(json: &Value) -> Option<Build> {
+pub(crate) fn parse_run(json: &Value) -> Option<Build> {
     let run = json.get("workflow_runs")?.as_array()?.first()?;
     let status = run.get("status").and_then(Value::as_str).unwrap_or("completed");
     let conclusion = run.get("conclusion").and_then(Value::as_str);
@@ -728,7 +731,7 @@ fn parse_events(json: &Value) -> Vec<Activity> {
         .unwrap_or_default()
 }
 
-fn text(value: Option<&Value>) -> Option<String> {
+pub(crate) fn text(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
         .map(str::trim)
@@ -750,7 +753,7 @@ fn parse_event(event: &Value) -> Option<Activity> {
     let repo_url = format!("https://github.com/{repo}");
     let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
 
-    let (kind, title, detail, url) = match event.get("type")?.as_str()? {
+    let (kind, title, detail, url, target) = match event.get("type")?.as_str()? {
         "PushEvent" => {
             let branch = text(payload.get("ref")).map(|r| r.trim_start_matches("refs/heads/").to_string());
             let commits = payload.get("commits").and_then(Value::as_array);
@@ -772,12 +775,22 @@ fn parse_event(event: &Value) -> Option<Activity> {
                 (_, Some(b)) => Some(b.clone()),
                 _ => None,
             };
-            let url = match (text(payload.get("head")), &branch) {
+            let head = text(payload.get("head"));
+            let url = match (&head, &branch) {
                 (Some(sha), _) => format!("{repo_url}/commit/{sha}"),
                 (None, Some(b)) => format!("{repo_url}/commits/{b}"),
                 _ => repo_url.clone(),
             };
-            ("push", title, detail, url)
+            let target = head.map(|head| Target::Commits {
+                repo: repo.clone(),
+                head: Some(head),
+                count,
+                branch: branch.clone(),
+                author: None,
+                from: None,
+                to: None,
+            });
+            ("push", title, detail, url, target)
         }
         "PullRequestEvent" => {
             let pr = payload.get("pull_request");
@@ -802,7 +815,8 @@ fn parse_event(event: &Value) -> Option<Activity> {
             let url = text(pr.and_then(|p| p.get("html_url")))
                 .or_else(|| number.map(|n| format!("{repo_url}/pull/{n}")))
                 .unwrap_or_else(|| repo_url.clone());
-            (kind, title, number.map(|n| format!("#{n}")), url)
+            let target = number.map(|number| Target::Pull { repo: repo.clone(), number });
+            (kind, title, number.map(|n| format!("#{n}")), url, target)
         }
         "IssuesEvent" => {
             let issue = payload.get("issue");
@@ -817,7 +831,8 @@ fn parse_event(event: &Value) -> Option<Activity> {
             let url = text(issue.and_then(|i| i.get("html_url")))
                 .or_else(|| number.map(|n| format!("{repo_url}/issues/{n}")))
                 .unwrap_or_else(|| repo_url.clone());
-            (kind, title, number.map(|n| format!("#{n}")), url)
+            let target = number.map(|number| Target::Issue { repo: repo.clone(), number });
+            (kind, title, number.map(|n| format!("#{n}")), url, target)
         }
         "ReleaseEvent" => {
             if !matches!(action, "published" | "released" | "created") {
@@ -831,21 +846,28 @@ fn parse_event(event: &Value) -> Option<Activity> {
             let url = text(release.and_then(|r| r.get("html_url")))
                 .or_else(|| tag.as_ref().map(|t| format!("{repo_url}/releases/tag/{t}")))
                 .unwrap_or_else(|| format!("{repo_url}/releases"));
-            ("release", title, tag, url)
+            let target = tag.clone().map(|tag| Target::Release { repo: repo.clone(), tag });
+            ("release", title, tag, url, target)
         }
         "CreateEvent" => match payload.get("ref_type").and_then(Value::as_str)? {
-            "repository" => ("create", "Created the repository".to_string(), None, repo_url.clone()),
+            "repository" => (
+                "create",
+                "Created the repository".to_string(),
+                None,
+                repo_url.clone(),
+                Some(Target::Project { repo: repo.clone() }),
+            ),
             "tag" => {
                 let tag = text(payload.get("ref"))?;
                 let url = format!("{repo_url}/releases/tag/{tag}");
-                ("create", format!("Tagged {tag}"), None, url)
+                ("create", format!("Tagged {tag}"), None, url, None)
             }
             _ => return None,
         },
         _ => return None,
     };
 
-    Some(Activity { id, kind, repo, title, detail, url, at })
+    Some(Activity { id, kind, repo, title, detail, url, at, target })
 }
 
 // ── Project sheet (a click on a project) ──────────────────────────────────────
@@ -952,7 +974,7 @@ static PROJECTS: LazyLock<Mutex<HashMap<String, (u64, Project)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// "owner/name" with nothing else in it: the name ends up in a URL path.
-fn split_full_name(full_name: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_full_name(full_name: &str) -> Option<(&str, &str)> {
     let (owner, name) = full_name.split_once('/')?;
     let valid = |s: &str| {
         !s.is_empty()
@@ -1172,9 +1194,11 @@ pub struct DayItem {
     pub title: String,
     pub detail: Option<String>,
     pub url: String,
+    /// The sheet a click on the line opens in the panel.
+    pub target: Option<Target>,
 }
 
-const DAY_QUERY: &str = "query($from: DateTime!, $to: DateTime!) { viewer { \
+const DAY_QUERY: &str = "query($from: DateTime!, $to: DateTime!) { viewer { login \
     contributionsCollection(from: $from, to: $to) { restrictedContributionsCount \
     commitContributionsByRepository(maxRepositories: 10) { repository { nameWithOwner url } contributions { totalCount } } \
     pullRequestContributions(first: 10) { nodes { pullRequest { number title url merged repository { nameWithOwner } } } } \
@@ -1189,7 +1213,7 @@ const TODAY_TTL: u64 = 60;
 static DAYS: LazyLock<Mutex<HashMap<String, (u64, Day)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// An ISO 8601 timestamp and nothing else: it goes to GitHub as a variable.
-fn is_timestamp(s: &str) -> bool {
+pub(crate) fn is_timestamp(s: &str) -> bool {
     (10..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit() || "-:T.Z+".contains(c))
 }
 
@@ -1216,7 +1240,8 @@ pub async fn day(from: &str, to: &str, today: bool) -> Result<Day, String> {
     let collection = data
         .pointer("/viewer/contributionsCollection")
         .ok_or_else(|| GhError::BadResponse.message())?;
-    let day = parse_day(collection);
+    let login = text(data.pointer("/viewer/login"));
+    let day = parse_day(collection, login.as_deref(), from, to);
     DAYS.lock().unwrap().insert(key, (now, day.clone()));
     Ok(day)
 }
@@ -1230,7 +1255,9 @@ fn nodes<'a>(collection: &'a Value, field: &str) -> impl Iterator<Item = &'a Val
         .iter()
 }
 
-fn parse_day(collection: &Value) -> Day {
+/// `login`, `from` and `to` go into the commits' target, so their sheet lists
+/// exactly the commits counted here.
+fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> Day {
     let mut items = Vec::new();
 
     // Commits come grouped by repository, as on the profile page.
@@ -1248,16 +1275,27 @@ fn parse_day(collection: &Value) -> Day {
         };
         let url = text(group.pointer("/repository/url")).unwrap_or_else(|| format!("https://github.com/{repo}"));
         let title = if count == 1 { "1 commit".to_string() } else { format!("{count} commits") };
-        items.push(DayItem { kind: "push", repo, title, detail: None, url: format!("{url}/commits") });
+        let target = Target::Commits {
+            repo: repo.clone(),
+            head: None,
+            count: u64::try_from(count).ok(),
+            branch: None,
+            author: login.map(str::to_string),
+            from: Some(from.to_string()),
+            to: Some(to.to_string()),
+        };
+        items.push(DayItem { kind: "push", repo, title, detail: None, url: format!("{url}/commits"), target: Some(target) });
     }
 
     let pull = |node: &Value, kind_for: &dyn Fn(bool) -> &'static str| -> Option<DayItem> {
         let pr = node.get("pullRequest")?;
         let merged = pr.get("merged").and_then(Value::as_bool).unwrap_or(false);
         let number = pr.get("number")?.as_u64()?;
+        let repo = text(pr.pointer("/repository/nameWithOwner"))?;
         Some(DayItem {
             kind: kind_for(merged),
-            repo: text(pr.pointer("/repository/nameWithOwner"))?,
+            target: Some(Target::Pull { repo: repo.clone(), number }),
+            repo,
             title: text(pr.get("title")).unwrap_or_else(|| format!("Pull request #{number}")),
             detail: Some(format!("#{number}")),
             url: text(pr.get("url"))?,
@@ -1271,9 +1309,11 @@ fn parse_day(collection: &Value) -> Day {
     items.extend(nodes(collection, "issueContributions").filter_map(|n| {
         let issue = n.get("issue")?;
         let number = issue.get("number")?.as_u64()?;
+        let repo = text(issue.pointer("/repository/nameWithOwner"))?;
         Some(DayItem {
             kind: "issue_opened",
-            repo: text(issue.pointer("/repository/nameWithOwner"))?,
+            target: Some(Target::Issue { repo: repo.clone(), number }),
+            repo,
             title: text(issue.get("title")).unwrap_or_else(|| format!("Issue #{number}")),
             detail: Some(format!("#{number}")),
             url: text(issue.get("url"))?,
@@ -1285,6 +1325,7 @@ fn parse_day(collection: &Value) -> Day {
         Some(DayItem {
             kind: "create",
             url: text(n.pointer("/repository/url")).unwrap_or_else(|| format!("https://github.com/{repo}")),
+            target: Some(Target::Project { repo: repo.clone() }),
             repo,
             title: "Created the repository".into(),
             detail: None,
@@ -1387,6 +1428,11 @@ pub async fn test() -> Result<Account, String> {
         checks.push(check("Actions", runs));
         let deployments = gh.get(&format!("/repos/{repo}/deployments?per_page=1")).await.map(|_| ());
         checks.push(check("Deployments", deployments));
+        // Commits, their diffs and releases.
+        let contents = gh.get(&format!("/repos/{repo}/commits?per_page=1")).await.map(|_| ());
+        checks.push(check("Contents", contents));
+        let issues = gh.get(&format!("/repos/{repo}/issues?per_page=1")).await.map(|_| ());
+        checks.push(check("Issues", issues));
     }
 
     let events = gh.get(&format!("/users/{login}/events?per_page=1")).await.map(|_| ());
@@ -1691,7 +1737,7 @@ mod tests {
                 { "repository": { "nameWithOwner": "edu/sandbox", "url": "https://github.com/edu/sandbox" } },
             ]},
         });
-        let day = parse_day(&collection);
+        let day = parse_day(&collection, Some("edu"), "2026-09-29T22:00:00.000Z", "2026-09-30T21:59:59.000Z");
         let summary: Vec<(&str, &str)> = day.items.iter().map(|i| (i.kind, i.title.as_str())).collect();
         assert_eq!(summary, [
             ("push", "4 commits"),
@@ -1708,7 +1754,7 @@ mod tests {
 
     #[test]
     fn an_empty_day_is_empty() {
-        let day = parse_day(&json!({ "restrictedContributionsCount": 0 }));
+        let day = parse_day(&json!({ "restrictedContributionsCount": 0 }), None, "a", "b");
         assert!(day.items.is_empty());
         assert_eq!(day.private_count, 0);
     }

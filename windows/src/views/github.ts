@@ -9,10 +9,13 @@ import { ICONS } from "./icons";
 import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
   Bridge,
-  type GithubActivity, type GithubBuild, type GithubContributions, type GithubDay, type GithubDeploy,
-  type GithubProject, type GithubPull, type GithubRepo,
+  type GithubActivity, type GithubBuild, type GithubCommitsDetail, type GithubContributions, type GithubDay,
+  type GithubDeploy, type GithubDetail, type GithubFile, type GithubIssueDetail, type GithubLabel,
+  type GithubProject, type GithubPull, type GithubPullDetail, type GithubReleaseDetail, type GithubRepo,
+  type GithubTarget,
 } from "../core/bridge";
 import type { BotEmoteName } from "../core/layout";
+import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import type { ViewActions, ViewHost } from "./views";
 
@@ -53,10 +56,31 @@ function pending<T>(): Pending<T> {
   return { data: null, error: null, loading: false, waiting: false, react: false };
 }
 
-/** The project whose sheet is open. */
-interface Sheet extends Pending<GithubProject> {
+/** A project's sheet. */
+interface ProjectScreen extends Pending<GithubProject> {
+  type: "project";
   fullName: string;
 }
+
+/** The sheet behind a line of activity: a pull request, an issue, commits, a release. */
+interface DetailScreen extends Pending<GithubDetail> {
+  type: "detail";
+  target: GithubTarget;
+  /** What the line said: the head's title while the sheet loads. */
+  label: string;
+  /** Where the line used to go — GitHub's page, the way out of a locked sheet. */
+  url: string;
+}
+
+/** One file's diff, opened from a pull request's or a commit's sheet. Nothing to fetch. */
+interface DiffScreen {
+  type: "diff";
+  file: GithubFile;
+  /** The GitHub page the diff belongs to. */
+  url: string;
+}
+
+type Screen = ProjectScreen | DetailScreen | DiffScreen;
 
 /** The day picked on the graph, by its index in the calendar. */
 interface DayPick extends Pending<GithubDay> {
@@ -65,7 +89,13 @@ interface DayPick extends Pending<GithubDay> {
   date: string;
 }
 
-let sheet: Sheet | null = null;
+/**
+ * What the panel shows over its lists, deepest last — a project's sheet, the
+ * sheet behind a line of activity, a file's diff. Each ‹ goes back one, so
+ * GitHub's own site stays the last place to go rather than the first.
+ */
+let stack: Screen[] = [];
+const top = (): Screen | null => stack[stack.length - 1] ?? null;
 let day: DayPick | null = null;
 /** Bumped on every change to a sheet or a day, so the view knows to redraw. */
 let stamp = 0;
@@ -127,20 +157,56 @@ async function load<T>(target: Pending<T>, isCurrent: () => boolean, fetch: () =
   }
 }
 
-function loadSheet(current: Sheet, force: boolean) {
-  return load(current, () => sheet === current, () => Bridge.githubProject(current.fullName, force));
-}
-
-function openSheet(fullName: string) {
-  const opened: Sheet = { ...pending<GithubProject>(), fullName };
-  sheet = opened;
-  void loadSheet(opened, false);
-}
-
-function closeSheet() {
-  if (sheet) stopSearching(sheet);
-  sheet = null;
+/** One level deeper — with the island's small click. */
+function push(screen: Screen) {
+  Sound.play("blip");
+  stack.push(screen);
   touch();
+}
+
+/** One level back. */
+function pop() {
+  const left = stack.pop();
+  if (left) stopSearching(left);
+  touch();
+}
+
+function clearStack() {
+  for (const screen of stack) stopSearching(screen);
+  stack = [];
+}
+
+function loadProject(screen: ProjectScreen, force: boolean) {
+  return load(screen, () => top() === screen, () => Bridge.githubProject(screen.fullName, force));
+}
+
+function loadDetail(screen: DetailScreen, force: boolean) {
+  return load(screen, () => top() === screen, () => Bridge.githubDetail(screen.target, force));
+}
+
+function openProject(fullName: string) {
+  const screen: ProjectScreen = { ...pending<GithubProject>(), type: "project", fullName };
+  push(screen);
+  void loadProject(screen, false);
+}
+
+/** A line of activity: its sheet in the panel when it has one, GitHub otherwise. */
+function openTarget(target: GithubTarget | null, label: string, url: string) {
+  if (!target) {
+    void Bridge.openUrl(url);
+    return;
+  }
+  if (target.kind === "project") {
+    openProject(target.repo);
+    return;
+  }
+  const screen: DetailScreen = { ...pending<GithubDetail>(), type: "detail", target, label, url };
+  push(screen);
+  void loadDetail(screen, false);
+}
+
+function openDiff(file: GithubFile, url: string) {
+  push({ type: "diff", file, url });
 }
 
 /** A day's bounds as the island's clock sees it: local midnight to midnight. */
@@ -191,29 +257,29 @@ function mood(p: GithubProject): BotEmoteName {
 let sweepNext = true;
 
 /**
- * On the way into the panel from the card: start from the lists, and refetch
- * when what they hold is old news.
+ * On the way into the panel from the card: start from the lists — no sheet,
+ * no picked day — and refetch when what they hold is old news.
  *
- * The sheet is closed through closeSheet(), never by setting it to null here:
- * the view redraws only when its key changes, and a sheet dropped without a
- * new stamp left the old one on screen — with ‹ then leaving the panel, since
- * as far as it knew no sheet was open.
+ * It must end in touch(): the view redraws only when its key changes, and a
+ * sheet dropped without a new stamp stayed on screen, with ‹ then leaving the
+ * panel since, as far as it knew, no sheet was open.
  */
 export function enterGithubPanel() {
   sweepNext = true;
-  // A day picked last time goes too: the panel opens on the lists.
   if (day) stopSearching(day);
   day = null;
-  // Either way the view gets a new stamp, so it redraws — and sweeps.
-  if (sheet) closeSheet();
-  else touch();
+  clearStack();
+  touch();
   const d = githubData();
   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);
 }
 
-/** One line of GitHub activity — the recent feed, or a picked day. */
+/** One line of GitHub activity — the recent feed, or a picked day. It opens its sheet. */
 function eventRow(
-  item: { kind: keyof typeof ACTIVITY_STYLE; repo: string; title: string; detail: string | null; url: string },
+  item: {
+    kind: keyof typeof ACTIVITY_STYLE; repo: string; title: string; detail: string | null; url: string;
+    target: GithubTarget | null;
+  },
   login: string,
   ago?: string,
 ): HTMLElement {
@@ -221,7 +287,7 @@ function eventRow(
   const where = [repoName(item.repo, login), item.detail].filter(Boolean).join(" · ");
   return h(
     "button",
-    { class: "gh-row", onclick: () => void Bridge.openUrl(item.url) },
+    { class: "gh-row", onclick: () => openTarget(item.target, item.title, item.url) },
     h("i", { class: "gh-row-icon", style: `color:${style.color}` }, svg(style.icon, 12, { stroke: 2 })),
     h("span", { class: "gh-row-title", text: item.title }),
     h("span", { class: "gh-row-where", text: where }),
@@ -574,6 +640,8 @@ interface BlockParts {
   sub?: Node[];
   /** Anything that rides at the end of the second line (the CI streak). */
   aside?: Node;
+  /** A deeper sheet in the island — preferred to `url`, which leaves for GitHub. */
+  open?: () => void;
   url?: string | null;
 }
 
@@ -595,8 +663,9 @@ function block(parts: BlockParts): HTMLElement {
     );
   }
   const url = parts.url;
-  return url
-    ? h("button", { class: "gh-block", onclick: () => void Bridge.openUrl(url) }, parts.icon, text)
+  const open = parts.open ?? (url ? () => void Bridge.openUrl(url) : null);
+  return open
+    ? h("button", { class: "gh-block", onclick: open }, parts.icon, text)
     : h("div", { class: "gh-block" }, parts.icon, text);
 }
 
@@ -718,7 +787,7 @@ function pullBlock(p: GithubProject): HTMLElement {
     title: `#${pr.number} ${pr.title}`,
     right: chip,
     sub: line(pr.author && `by ${pr.author}`, size, files, review, pr.comments > 0 && comments, ago(pr.at)),
-    url: pr.url,
+    open: () => openTarget({ kind: "pull", repo: p.fullName, number: pr.number }, `#${pr.number}`, pr.url),
   });
 }
 
@@ -805,16 +874,397 @@ function projectSheet(p: GithubProject): HTMLElement {
   return el;
 }
 
+// ── Activity sheets (a click on a line of activity) ───────────────────────────
+
+/** A title that may take two lines, with its state chip. */
+function titleRow(title: string, ...chips: (HTMLElement | null)[]): HTMLElement {
+  return h("div", { class: "gh-title" }, h("span", { text: title }), ...chips);
+}
+
+function chip(text: string, color: string): HTMLElement {
+  const el = h("span", { class: "gh-chip", text });
+  el.style.setProperty("--c", color);
+  el.style.setProperty("--tint", `${color}26`);
+  return el;
+}
+
+/** The grey line of facts under a title; the repository goes one level deeper. */
+function facts(repo: string, login: string, ...pieces: (Node | string | null | false | undefined)[]): HTMLElement {
+  const repoLink = h("button", { class: "gh-host", text: repoName(repo, login), onclick: () => openProject(repo) });
+  return h("div", { class: "gh-facts" }, ...line(repoLink, ...pieces));
+}
+
+/** GitHub's own label colours. */
+function labelChips(labels: GithubLabel[]): HTMLElement | null {
+  if (labels.length === 0) return null;
+  const row = h("div", { class: "gh-labels" });
+  for (const label of labels) {
+    const el = h("span", { class: "gh-label", text: label.name });
+    el.style.setProperty("--c", label.color);
+    row.append(el);
+  }
+  return row;
+}
+
+function description(body: string | null): HTMLElement | null {
+  return body ? h("div", { class: "gh-desc long", text: body }) : null;
+}
+
+/** A small grey heading inside a sheet ("Files", "Commits"). */
+function heading(text: string, aside?: Node): HTMLElement {
+  return h("div", { class: "gh-heading" }, h("span", { text }), aside ?? null);
+}
+
+function plusMinus(additions: number, deletions: number): HTMLElement {
+  return h(
+    "span",
+    { class: "gh-pm" },
+    h("span", { class: "gh-add", text: `+${additions}` }),
+    " ",
+    h("span", { class: "gh-del", text: `−${deletions}` }),
+  );
+}
+
+/** "windows/src/views/" and "github.ts". */
+function splitPath(path: string): { dir: string; base: string } {
+  const i = path.lastIndexOf("/");
+  return i < 0 ? { dir: "", base: path } : { dir: path.slice(0, i + 1), base: path.slice(i + 1) };
+}
+
+/** Mochi's state colours again: new green, gone red, moved indigo, changed amber. */
+const FILE_STATUS: Record<string, { letter: string; color: string }> = {
+  added: { letter: "A", color: "#34D399" },
+  removed: { letter: "D", color: "#F4505E" },
+  renamed: { letter: "R", color: "#6366F1" },
+  copied: { letter: "C", color: "#6366F1" },
+};
+const MODIFIED = { letter: "M", color: "#F5A524" };
+
+/** One file touched; it opens the file's diff. */
+function fileRow(file: GithubFile, url: string): HTMLElement {
+  const status = FILE_STATUS[file.status ?? ""] ?? MODIFIED;
+  const { dir, base } = splitPath(file.path);
+  return h(
+    "button",
+    { class: "gh-row gh-file", onclick: () => openDiff(file, url) },
+    h("i", { class: "gh-row-icon gh-status", style: `color:${status.color}`, text: status.letter }),
+    h("span", { class: "gh-row-title", text: base }),
+    h("span", { class: "gh-row-where", text: dir }),
+    plusMinus(file.additions, file.deletions),
+  );
+}
+
+function fileList(files: GithubFile[], url: string, title: string): Node[] {
+  if (files.length === 0) return [];
+  return [heading(title), ...files.map((f) => fileRow(f, url))];
+}
+
+/** A run of Actions on a commit or a pull request, as a block that opens the run. */
+function runBlock(build: GithubBuild | null, missing: string[]): HTMLElement | null {
+  if (missing.includes("actions")) return notGranted("Actions", "Actions");
+  if (!build) return null;
+  const style = BUILD_STYLE[build.state];
+  const icon =
+    build.state === "running"
+      ? h("i", { class: "gh-ring" })
+      : build.state === "success"
+        ? svg(ICONS.check, 10, { stroke: 3 })
+        : build.state === "failure"
+          ? svg(ICONS.xmark, 9)
+          : svg(ICONS.dash, 10, { stroke: 3 });
+  return block({
+    icon: roundIcon(style.color, icon),
+    title: `${build.workflow} ${RUN_VERB[build.state]}${build.branch ? ` on ${build.branch}` : ""}`,
+    right: ago(build.at),
+    url: build.url,
+  });
+}
+
+const REVIEW_TITLE: Record<string, string> = {
+  approved: "Approved",
+  "changes requested": "Changes requested",
+  "review required": "Waiting for a review",
+};
+
+function reviewBlock(p: GithubPullDetail): HTMLElement {
+  const color = p.review ? REVIEW_COLOR[p.review] : "#6B7079";
+  const who = p.reviewers.map((r) => `${r.login} ${r.state}`);
+  return block({
+    icon: roundIcon(color, svg(p.review === "approved" ? ICONS.check : ICONS.pullRequest, 10, { stroke: 2.4 })),
+    title: p.review ? REVIEW_TITLE[p.review] : p.reviewers.length ? "Reviewed" : "No review yet",
+    sub: who.length ? line(...who) : undefined,
+  });
+}
+
+function pullView(p: GithubPullDetail, login: string): HTMLElement {
+  const style = PULL_STYLE[p.state];
+  const branches = p.head && p.base ? h("span", { class: "gh-sha", text: `${p.head} → ${p.base}` }) : null;
+  const when =
+    p.state === "merged" && p.mergedAt
+      ? `merged ${ago(p.mergedAt)}${p.mergedBy ? ` by ${p.mergedBy}` : ""}`
+      : p.state === "closed" && p.closedAt
+        ? `closed ${ago(p.closedAt)}`
+        : p.createdAt && `opened ${ago(p.createdAt)}`;
+  const commits = p.commits === 1 ? "1 commit" : `${p.commits} commits`;
+  const comments = p.comments === 1 ? "1 comment" : `${p.comments} comments`;
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(`#${p.number} ${p.title}`, chip(p.state, style.color)),
+    facts(p.repo, login, p.author && `by ${p.author}`, branches, when),
+    labelChips(p.labels),
+    runBlock(p.ci, p.missing),
+    reviewBlock(p),
+    block({
+      icon: roundIcon("#9398A1", svg(ICONS.doc, 10)),
+      title: `${p.changedFiles} file${p.changedFiles === 1 ? "" : "s"} changed`,
+      right: plusMinus(p.additions, p.deletions),
+      sub: line(commits, p.comments > 0 && comments),
+    }),
+    ...fileList(p.files, p.url, "Files"),
+    description(p.body),
+  );
+}
+
+const ISSUE_COLOR: Record<GithubIssueDetail["state"], string> = {
+  open: "#F5A524",
+  completed: "#34D399",
+  "not planned": "#6B7079",
+  closed: "#6B7079",
+};
+
+function issueView(i: GithubIssueDetail, login: string): HTMLElement {
+  const when = i.closedAt ? `closed ${ago(i.closedAt)}` : i.createdAt && `opened ${ago(i.createdAt)}`;
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(`#${i.number} ${i.title}`, chip(i.state, ISSUE_COLOR[i.state])),
+    facts(
+      i.repo, login,
+      i.author && `by ${i.author}`,
+      when,
+      i.comments > 0 && (i.comments === 1 ? "1 comment" : `${i.comments} comments`),
+      i.assignees.length > 0 && `assigned to ${i.assignees.join(", ")}`,
+    ),
+    labelChips(i.labels),
+    description(i.body) ?? h("div", { class: "int-empty", text: "No description." }),
+  );
+}
+
+function commitsView(c: GithubCommitsDetail, login: string): HTMLElement {
+  const count = c.total ?? c.commits.length;
+  const single = c.commits.length === 1 && count <= 1;
+  const newest = c.commits[0];
+  const title = single && newest
+    ? newest.message
+    : `${count} commit${count === 1 ? "" : "s"}${c.branch ? ` on ${c.branch}` : ""}`;
+  const rows = c.commits.map((commit) => {
+    // From a list, a commit opens its own sheet; alone, it is already open.
+    const open = single
+      ? () => void Bridge.openUrl(commit.url)
+      : () => openTarget(
+          { kind: "commits", repo: c.repo, head: commit.id, count: 1, branch: c.branch, author: null, from: null, to: null },
+          commit.message,
+          commit.url,
+        );
+    return h(
+      "button",
+      { class: "gh-row", onclick: open },
+      h("i", { class: "gh-row-icon", style: "color:#3B9EFF" }, svg(ICONS.commit, 12, { stroke: 2 })),
+      h("span", { class: "gh-row-title", text: commit.message }),
+      h("span", { class: "gh-row-where" }, h("span", { class: "gh-sha", text: commit.sha }), commit.author ? ` · ${commit.author}` : ""),
+      h("span", { class: "int-ago", text: commit.at ? timeAgo(commit.at) : "" }),
+    );
+  });
+  const more = count > c.commits.length ? h("div", { class: "int-empty", text: `and ${count - c.commits.length} more on GitHub` }) : null;
+  const changed = c.additions != null && c.deletions != null ? plusMinus(c.additions, c.deletions) : undefined;
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(title, single && newest ? chip(newest.sha, "#3B9EFF") : null),
+    facts(c.repo, login, newest?.author && `by ${newest.author}`, newest?.at && ago(newest.at)),
+    runBlock(c.ci, c.missing),
+    ...(single ? [] : [heading("Commits"), ...rows, more]).filter((n): n is HTMLElement => n != null),
+    ...(c.files.length ? [heading(single ? "Files" : "Latest commit", changed), ...c.files.map((f) => fileRow(f, newest?.url ?? c.url))] : []),
+  );
+}
+
+/** 12345678 → "11.8 MB". */
+function size(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function releaseView(r: GithubReleaseDetail, login: string): HTMLElement {
+  const assets = r.assets.map((a) =>
+    h(
+      "div",
+      { class: "gh-row" },
+      h("i", { class: "gh-row-icon", style: "color:#22D3EE" }, svg(ICONS.tag, 11, { stroke: 2 })),
+      h("span", { class: "gh-row-title", text: a.name }),
+      h("span", { class: "gh-row-where", text: size(a.size) }),
+      h("span", { class: "int-ago", text: `${compact(a.downloads)} ↓` }),
+    ),
+  );
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(r.name, chip(r.tag, "#22D3EE"), r.prerelease ? chip("pre-release", "#F5A524") : null),
+    facts(
+      r.repo, login,
+      r.author && `by ${r.author}`,
+      r.publishedAt && `published ${ago(r.publishedAt)}`,
+      r.downloads > 0 && `${compact(r.downloads)} download${r.downloads === 1 ? "" : "s"}`,
+    ),
+    ...(assets.length ? [heading("Files"), ...assets] : []),
+    description(r.body),
+  );
+}
+
+const LOCKED_WHAT: Record<string, string> = {
+  "Pull requests": "Pull requests",
+  Issues: "Issues",
+  Contents: "Commits and releases",
+};
+
+function detailView(d: GithubDetail, login: string, url: string): HTMLElement {
+  switch (d.kind) {
+    case "pull":
+      return pullView(d, login);
+    case "issue":
+      return issueView(d, login);
+    case "commits":
+      return commitsView(d, login);
+    case "release":
+      return releaseView(d, login);
+    case "locked":
+      return h(
+        "div",
+        { class: "gh-sheet" },
+        notGranted(LOCKED_WHAT[d.permission] ?? d.permission, d.permission),
+        h("button", { class: "gh-host", text: "Open it on GitHub instead", onclick: () => void Bridge.openUrl(url) }),
+      );
+  }
+}
+
+/** What Mochi makes of a sheet that took a moment: pleased, proud, or startled by a failure. */
+function detailMood(d: GithubDetail): BotEmoteName | null {
+  switch (d.kind) {
+    case "pull":
+      return d.ci?.state === "failure" ? "surprised" : d.state === "merged" ? "proud" : "happy";
+    case "commits":
+      return d.ci?.state === "failure" ? "surprised" : "happy";
+    case "issue":
+      return d.state === "completed" ? "proud" : "happy";
+    case "release":
+      return "proud";
+    case "locked":
+      return null;
+  }
+}
+
+/** "#12", "#4", "Commits", "v0.2.0" — what the head says while a sheet is open. */
+function detailHead(target: GithubTarget): string {
+  switch (target.kind) {
+    case "pull":
+    case "issue":
+      return `#${target.number}`;
+    case "commits":
+      return target.count === 1 ? "Commit" : "Commits";
+    case "release":
+      return target.tag;
+    case "project":
+      return target.repo;
+  }
+}
+
+// ── A file's diff ─────────────────────────────────────────────────────────────
+//
+// The unified diff GitHub sends, drawn the way the settings window already
+// draws the hooks' diff: monospace, added lines green, removed lines red —
+// with GitHub's old and new line numbers in the gutter.
+
+const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+function diffView(file: GithubFile, url: string): HTMLElement {
+  const status = FILE_STATUS[file.status ?? ""] ?? MODIFIED;
+  const wrap = h(
+    "div",
+    { class: "gh-sheet" },
+    h(
+      "div",
+      { class: "gh-diff-head" },
+      chip(file.status ?? "modified", status.color),
+      h("span", { class: "gh-diff-path", text: file.path }),
+      plusMinus(file.additions, file.deletions),
+    ),
+  );
+  if (!file.patch) {
+    wrap.append(h("div", { class: "int-empty", text: "No text diff for this file — binary, or too large for GitHub to show." }));
+    return wrap;
+  }
+
+  const diff = h("div", { class: "gh-diff" });
+  let oldLine = 0;
+  let newLine = 0;
+  for (const raw of file.patch.split("\n")) {
+    const hunk = HUNK.exec(raw);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      diff.append(h("div", { class: "gh-diff-line hunk" }, h("span", { class: "t", text: raw })));
+      continue;
+    }
+    const sign = raw.charAt(0);
+    let kind = "ctx";
+    let before = "";
+    let after = "";
+    if (sign === "+") {
+      kind = "add";
+      after = String(newLine++);
+    } else if (sign === "-") {
+      kind = "del";
+      before = String(oldLine++);
+    } else if (sign === "\\") {
+      kind = "meta";
+    } else {
+      before = String(oldLine++);
+      after = String(newLine++);
+    }
+    diff.append(
+      h(
+        "div",
+        { class: `gh-diff-line ${kind}` },
+        h("span", { class: "n", text: before }),
+        h("span", { class: "n", text: after }),
+        h("span", { class: "s", text: kind === "add" || kind === "del" ? sign : "" }),
+        h("span", { class: "t", text: kind === "meta" ? raw : raw.slice(1) }),
+      ),
+    );
+  }
+  wrap.append(diff);
+  if (file.truncated) {
+    wrap.append(h("button", { class: "gh-host", text: "The rest of this diff is on GitHub", onclick: () => void Bridge.openUrl(url) }));
+  }
+  return wrap;
+}
+
 export function buildGithub(actions: ViewActions): ViewHost {
   const back = h(
     "button",
     {
       class: "int-back",
       title: "Back",
-      // From a project's sheet, back to the list; from the lists, back to the card.
+      // One level back through the sheets; from the lists, back to the card.
       onclick: () => {
         actions.blip();
-        if (sheet) closeSheet();
+        if (stack.length > 0) pop();
         else actions.setView("overview");
       },
     },
@@ -828,10 +1278,16 @@ export function buildGithub(actions: ViewActions): ViewHost {
     {
       class: "gh-icon",
       title: "Open on GitHub",
+      // Whatever is on screen, on GitHub — the way out, never the way in.
       onclick: () => {
-        const target = sheet
-          ? (sheet.data?.url ?? `https://github.com/${sheet.fullName}`)
-          : (githubData()?.profileUrl ?? "https://github.com");
+        const s = top();
+        const target = !s
+          ? (githubData()?.profileUrl ?? "https://github.com")
+          : s.type === "project"
+            ? (s.data?.url ?? `https://github.com/${s.fullName}`)
+            : s.type === "detail"
+              ? (s.data && s.data.kind !== "locked" ? s.data.url : s.url)
+              : s.url;
         void Bridge.openUrl(target);
       },
     },
@@ -884,37 +1340,66 @@ export function buildGithub(actions: ViewActions): ViewHost {
     actions.tintMochi(null);
   }
 
-  /** The sheet takes the list's place; the head names the project. */
-  function drawSheet(open: Sheet, login: string) {
+  /**
+   * Fresh news after a wait: the parts come in one by one, and Mochi says what
+   * he thinks of them.
+   */
+  function arrive(content: HTMLElement, screen: Pending<unknown>, emote: BotEmoteName | null) {
+    if (!screen.react) return;
+    screen.react = false;
+    Array.from(content.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+    content.classList.add("enter");
+    if (emote) actions.emote(emote);
+  }
+
+  /** A screen of the stack takes the list's place; the head names what it shows. */
+  function drawScreen(screen: Screen, login: string) {
     tabs.style.display = "none";
-    who.textContent = repoName(open.fullName, login);
-    sub.textContent = open.data?.languages[0]?.name ?? "";
     clear(status);
-    if (open.error) status.append(dot(GITHUB_RED, 5), h("span", { text: open.error }));
     listTab = null;
     clearList();
-    if (open.data) {
-      const content = projectSheet(open.data);
-      if (open.react) {
-        // Fresh news after a wait: the blocks come in one by one, and Mochi
-        // says what he thinks of them.
-        open.react = false;
-        content.classList.add("enter");
-        actions.emote(mood(open.data));
+    if (screen.type === "diff") {
+      const { dir, base } = splitPath(screen.file.path);
+      who.textContent = base;
+      sub.textContent = dir;
+      list.append(diffView(screen.file, screen.url));
+    } else if (screen.type === "project") {
+      who.textContent = repoName(screen.fullName, login);
+      sub.textContent = screen.data?.languages[0]?.name ?? "";
+      if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
+      if (screen.data) {
+        const content = projectSheet(screen.data);
+        arrive(content, screen, mood(screen.data));
+        list.append(content);
+      } else if (screen.waiting) {
+        list.append(sheetLoader(repoName(screen.fullName, login)));
       }
-      list.append(content);
-    } else if (open.waiting) {
-      list.append(sheetLoader(repoName(open.fullName, login)));
+    } else {
+      who.textContent = detailHead(screen.target);
+      sub.textContent = repoName(screen.target.repo, login);
+      if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
+      if (screen.data) {
+        const content = detailView(screen.data, login, screen.url);
+        arrive(content, screen, detailMood(screen.data));
+        list.append(content);
+      } else if (screen.waiting) {
+        list.append(sheetLoader(screen.label));
+      }
     }
     list.scrollTop = 0;
     updateFade();
   }
 
   refreshBtn.addEventListener("click", async () => {
-    if (refreshing || sheet?.loading) return;
+    const s = top();
+    if (refreshing || (s && s.type !== "diff" && s.loading)) return;
     actions.blip();
-    if (sheet) {
-      void loadSheet(sheet, true);
+    if (s?.type === "project") {
+      void loadProject(s, true);
+      return;
+    }
+    if (s?.type === "detail") {
+      void loadDetail(s, true);
       return;
     }
     refreshing = true;
@@ -936,8 +1421,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const configured = info?.configured !== false;
       const error = info?.error ?? null;
 
-      refreshBtn.classList.toggle("spin", refreshing || (sheet?.loading ?? false));
-      refreshBtn.style.display = configured ? "" : "none";
+      const s = top();
+      refreshBtn.classList.toggle("spin", refreshing || (s != null && s.type !== "diff" && s.loading));
+      // A diff is part of the sheet under it: nothing of its own to refresh.
+      refreshBtn.style.display = configured && s?.type !== "diff" ? "" : "none";
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.
@@ -945,8 +1432,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
       if (next === key) return;
       key = next;
 
-      if (sheet && d && configured) {
-        drawSheet(sheet, d.login);
+      if (s && d && configured) {
+        drawScreen(s, d.login);
         return;
       }
 
@@ -1001,12 +1488,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
           list.append(h("div", { class: "int-empty", text: "No repositories yet." }));
         }
         for (const repo of d.repos) {
-          list.append(
-            repoRow(repo, d.login, () => {
-              actions.blip();
-              openSheet(repo.fullName);
-            }),
-          );
+          list.append(repoRow(repo, d.login, () => openProject(repo.fullName)));
         }
       } else {
         // The year first, then what happened lately — or on the picked day.

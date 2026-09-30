@@ -1819,6 +1819,158 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--dim-3);
 }
 
+/* ── GitHub panel: activity sheets (pull request, issue, commits, release) ─ */
+
+.gh-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.gh-title > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 600 12.5px/1.35 var(--font);
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.gh-title .gh-chip {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.gh-desc.long {
+  -webkit-line-clamp: 5;
+  color: var(--dim);
+}
+
+.gh-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px;
+}
+
+/* GitHub's label colours, kept readable on the dark card. */
+.gh-label {
+  font: 500 10px var(--font);
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--c) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+}
+
+.gh-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 0;
+  font: 500 10.5px var(--font);
+  color: var(--dim-3);
+}
+
+.gh-heading > span:first-child {
+  flex: 1 1 auto;
+}
+
+.gh-pm {
+  flex: 0 0 auto;
+  font: 500 10.5px var(--mono);
+  white-space: nowrap;
+}
+
+.gh-status {
+  font: 700 9.5px var(--mono);
+  font-style: normal;
+}
+
+/* ── GitHub panel: a file's diff ────────────────────────────────────────── */
+
+.gh-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.gh-diff-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 400 10.5px var(--mono);
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+/* The settings window's diff, with GitHub's gutters: same ground, same greens
+   and reds. */
+.gh-diff {
+  background: #08090b;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 4px 0;
+  font: 400 10.5px/1.5 var(--mono);
+  user-select: text;
+}
+
+.gh-diff-line {
+  display: grid;
+  grid-template-columns: 26px 26px 12px 1fr;
+  color: var(--dim);
+}
+
+.gh-diff-line .n {
+  padding-right: 4px;
+  text-align: right;
+  color: var(--dim-4);
+  user-select: none;
+}
+
+.gh-diff-line .s {
+  text-align: center;
+  user-select: none;
+}
+
+.gh-diff-line .t {
+  min-width: 0;
+  padding-right: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.gh-diff-line.add {
+  background: rgba(52, 211, 153, 0.09);
+  color: #86efac;
+}
+
+.gh-diff-line.del {
+  background: rgba(244, 80, 94, 0.1);
+  color: #ff8d97;
+}
+
+.gh-diff-line.hunk {
+  grid-template-columns: 1fr;
+  margin: 3px 0;
+  padding: 1px 8px;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--dim-3);
+}
+
+.gh-diff-line.meta {
+  color: var(--dim-4);
+  font-style: italic;
+}
+
 /* ── GitHub panel: a project's sheet ────────────────────────────────────── */
 
 .gh-sheet {
@@ -1958,6 +2110,12 @@ input[type="range"]::-webkit-slider-thumb {
 
 button.gh-host:hover {
   color: var(--ink);
+}
+
+/* A way out to GitHub at the foot of a sheet, aligned with the rest. */
+.gh-sheet > .gh-host {
+  align-self: flex-start;
+  margin: 2px 8px 0;
 }
 
 .gh-block {

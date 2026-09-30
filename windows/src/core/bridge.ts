@@ -107,7 +107,122 @@ export const Bridge = {
   /** What was done on one day of the graph, between two local midnights (ISO). */
   githubDay: (from: string, to: string, today: boolean) =>
     callOrThrow<GithubDay>("github_day", { from, to, today }),
+  /** The sheet behind a line of activity. `target` goes back exactly as Rust sent it. */
+  githubDetail: (target: GithubTarget, force: boolean) =>
+    callOrThrow<GithubDetail>("github_detail", { target, force }),
 };
+
+/** What a line of activity leads to — the Target enum in github_detail.rs. */
+export type GithubTarget =
+  | { kind: "pull"; repo: string; number: number }
+  | { kind: "issue"; repo: string; number: number }
+  | {
+      kind: "commits"; repo: string; head: string | null; count: number | null;
+      branch: string | null; author: string | null; from: string | null; to: string | null;
+    }
+  | { kind: "release"; repo: string; tag: string }
+  | { kind: "project"; repo: string };
+
+export interface GithubFile {
+  path: string;
+  /** added, modified, removed, renamed… */
+  status: string | null;
+  additions: number;
+  deletions: number;
+  /** The unified diff; null for a binary file or one GitHub won't diff. */
+  patch: string | null;
+  /** The patch was cut short; the rest is on GitHub. */
+  truncated: boolean;
+}
+
+export interface GithubLabel {
+  name: string;
+  /** "#rrggbb". */
+  color: string;
+}
+
+export interface GithubPullDetail {
+  kind: "pull";
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "draft" | "merged" | "closed";
+  author: string | null;
+  body: string | null;
+  base: string | null;
+  head: string | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commits: number;
+  comments: number;
+  review: "approved" | "changes requested" | "review required" | null;
+  reviewers: { login: string; state: "approved" | "changes requested" | "commented" | "dismissed" }[];
+  labels: GithubLabel[];
+  files: GithubFile[];
+  createdAt: string | null;
+  mergedAt: string | null;
+  mergedBy: string | null;
+  closedAt: string | null;
+  ci: GithubBuild | null;
+  missing: string[];
+}
+
+export interface GithubIssueDetail {
+  kind: "issue";
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "completed" | "not planned" | "closed";
+  author: string | null;
+  body: string | null;
+  labels: GithubLabel[];
+  assignees: string[];
+  comments: number;
+  createdAt: string | null;
+  closedAt: string | null;
+}
+
+export interface GithubCommitsDetail {
+  kind: "commits";
+  repo: string;
+  branch: string | null;
+  /** How many the push or the day counted; `commits` may hold fewer. */
+  total: number | null;
+  /** Newest first. */
+  commits: { sha: string; id: string; message: string; author: string | null; at: string | null; url: string }[];
+  /** What the newest commit changed. */
+  additions: number | null;
+  deletions: number | null;
+  files: GithubFile[];
+  ci: GithubBuild | null;
+  url: string;
+  missing: string[];
+}
+
+export interface GithubReleaseDetail {
+  kind: "release";
+  repo: string;
+  tag: string;
+  name: string;
+  url: string;
+  body: string | null;
+  author: string | null;
+  publishedAt: string | null;
+  prerelease: boolean;
+  assets: { name: string; downloads: number; size: number }[];
+  downloads: number;
+}
+
+/** A line's sheet, or the permission the token lacks to read it. */
+export type GithubDetail =
+  | GithubPullDetail
+  | GithubIssueDetail
+  | GithubCommitsDetail
+  | GithubReleaseDetail
+  | { kind: "locked"; permission: string };
 
 /** A clicked day of the contribution graph — the Day struct in github.rs. */
 export interface GithubDay {
@@ -118,6 +233,7 @@ export interface GithubDay {
     title: string;
     detail: string | null;
     url: string;
+    target: GithubTarget | null;
   }[];
   /** Contributions that day in repositories the token can't see into. */
   privateCount: number;
@@ -249,6 +365,8 @@ export interface GithubActivity {
   url: string;
   /** ISO 8601. */
   at: string;
+  /** The sheet a click opens in the panel; null: straight to GitHub. */
+  target: GithubTarget | null;
 }
 
 export interface GithubAccount {

@@ -4,7 +4,8 @@
 
 import "../src/style.css";
 import {
-  Bridge, type GithubActivity, type GithubData, type GithubDay, type GithubProject, type GithubRepo,
+  Bridge, type GithubActivity, type GithubBuild, type GithubData, type GithubDay, type GithubDetail,
+  type GithubFile, type GithubProject, type GithubRepo, type GithubTarget,
 } from "../src/core/bridge";
 import { State } from "../src/core/state";
 import { Island } from "../src/island/island";
@@ -12,17 +13,91 @@ import { Island } from "../src/island/island";
 const params = new URLSearchParams(location.search);
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
+const pullTarget = (repo: string, number: number): GithubTarget => ({ kind: "pull", repo, number });
+const pushTarget = (repo: string, count: number, branch: string): GithubTarget => ({
+  kind: "commits", repo, head: "a1b2c3d4e5f6", count, branch, author: null, from: null, to: null,
+});
+
 const activity: GithubActivity[] = [
-  { id: "1", kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com", at: minutesAgo(4) },
-  { id: "2", kind: "push", repo: "mochi/coucou", title: "Keep the last snapshot through an error", detail: "3 commits · windows-github-panel", url: "https://github.com", at: minutesAgo(38) },
-  { id: "3", kind: "pr_opened", repo: "mochi/coucou", title: "Windows: GitHub panel", detail: "#12", url: "https://github.com", at: minutesAgo(95) },
-  { id: "4", kind: "issue_opened", repo: "louis-cfm/coucou", title: "Defender flags the installer", detail: "#9", url: "https://github.com", at: minutesAgo(60 * 5) },
-  { id: "5", kind: "release", repo: "mochi/tour-convention-geneve", title: "Sprint 3", detail: "v0.3.0", url: "https://github.com", at: minutesAgo(60 * 26) },
-  { id: "6", kind: "issue_closed", repo: "mochi/tour-convention-geneve", title: "Map tiles flicker on zoom", detail: "#41", url: "https://github.com", at: minutesAgo(60 * 50) },
-  { id: "7", kind: "pr_closed", repo: "mochi/dotfiles", title: "Try another prompt theme", detail: "#3", url: "https://github.com", at: minutesAgo(60 * 72) },
-  { id: "8", kind: "create", repo: "mochi/sandbox", title: "Created the repository", detail: null, url: "https://github.com", at: minutesAgo(60 * 24 * 6) },
-  { id: "9", kind: "push", repo: "mochi/sandbox", title: "Pushed", detail: "main", url: "https://github.com", at: minutesAgo(60 * 24 * 6) },
+  { id: "1", kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com", at: minutesAgo(4), target: pullTarget("mochi/coucou", 12) },
+  { id: "2", kind: "push", repo: "mochi/coucou", title: "Keep the last snapshot through an error", detail: "3 commits · windows-github-panel", url: "https://github.com", at: minutesAgo(38), target: pushTarget("mochi/coucou", 3, "windows-github-panel") },
+  { id: "3", kind: "pr_opened", repo: "mochi/coucou", title: "Windows: GitHub panel", detail: "#12", url: "https://github.com", at: minutesAgo(95), target: pullTarget("mochi/coucou", 12) },
+  { id: "4", kind: "issue_opened", repo: "louis-cfm/coucou", title: "Defender flags the installer", detail: "#9", url: "https://github.com", at: minutesAgo(60 * 5), target: { kind: "issue", repo: "louis-cfm/coucou", number: 9 } },
+  { id: "5", kind: "release", repo: "mochi/tour-convention-geneve", title: "Sprint 3", detail: "v0.3.0", url: "https://github.com", at: minutesAgo(60 * 26), target: { kind: "release", repo: "mochi/tour-convention-geneve", tag: "v0.3.0" } },
+  { id: "6", kind: "issue_closed", repo: "mochi/tour-convention-geneve", title: "Map tiles flicker on zoom", detail: "#41", url: "https://github.com", at: minutesAgo(60 * 50), target: { kind: "issue", repo: "mochi/tour-convention-geneve", number: 41 } },
+  { id: "7", kind: "pr_closed", repo: "mochi/dotfiles", title: "Try another prompt theme", detail: "#3", url: "https://github.com", at: minutesAgo(60 * 72), target: pullTarget("mochi/dotfiles", 3) },
+  { id: "8", kind: "create", repo: "mochi/sandbox", title: "Created the repository", detail: null, url: "https://github.com", at: minutesAgo(60 * 24 * 6), target: { kind: "project", repo: "mochi/sandbox" } },
+  { id: "9", kind: "push", repo: "mochi/sandbox", title: "Pushed", detail: "main", url: "https://github.com", at: minutesAgo(60 * 24 * 6), target: pushTarget("mochi/sandbox", 1, "main") },
 ];
+
+// The sheets behind those lines, one per kind, with a real-looking diff.
+const PATCH = [
+  "@@ -12,9 +12,14 @@ export function enterGithubPanel() {",
+  "   sweepNext = true;",
+  "-  if (sheet) closeSheet();",
+  "-  else touchSheet();",
+  "+  if (day) stopSearching(day);",
+  "+  day = null;",
+  "+  clearStack();",
+  "+  touch();",
+  "   const d = githubData();",
+  "   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);",
+  " }",
+  "@@ -40,6 +45,8 @@ function eventRow(",
+  "   const style = ACTIVITY_STYLE[item.kind];",
+  "+  // A line of activity opens its sheet; GitHub is the last resort.",
+  "+  const open = () => openTarget(item.target, item.title, item.url);",
+  "   return h(",
+  "\\ No newline at end of file",
+].join("\n");
+const files: GithubFile[] = [
+  { path: "windows/src/views/github.ts", status: "modified", additions: 612, deletions: 58, patch: PATCH, truncated: true },
+  { path: "windows/src-tauri/src/github_detail.rs", status: "added", additions: 540, deletions: 0, patch: PATCH, truncated: false },
+  { path: "windows/src/style.css", status: "modified", additions: 180, deletions: 6, patch: PATCH, truncated: false },
+  { path: "windows/screenshots/panel.png", status: "added", additions: 0, deletions: 0, patch: null, truncated: false },
+];
+const ci = (state: "success" | "failure" | "running" | "neutral"): GithubBuild => ({
+  id: 1, state, workflow: "CI", branch: "windows-github-panel", url: "https://github.com", at: minutesAgo(6),
+});
+const details: Record<GithubTarget["kind"], GithubDetail> = {
+  pull: {
+    kind: "pull", repo: "mochi/coucou", number: 12, title: "GitHub panel for the Windows island", url: "https://github.com",
+    state: "merged", author: "mochi", base: "main", head: "windows-github-panel",
+    body: "Turns the GitHub pill into a real panel: recent activity, projects with their CI, the contribution graph, and a sheet for every line so GitHub itself is the last place to go.",
+    additions: 1332, deletions: 64, changedFiles: 14, commits: 18, comments: 3, review: "approved",
+    reviewers: [{ login: "louis", state: "approved" }, { login: "kirzen", state: "commented" }],
+    labels: [{ name: "windows", color: "#0e8a16" }, { name: "enhancement", color: "#a2eeef" }],
+    files, createdAt: minutesAgo(60 * 50), mergedAt: minutesAgo(4), mergedBy: "louis", closedAt: minutesAgo(4),
+    ci: ci("success"), missing: [],
+  },
+  issue: {
+    kind: "issue", repo: "louis-cfm/coucou", number: 9, title: "Defender flags the installer", url: "https://github.com",
+    state: "open", author: "mochi", comments: 4, assignees: ["louis"],
+    body: "Windows Defender reports Trojan:Win32/Wacatac.H!ml on the unsigned installer. It's a machine-learning false positive; a report is under review.",
+    labels: [{ name: "windows", color: "#0e8a16" }, { name: "bug", color: "#d73a4a" }],
+    createdAt: minutesAgo(60 * 5), closedAt: null,
+  },
+  commits: {
+    kind: "commits", repo: "mochi/coucou", branch: "windows-github-panel", total: 3,
+    commits: [
+      { sha: "a1b2c3d", id: "a1b2c3d4e5f6", message: "Keep the last snapshot through an error", author: "mochi", at: minutesAgo(38), url: "https://github.com" },
+      { sha: "9f8e7d6", id: "9f8e7d6c5b4a", message: "Fade the list only while there is more", author: "mochi", at: minutesAgo(52), url: "https://github.com" },
+      { sha: "5a4b3c2", id: "5a4b3c2d1e0f", message: "Close the sheet when the panel reopens", author: "mochi", at: minutesAgo(70), url: "https://github.com" },
+    ],
+    additions: 22, deletions: 4, files: files.slice(0, 2), ci: ci("failure"), url: "https://github.com", missing: [],
+  },
+  release: {
+    kind: "release", repo: "mochi/tour-convention-geneve", tag: "v0.3.0", name: "Sprint 3", url: "https://github.com",
+    body: "What's new: the interactive map, the torch relay journal, and the partner pages.", author: "mochi",
+    publishedAt: minutesAgo(60 * 26), prerelease: false, downloads: 1284,
+    assets: [{ name: "site-build.zip", downloads: 1200, size: 18_400_000 }, { name: "checksums.txt", downloads: 84, size: 512 }],
+  },
+  project: { kind: "locked", permission: "Contents" },
+};
+Bridge.githubDetail = async (target) => {
+  await new Promise((r) => setTimeout(r, 700));
+  return params.has("locked") ? { kind: "locked", permission: "Contents" } : details[target.kind];
+};
 
 const repo = (
   name: string, language: [string, string] | null, stars: number, openPrs: number,
@@ -125,10 +200,10 @@ Bridge.githubProject = async () => {
 // Any clicked day gets this one, after a short wait so the loader shows.
 const aDay: GithubDay = {
   items: [
-    { kind: "push", repo: "mochi/coucou", title: "4 commits", detail: null, url: "https://github.com" },
-    { kind: "push", repo: "mochi/tour-convention-geneve", title: "1 commit", detail: null, url: "https://github.com" },
-    { kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com" },
-    { kind: "review", repo: "louis-cfm/coucou", title: "Fix the hook timeout", detail: "#31", url: "https://github.com" },
+    { kind: "push", repo: "mochi/coucou", title: "4 commits", detail: null, url: "https://github.com", target: pushTarget("mochi/coucou", 4, "main") },
+    { kind: "push", repo: "mochi/tour-convention-geneve", title: "1 commit", detail: null, url: "https://github.com", target: pushTarget("mochi/tour-convention-geneve", 1, "main") },
+    { kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com", target: pullTarget("mochi/coucou", 12) },
+    { kind: "review", repo: "louis-cfm/coucou", title: "Fix the hook timeout", detail: "#31", url: "https://github.com", target: pullTarget("louis-cfm/coucou", 31) },
   ],
   privateCount: 2,
 };

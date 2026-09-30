@@ -3,6 +3,7 @@
 mod claude;
 mod files;
 mod github;
+mod github_detail;
 mod hooks;
 mod integrations;
 mod island;
@@ -312,6 +313,13 @@ async fn github_day(from: String, to: String, today: bool) -> Result<github::Day
     github::day(&from, &to, today).await
 }
 
+/// A click on a line of GitHub activity: the pull request, issue, commits or
+/// release behind it, with the files' diffs. On demand only, cached a minute.
+#[tauri::command]
+async fn github_detail(target: github_detail::Target, force: bool) -> Result<github_detail::Detail, String> {
+    github_detail::detail(target, force).await
+}
+
 /// Opens the configured n8n instance — the URL lives in the Credential Manager.
 #[tauri::command]
 fn open_n8n() {
@@ -439,6 +447,7 @@ pub fn run() {
             github_test,
             github_project,
             github_day,
+            github_detail,
             refresh_integration,
             open_n8n,
             open_settings_window,
