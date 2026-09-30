@@ -7,7 +7,7 @@
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { State, type AgentTask } from "../core/state";
-import { Bridge } from "../core/bridge";
+import { Bridge, type GithubActivityKind, type GithubData } from "../core/bridge";
 
 /** Same shape as the Swift `timeAgo` computed properties. */
 export function timeAgo(value: unknown): string {
@@ -211,22 +211,70 @@ function statRow(icon: string, color: string, label: string, value: string): HTM
   );
 }
 
-function githubCard(): HTMLElement {
-  const d = get("integration_github");
-  const stars = Number(d.totalStars ?? 0);
-  const repos = Number(d.totalRepos ?? 0);
-  const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-  return h(
-    "div",
-    { class: "int-card" },
-    header("#F4505E", "GitHub", "Overview"),
+/** The GitHub pill's data, or null before the first answer. */
+export function githubData(): GithubData | null {
+  const d = get("integration_github") as Partial<GithubData>;
+  return typeof d.login === "string" ? (d as GithubData) : null;
+}
+
+/**
+ * Icon and colour of each kind of activity. The colours are Mochi's own state
+ * colours rather than GitHub's: a merged PR is green like `finished`, a push
+ * blue like `working`, an open issue amber like `approval`.
+ */
+export const ACTIVITY_STYLE: Record<GithubActivityKind, { icon: string; color: string }> = {
+  push: { icon: ICONS.commit, color: "#3B9EFF" },
+  pr_opened: { icon: ICONS.pullRequest, color: "#6366F1" },
+  pr_merged: { icon: ICONS.merge, color: "#34D399" },
+  pr_closed: { icon: ICONS.pullRequest, color: "#6B7079" },
+  issue_opened: { icon: ICONS.issue, color: "#F5A524" },
+  issue_closed: { icon: ICONS.issue, color: "#6B7079" },
+  release: { icon: ICONS.tag, color: "#22D3EE" },
+  create: { icon: ICONS.add, color: "#9398A1" },
+};
+
+/** "edu/coucou" → "coucou" for your own repositories, the full name otherwise. */
+export function repoName(repo: string, login: string): string {
+  const [owner, name] = repo.split("/");
+  return name && owner.toLowerCase() === login.toLowerCase() ? name : repo;
+}
+
+const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** The summary in the overview; `…` opens the full panel, like Vercel's detail. */
+function githubCard(onPanel: () => void): HTMLElement {
+  const d = githubData()!;
+  const error = State.integrations.integration_github?.error ?? null;
+  const more = h(
+    "button",
+    { class: "int-more", title: "Open the GitHub panel", onclick: onPanel },
+    svg(ICONS.ellipsis, 8),
+  );
+
+  const latest = d.activity[0];
+  const row = latest
+    ? listRow(
+        ACTIVITY_STYLE[latest.kind].color,
+        true,
+        h("span", { class: "int-name", text: latest.title }),
+        h("span", { class: "int-ago", text: timeAgo(latest.at) }),
+        more,
+      )
+    : listRow("#6B7079", true, h("span", { class: "int-name", text: "No recent activity" }), more);
+
+  const card = h("div", { class: "int-card" }, header("#F4505E", "GitHub", `@${d.login}`));
+  // What's shown is the last good answer; say why it isn't fresher.
+  if (error) card.append(h("div", { class: "int-status" }, dot("#F4505E", 5), h("span", { text: error })));
+  card.append(
+    h("div", { class: "int-rows" }, row),
     h(
       "div",
       { class: "int-stats" },
-      statRow(ICONS.star, "#F5A524", "Total stars", fmt(stars)),
-      statRow(ICONS.stack, "#6B7079", "Repositories", String(repos)),
+      statRow(ICONS.star, "#F5A524", "Total stars", compact(d.totalStars)),
+      statRow(ICONS.stack, "#6B7079", "Repositories", String(d.totalRepos)),
     ),
   );
+  return card;
 }
 
 // ── Stripe ────────────────────────────────────────────────────────────────────
@@ -379,19 +427,22 @@ export interface IntegrationCardHooks {
   openDetail(): void;
   closeDetail(): void;
   openSettings(): void;
+  /** A view of its own, for the pills that outgrew the card (GitHub). */
+  openPanel(): void;
 }
 
 /** True when this integration has data worth showing instead of the idle card. */
 export function hasIntegrationData(id: string): boolean {
   const info = State.integrations[id];
+  // GitHub keeps its last good snapshot through an error and says so itself;
+  // a removed token, though, must not leave the old account on screen.
+  if (id === "integration_github") return info?.configured !== false && githubData() != null;
   if (!info || info.error) return false;
   switch (id) {
     case "integration_vercel":
       return arr(id, "deployments").length > 0;
     case "integration_resend":
       return arr(id, "emails").length > 0;
-    case "integration_github":
-      return get(id).totalRepos != null;
     case "integration_stripe":
       return info.loaded;
     case "integration_notion":
@@ -419,7 +470,7 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
     case "integration_resend":
       return resendCard();
     case "integration_github":
-      return githubCard();
+      return githubCard(hooks.openPanel);
     case "integration_stripe":
       return stripeCard();
     case "integration_notion":

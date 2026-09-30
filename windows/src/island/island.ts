@@ -17,6 +17,7 @@ import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from ".
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
+import { githubData } from "../views/integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 
@@ -129,6 +130,7 @@ export class Island {
         };
         if (task.id === "integration_claude") void Bridge.openInVSCode(task.sessionCwd ?? null);
         else if (task.id === "integration_n8n") void Bridge.openN8n();
+        else if (task.id === "integration_github" && githubData()) void Bridge.openUrl(githubData()!.profileUrl);
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
       },
       openUrl: (url) => {

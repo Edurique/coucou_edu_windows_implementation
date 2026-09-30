@@ -44,10 +44,14 @@ function handle(island: Island, update: IntegrationUpdate) {
   if (State.paused) return;
 
   const previous = State.integrations[update.id];
+  // A failed poll normally carries no data and keeps what was there. GitHub's
+  // carries its last good snapshot, so the panel can go on showing it next to
+  // the reason it isn't fresh.
+  const hasData = Object.keys(update.data).length > 0;
   State.integrations[update.id] = {
-    data: update.error ? (previous?.data ?? {}) : update.data,
+    data: hasData ? update.data : (previous?.data ?? {}),
     error: update.error,
-    loaded: update.error ? (previous?.loaded ?? false) : true,
+    loaded: hasData || (previous?.loaded ?? false),
     configured: previous?.configured ?? true,
   };
 

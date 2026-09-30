@@ -103,6 +103,36 @@ export const Bridge = {
   githubTest: () => callOrThrow<GithubAccount>("github_test"),
 };
 
+/** `State.integrations.integration_github.data` — the Snapshot in github.rs. */
+export interface GithubData {
+  login: string;
+  name: string | null;
+  profileUrl: string;
+  totalRepos: number;
+  totalStars: number;
+  /** Newest first. */
+  activity: GithubActivity[];
+  /** Unix ms of the last complete refresh. */
+  fetchedAt: number;
+}
+
+export type GithubActivityKind =
+  | "push" | "pr_opened" | "pr_merged" | "pr_closed"
+  | "issue_opened" | "issue_closed" | "release" | "create";
+
+export interface GithubActivity {
+  id: string;
+  kind: GithubActivityKind;
+  /** "owner/name". */
+  repo: string;
+  title: string;
+  /** "#12", a branch, a tag. */
+  detail: string | null;
+  url: string;
+  /** ISO 8601. */
+  at: string;
+}
+
 export interface GithubAccount {
   login: string;
   name: string | null;
