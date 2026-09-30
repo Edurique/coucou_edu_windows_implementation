@@ -9,8 +9,8 @@ import { ICONS } from "./icons";
 import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
   Bridge,
-  type GithubActivity, type GithubBuild, type GithubDeploy, type GithubProject, type GithubPull,
-  type GithubRepo,
+  type GithubActivity, type GithubBuild, type GithubContributions, type GithubDeploy,
+  type GithubProject, type GithubPull, type GithubRepo,
 } from "../core/bridge";
 import type { BotEmoteName } from "../core/layout";
 import { State } from "../core/state";
@@ -123,6 +123,9 @@ function mood(p: GithubProject): BotEmoteName {
   return green ? "proud" : "happy";
 }
 
+/** The graph sweeps in on the next draw: on entering the panel and on its tab. */
+let sweepNext = true;
+
 /**
  * On the way into the panel from the card: start from the lists, and refetch
  * when what they hold is old news.
@@ -133,7 +136,10 @@ function mood(p: GithubProject): BotEmoteName {
  * as far as it knew no sheet was open.
  */
 export function enterGithubPanel() {
+  sweepNext = true;
+  // Either way the view gets a new stamp, so it redraws — and sweeps.
   if (sheet) closeSheet();
+  else touchSheet();
   const d = githubData();
   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);
 }
@@ -216,6 +222,104 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
       h("span", { class: "int-ago", text: repo.pushedAt ? timeAgo(repo.pushedAt) : "" }),
     ),
   );
+}
+
+// ── Contribution graph ────────────────────────────────────────────────────────
+//
+// GitHub's year of squares, redrawn as the island draws everything else: dots,
+// in the GitHub pill's red, growing and brightening with GitHub's own levels.
+
+const DAY_MS = 86_400_000;
+
+/** Level 0 is a speck, level 4 a full dot. */
+const LEVEL_LOOK = [
+  { scale: 0.4, color: "rgba(255,255,255,0.1)" },
+  { scale: 0.62, color: "rgba(244,80,94,0.45)" },
+  { scale: 0.76, color: "rgba(244,80,94,0.65)" },
+  { scale: 0.9, color: "rgba(244,80,94,0.85)" },
+  { scale: 1, color: "rgba(244,80,94,1)" },
+];
+
+function dayDate(start: string, i: number): Date {
+  return new Date(Date.parse(`${start}T00:00:00Z`) + i * DAY_MS);
+}
+
+function dayLabel(date: Date, count: number): string {
+  const when = date.toLocaleDateString(undefined, {
+    weekday: "short", day: "numeric", month: "short", timeZone: "UTC",
+  });
+  const what = count === 0 ? "No contributions" : count === 1 ? "1 contribution" : `${count} contributions`;
+  return `${what} · ${when}`;
+}
+
+/** Days in a row with something, back from today — or from yesterday, when today is still blank. */
+function currentStreak(counts: number[]): number {
+  let i = counts.length - 1;
+  if (i >= 0 && counts[i] === 0) i -= 1;
+  let days = 0;
+  while (i >= 0 && counts[i] > 0) {
+    days += 1;
+    i -= 1;
+  }
+  return days;
+}
+
+function contributionGraph(c: GithubContributions, sweep: boolean): HTMLElement {
+  // Sunday-first columns, like the profile page; GitHub's first week is partial.
+  const offset = dayDate(c.start, 0).getUTCDay();
+  const weeks = Math.ceil((offset + c.counts.length) / 7);
+  const columns = `repeat(${weeks}, 1fr)`;
+
+  const months = h("div", { class: "gh-months" });
+  months.style.gridTemplateColumns = columns;
+  let previousMonth = -1;
+  for (let col = 0; col < weeks; col++) {
+    const month = dayDate(c.start, col * 7 - offset).getUTCMonth();
+    // The partial month at the very start gets no label: it would sit on top
+    // of the next one.
+    if (month !== previousMonth && col > 0 && col < weeks - 2) {
+      const label = h("span", {
+        text: dayDate(c.start, col * 7 - offset).toLocaleDateString(undefined, { month: "short", timeZone: "UTC" }),
+      });
+      label.style.gridColumn = String(col + 1);
+      months.append(label);
+    }
+    previousMonth = month;
+  }
+
+  const grid = h("div", { class: sweep ? "gh-grid sweep" : "gh-grid" });
+  grid.style.gridTemplateColumns = columns;
+  for (let i = 0; i < offset; i++) grid.append(h("i", { class: "pad" }));
+  c.counts.forEach((_, i) => {
+    const look = LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0];
+    const today = i === c.counts.length - 1;
+    const cell = h("i", { class: today ? "today" : "", "data-i": String(i) });
+    cell.style.setProperty("--s", String(look.scale));
+    cell.style.setProperty("--c", look.color);
+    cell.style.setProperty("--col", String(Math.floor((offset + i) / 7)));
+    grid.append(cell);
+  });
+
+  const streak = currentStreak(c.counts);
+  const summary =
+    `${c.total.toLocaleString()} contribution${c.total === 1 ? "" : "s"} in the last year` +
+    (streak >= 2 ? ` · ${streak} days in a row` : "");
+  const caption = h("div", { class: "gh-caption", text: summary });
+
+  // Hovering a day says what it holds; leaving the grid gives the year back.
+  grid.addEventListener("mouseover", (e) => {
+    const index = (e.target as HTMLElement).dataset.i;
+    if (index == null) return;
+    const i = Number(index);
+    caption.textContent = dayLabel(dayDate(c.start, i), c.counts[i] ?? 0);
+    caption.classList.add("day");
+  });
+  grid.addEventListener("mouseleave", () => {
+    caption.textContent = summary;
+    caption.classList.remove("day");
+  });
+
+  return h("div", { class: "gh-graph" }, months, grid, caption);
 }
 
 // ── Project sheet ─────────────────────────────────────────────────────────────
@@ -664,7 +768,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
       // A refresh lands while the list may be scrolled: stay where the reader was,
       // unless they just switched tabs.
-      const scroll = tab === listTab ? list.scrollTop : 0;
+      const freshTab = tab !== listTab;
+      const scroll = freshTab ? 0 : list.scrollTop;
+      const sweep = freshTab || sweepNext;
+      sweepNext = false;
       listTab = tab;
       clear(list);
       if (!d || !configured) {
@@ -683,9 +790,12 @@ export function buildGithub(actions: ViewActions): ViewHost {
             }),
           );
         }
-      } else if (d.activity.length === 0) {
-        list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
       } else {
+        // The year first, then what happened lately.
+        if (d.contributions) list.append(contributionGraph(d.contributions, sweep));
+        if (d.activity.length === 0) {
+          list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
+        }
         for (const a of d.activity) list.append(activityRow(a, d.login));
       }
       list.scrollTop = scroll;

@@ -45,6 +45,23 @@ const repos: GithubRepo[] = [
   repo("portfolio", ["Astro", "#ff5a03"], 27, 0, run("success", 60 * 24 * 9), 60 * 24 * 9),
 ];
 
+// A plausible year: quiet weekends, a few busy stretches, a streak up to today.
+// Seeded, so every reload draws the same graph.
+const today = new Date();
+const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+const firstSunday = todayUtc - (new Date(todayUtc).getUTCDay() + 52 * 7) * 86_400_000;
+const days = Math.round((todayUtc - firstSunday) / 86_400_000) + 1;
+let seed = 7;
+const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const counts = Array.from({ length: days }, (_, i) => {
+  const weekday = new Date(firstSunday + i * 86_400_000).getUTCDay();
+  const busy = Math.sin(i / 23) > 0.3 ? 2.2 : 1;
+  const base = weekday === 0 || weekday === 6 ? 0.25 : 1;
+  const n = Math.floor(rand() * 6 * busy * base - (rand() < 0.35 ? 3 : 0));
+  return i >= days - 6 ? Math.max(1, n) : Math.max(0, n);
+});
+const level = (n: number) => (n === 0 ? 0 : n <= 2 ? 1 : n <= 5 ? 2 : n <= 8 ? 3 : 4);
+
 const data: GithubData = {
   login: "mochi",
   name: "Mochi",
@@ -53,6 +70,12 @@ const data: GithubData = {
   totalStars: 1284,
   activity: params.has("empty") ? [] : activity,
   repos: params.has("empty") ? [] : repos,
+  contributions: {
+    total: counts.reduce((a, b) => a + b, 0),
+    start: new Date(firstSunday).toISOString().slice(0, 10),
+    counts,
+    levels: counts.map(level),
+  },
   fetchedAt: Date.now() - (params.has("error") ? 12 * 60_000 : 0),
 };
 

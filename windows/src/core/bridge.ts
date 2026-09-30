@@ -174,8 +174,19 @@ export interface GithubData {
   activity: GithubActivity[];
   /** Most recently pushed first. */
   repos: GithubRepo[];
+  /** The year behind the contribution graph. */
+  contributions: GithubContributions | null;
   /** Unix ms of the last complete refresh. */
   fetchedAt: number;
+}
+
+export interface GithubContributions {
+  total: number;
+  /** First day, "YYYY-MM-DD"; one entry per day from there, today last. */
+  start: string;
+  counts: number[];
+  /** GitHub's quartiles: 0 (none) to 4 (busiest). */
+  levels: number[];
 }
 
 export interface GithubRepo {

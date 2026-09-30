@@ -318,9 +318,25 @@ pub struct Snapshot {
     pub activity: Vec<Activity>,
     /// Most recently pushed first.
     pub repos: Vec<Repo>,
+    /// The year of contributions behind the graph; None if GitHub gave none.
+    pub contributions: Option<Contributions>,
     /// Unix milliseconds of the last complete refresh, so the panel can say how
     /// old what it shows is when GitHub can't be reached.
     pub fetched_at: u64,
+}
+
+/// The contribution calendar, day by day from `start`. Two flat lists rather
+/// than 371 objects: this rides along with every update of the pill.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Contributions {
+    pub total: i64,
+    /// First day, "YYYY-MM-DD"; the lists run one entry per day from there.
+    pub start: String,
+    pub counts: Vec<u32>,
+    /// GitHub's own quartiles, 0 (none) to 4 (busiest), so the graph shades
+    /// days the way the profile page does.
+    pub levels: Vec<u8>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -436,10 +452,11 @@ pub async fn refresh(app: AppHandle) {
     match fetch().await {
         Ok(snapshot) => {
             log::line(format!(
-                "github refresh: {} events, {} projects, {} with a build",
+                "github refresh: {} events, {} projects, {} with a build, {} contribution days",
                 snapshot.activity.len(),
                 snapshot.repos.len(),
                 snapshot.repos.iter().filter(|r| r.build.is_some()).count(),
+                snapshot.contributions.as_ref().map_or(0, |c| c.counts.len()),
             ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
             CACHE.lock().unwrap().snapshot = Some(snapshot);
@@ -470,6 +487,8 @@ pub async fn refresh(app: AppHandle) {
 /// as far as the token can see, which for a fine-grained token means your own
 /// repositories, organisations it was made for, and public ones.
 const PROFILE_QUERY: &str = "query { viewer { login name url \
+    contributionsCollection { contributionCalendar { totalContributions \
+    weeks { contributionDays { date contributionCount contributionLevel } } } } \
     repositories(ownerAffiliations: OWNER, first: 100, orderBy: {field: PUSHED_AT, direction: DESC}) { \
     totalCount nodes { ...Project } } \
     repositoriesContributedTo(first: 25, includeUserRepositories: true, \
@@ -527,12 +546,45 @@ async fn fetch() -> Result<Snapshot, GhError> {
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| format!("https://github.com/{login}")),
+        contributions: parse_contributions(viewer.pointer("/contributionsCollection/contributionCalendar")),
         login,
         total_repos,
         total_stars,
         activity,
         repos,
         fetched_at: unix_now() * 1000,
+    })
+}
+
+fn parse_contributions(calendar: Option<&Value>) -> Option<Contributions> {
+    let calendar = calendar?;
+    let days: Vec<&Value> = calendar
+        .get("weeks")?
+        .as_array()?
+        .iter()
+        .filter_map(|w| w.get("contributionDays")?.as_array())
+        .flatten()
+        .collect();
+    let start = text(days.first()?.get("date"))?;
+    let counts = days
+        .iter()
+        .map(|d| d.get("contributionCount").and_then(Value::as_u64).unwrap_or(0) as u32)
+        .collect();
+    let levels = days
+        .iter()
+        .map(|d| match d.get("contributionLevel").and_then(Value::as_str) {
+            Some("FIRST_QUARTILE") => 1,
+            Some("SECOND_QUARTILE") => 2,
+            Some("THIRD_QUARTILE") => 3,
+            Some("FOURTH_QUARTILE") => 4,
+            _ => 0,
+        })
+        .collect();
+    Some(Contributions {
+        total: calendar.get("totalContributions").and_then(Value::as_i64).unwrap_or(0),
+        start,
+        counts,
+        levels,
     })
 }
 
@@ -1439,6 +1491,31 @@ mod tests {
     fn a_repository_without_workflows_has_no_build() {
         assert_eq!(parse_run(&json!({ "total_count": 0, "workflow_runs": [] })), None);
         assert_eq!(parse_run(&json!({})), None);
+    }
+
+    #[test]
+    fn the_calendar_flattens_into_days_from_its_first_date() {
+        let day = |date: &str, count: u64, level: &str| {
+            json!({ "date": date, "contributionCount": count, "contributionLevel": level })
+        };
+        let calendar = json!({
+            "totalContributions": 9,
+            "weeks": [
+                // A first week that starts mid-week, as GitHub's does.
+                { "contributionDays": [day("2025-10-01", 0, "NONE"), day("2025-10-02", 1, "FIRST_QUARTILE")] },
+                { "contributionDays": [day("2025-10-03", 8, "FOURTH_QUARTILE"), day("2025-10-04", 0, "NONE")] },
+            ],
+        });
+        let c = parse_contributions(Some(&calendar)).unwrap();
+        assert_eq!((c.total, c.start.as_str()), (9, "2025-10-01"));
+        assert_eq!(c.counts, [0, 1, 8, 0]);
+        assert_eq!(c.levels, [0, 1, 4, 0]);
+    }
+
+    #[test]
+    fn no_calendar_means_no_graph() {
+        assert_eq!(parse_contributions(None), None);
+        assert_eq!(parse_contributions(Some(&json!({ "weeks": [] }))), None);
     }
 
     #[test]
