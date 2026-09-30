@@ -1,6 +1,6 @@
-// GitHub — everything behind the GitHub pill: the panel's data (profile and
-// recent activity), the client, the rate-limit bookkeeping and the connection
-// test in the settings window.
+// GitHub — everything behind the GitHub pill: the panel's data (profile, recent
+// activity, projects and their last Actions run), the client, the rate-limit
+// bookkeeping and the connection test in the settings window.
 //
 // The token is a fine-grained, read-only personal access token kept in the
 // Credential Manager under `github-token`. It goes into the Authorization header
@@ -12,6 +12,7 @@
 // can look at the panel; a tick while it is on screen, the Refresh button and
 // opening the panel fetch everything.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -204,7 +205,20 @@ impl Gh {
         let reply = self.send(request, "/graphql").await?.ok_or(GhError::BadResponse)?;
         match reply.json.get("data") {
             Some(data) if !data.is_null() => Ok(data.clone()),
-            _ => Err(graphql_error(&reply.json)),
+            _ => {
+                // An HTTP 200 that failed: `send` logged nothing. Only GitHub's
+                // own words about the query — no data, no token.
+                let message: String = reply
+                    .json
+                    .pointer("/errors/0/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .take(160)
+                    .collect();
+                log::line(format!("github /graphql → {message}"));
+                Err(graphql_error(&reply.json))
+            }
         }
     }
 
@@ -259,13 +273,11 @@ impl Gh {
 /// A GraphQL answer comes back as HTTP 200 even when it failed; the reason is
 /// in `errors[].type`.
 fn graphql_error(json: &Value) -> GhError {
-    let kind = json
+    let first = json
         .get("errors")
         .and_then(Value::as_array)
-        .and_then(|errors| errors.first())
-        .and_then(|e| e.get("type"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
+        .and_then(|errors| errors.first());
+    let kind = first.and_then(|e| e.get("type")).and_then(Value::as_str).unwrap_or("");
     match kind {
         "RATE_LIMITED" => {
             let until = unix_now() + 60;
@@ -291,9 +303,43 @@ pub struct Snapshot {
     pub total_stars: i64,
     /// Newest first.
     pub activity: Vec<Activity>,
+    /// Most recently pushed first.
+    pub repos: Vec<Repo>,
     /// Unix milliseconds of the last complete refresh, so the panel can say how
     /// old what it shows is when GitHub can't be reached.
     pub fetched_at: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Repo {
+    pub name: String,
+    /// "owner/name".
+    pub full_name: String,
+    pub url: String,
+    pub private: bool,
+    pub language: Option<String>,
+    /// GitHub's colour for the language, e.g. "#dea584" for Rust.
+    pub language_color: Option<String>,
+    pub stars: i64,
+    pub open_prs: i64,
+    pub pushed_at: Option<String>,
+    /// The newest Actions run on any branch. None: no workflow, or the token
+    /// can't read Actions for this repository.
+    pub build: Option<Build>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Build {
+    pub id: u64,
+    /// success, failure, running or neutral (cancelled, skipped…).
+    pub state: &'static str,
+    /// The workflow's name, e.g. "CI".
+    pub workflow: String,
+    pub branch: Option<String>,
+    pub url: String,
+    pub at: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -320,6 +366,9 @@ const MAX_ACTIVITY: usize = 20;
 const EVENTS_PAGE: usize = 50;
 /// GitHub's own floor when it doesn't send X-Poll-Interval.
 const DEFAULT_POLL_INTERVAL: u64 = 60;
+/// Projects in the panel, each costing one Actions request per refresh — a free
+/// one (304) as long as nothing ran.
+const MAX_REPOS: usize = 8;
 
 #[derive(Default)]
 struct Cache {
@@ -328,6 +377,8 @@ struct Cache {
     events_etag: Option<(String, String)>,
     /// X-Poll-Interval: the events feed is not asked again before this.
     events_not_before: u64,
+    /// Per Actions URL: the ETag of the last answer and what it said.
+    runs: HashMap<String, (String, Option<Build>)>,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
@@ -371,6 +422,12 @@ pub async fn refresh(app: AppHandle) {
 
     match fetch().await {
         Ok(snapshot) => {
+            log::line(format!(
+                "github refresh: {} events, {} projects, {} with a build",
+                snapshot.activity.len(),
+                snapshot.repos.len(),
+                snapshot.repos.iter().filter(|r| r.build.is_some()).count(),
+            ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
             CACHE.lock().unwrap().snapshot = Some(snapshot);
             emit(&app, IntegrationUpdate { id: ID, data, error: None, event: None });
@@ -394,9 +451,12 @@ pub async fn refresh(app: AppHandle) {
     }
 }
 
+/// Profile, star count and projects in one request. Sorted by last push, which
+/// is the order the Projects tab wants.
 const PROFILE_QUERY: &str = "query { viewer { login name url \
     repositories(ownerAffiliations: OWNER, first: 100, orderBy: {field: PUSHED_AT, direction: DESC}) { \
-    totalCount nodes { stargazerCount } } } }";
+    totalCount nodes { name nameWithOwner url isPrivate isArchived pushedAt stargazerCount \
+    primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } } } } }";
 
 async fn fetch() -> Result<Snapshot, GhError> {
     let gh = Gh::from_store()?;
@@ -408,24 +468,28 @@ async fn fetch() -> Result<Snapshot, GhError> {
         .and_then(Value::as_str)
         .ok_or(GhError::BadResponse)?
         .to_string();
-    let repos = viewer.get("repositories");
-    let total_repos = repos
+    let repositories = viewer.get("repositories");
+    let total_repos = repositories
         .and_then(|r| r.get("totalCount"))
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    // Over the hundred most recently pushed, like the macOS poller.
-    let total_stars = repos
+    let nodes = repositories
         .and_then(|r| r.get("nodes"))
         .and_then(Value::as_array)
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|n| n.get("stargazerCount").and_then(Value::as_i64))
-                .sum()
-        })
-        .unwrap_or(0);
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    // Over the hundred most recently pushed, like the macOS poller.
+    let total_stars = nodes
+        .iter()
+        .filter_map(|n| n.get("stargazerCount").and_then(Value::as_i64))
+        .sum();
 
     let activity = fetch_activity(&gh, &login).await?;
+
+    let mut repos = parse_repos(nodes);
+    for repo in &mut repos {
+        repo.build = latest_build(&gh, &repo.full_name).await?;
+    }
 
     Ok(Snapshot {
         name: viewer
@@ -442,7 +506,92 @@ async fn fetch() -> Result<Snapshot, GhError> {
         total_repos,
         total_stars,
         activity,
+        repos,
         fetched_at: unix_now() * 1000,
+    })
+}
+
+/// The projects tab: the most recently pushed repositories, archived ones left
+/// out since nothing happens there any more.
+fn parse_repos(nodes: &[Value]) -> Vec<Repo> {
+    nodes
+        .iter()
+        .filter(|n| !n.get("isArchived").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|n| {
+            let full_name = text(n.get("nameWithOwner"))?;
+            let language = n.get("primaryLanguage");
+            Some(Repo {
+                name: text(n.get("name")).unwrap_or_else(|| full_name.clone()),
+                url: text(n.get("url")).unwrap_or_else(|| format!("https://github.com/{full_name}")),
+                full_name,
+                private: n.get("isPrivate").and_then(Value::as_bool).unwrap_or(false),
+                language: text(language.and_then(|l| l.get("name"))),
+                language_color: text(language.and_then(|l| l.get("color"))),
+                stars: n.get("stargazerCount").and_then(Value::as_i64).unwrap_or(0),
+                // Null when the token may not read pull requests: shown as none.
+                open_prs: n
+                    .get("pullRequests")
+                    .and_then(|p| p.get("totalCount"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0),
+                pushed_at: text(n.get("pushedAt")),
+                build: None,
+            })
+        })
+        .take(MAX_REPOS)
+        .collect()
+}
+
+/// The newest Actions run of a repository, whatever its branch, asked with the
+/// ETag of the last answer.
+///
+/// A repository the token can't read Actions for, or that has no workflow, has
+/// no build — the connection test is where a missing permission gets named.
+/// Anything that concerns every request (rate limit, bad token, no network)
+/// stops the refresh instead.
+async fn latest_build(gh: &Gh, repo: &str) -> Result<Option<Build>, GhError> {
+    let path = format!("/repos/{repo}/actions/runs?per_page=1");
+    let cached = CACHE.lock().unwrap().runs.get(&path).cloned();
+    let etag = cached.as_ref().map(|(tag, _)| tag.as_str());
+
+    match gh.get_if_changed(&path, etag).await {
+        Ok(None) => Ok(cached.and_then(|(_, build)| build)),
+        Ok(Some(reply)) => {
+            let build = parse_run(&reply.json);
+            if let Some(tag) = header_str(&reply.headers, "etag") {
+                CACHE.lock().unwrap().runs.insert(path, (tag, build.clone()));
+            }
+            Ok(build)
+        }
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Four states are all the island needs: it passed, it broke, it's going, or
+/// it ended without saying either (cancelled, skipped, waiting for a click).
+fn build_state(status: &str, conclusion: Option<&str>) -> &'static str {
+    if status != "completed" {
+        return "running";
+    }
+    match conclusion {
+        Some("success") => "success",
+        Some("failure") | Some("timed_out") | Some("startup_failure") => "failure",
+        _ => "neutral",
+    }
+}
+
+fn parse_run(json: &Value) -> Option<Build> {
+    let run = json.get("workflow_runs")?.as_array()?.first()?;
+    let status = run.get("status").and_then(Value::as_str).unwrap_or("completed");
+    let conclusion = run.get("conclusion").and_then(Value::as_str);
+    Some(Build {
+        id: run.get("id")?.as_u64()?,
+        state: build_state(status, conclusion),
+        workflow: text(run.get("name")).unwrap_or_else(|| "Workflow".into()),
+        branch: text(run.get("head_branch")),
+        url: text(run.get("html_url"))?,
+        at: text(run.get("updated_at")).or_else(|| text(run.get("created_at")))?,
     })
 }
 
@@ -868,6 +1017,74 @@ mod tests {
         let list = parse_events(&Value::Array(many));
         assert_eq!(list.len(), MAX_ACTIVITY);
         assert_eq!(list[0].id, "0");
+    }
+
+    #[test]
+    fn projects_skip_the_archived_and_keep_the_push_order() {
+        let nodes = vec![
+            json!({
+                "name": "coucou", "nameWithOwner": "edu/coucou", "url": "https://github.com/edu/coucou",
+                "isPrivate": false, "isArchived": false, "pushedAt": "2026-09-30T18:00:00Z",
+                "stargazerCount": 12, "primaryLanguage": { "name": "Rust", "color": "#dea584" },
+                "pullRequests": { "totalCount": 2 },
+            }),
+            json!({ "name": "old", "nameWithOwner": "edu/old", "isArchived": true }),
+            json!({
+                "name": "notes", "nameWithOwner": "edu/notes", "isPrivate": true,
+                "primaryLanguage": null, "pullRequests": null,
+            }),
+        ];
+        let repos = parse_repos(&nodes);
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].name, "coucou");
+        assert_eq!(repos[0].language.as_deref(), Some("Rust"));
+        assert_eq!(repos[0].language_color.as_deref(), Some("#dea584"));
+        assert_eq!((repos[0].stars, repos[0].open_prs), (12, 2));
+        assert_eq!(repos[1].name, "notes");
+        assert!(repos[1].private);
+        assert_eq!((repos[1].language.as_deref(), repos[1].open_prs), (None, 0));
+        assert_eq!(repos[1].url, "https://github.com/edu/notes");
+    }
+
+    #[test]
+    fn projects_are_capped() {
+        let nodes: Vec<Value> = (0..20)
+            .map(|i| json!({ "name": format!("r{i}"), "nameWithOwner": format!("edu/r{i}") }))
+            .collect();
+        assert_eq!(parse_repos(&nodes).len(), MAX_REPOS);
+    }
+
+    #[test]
+    fn a_run_is_one_of_four_states() {
+        assert_eq!(build_state("in_progress", None), "running");
+        assert_eq!(build_state("queued", None), "running");
+        assert_eq!(build_state("waiting", None), "running");
+        assert_eq!(build_state("completed", Some("success")), "success");
+        assert_eq!(build_state("completed", Some("failure")), "failure");
+        assert_eq!(build_state("completed", Some("timed_out")), "failure");
+        assert_eq!(build_state("completed", Some("startup_failure")), "failure");
+        assert_eq!(build_state("completed", Some("cancelled")), "neutral");
+        assert_eq!(build_state("completed", Some("skipped")), "neutral");
+        assert_eq!(build_state("completed", None), "neutral");
+    }
+
+    #[test]
+    fn the_newest_run_becomes_the_build() {
+        let runs = json!({ "total_count": 40, "workflow_runs": [{
+            "id": 99, "name": "CI", "head_branch": "main", "status": "completed",
+            "conclusion": "failure", "html_url": "https://github.com/edu/coucou/actions/runs/99",
+            "created_at": "2026-09-30T17:00:00Z", "updated_at": "2026-09-30T17:04:00Z",
+        }]});
+        let build = parse_run(&runs).unwrap();
+        assert_eq!((build.id, build.state, build.workflow.as_str()), (99, "failure", "CI"));
+        assert_eq!(build.branch.as_deref(), Some("main"));
+        assert_eq!(build.at, "2026-09-30T17:04:00Z");
+    }
+
+    #[test]
+    fn a_repository_without_workflows_has_no_build() {
+        assert_eq!(parse_run(&json!({ "total_count": 0, "workflow_runs": [] })), None);
+        assert_eq!(parse_run(&json!({})), None);
     }
 
     #[test]

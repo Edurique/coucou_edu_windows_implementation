@@ -55,4 +55,8 @@ export const ICONS = {
   tag: "M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9zM8 7.5h.01",
   // plus, stroked
   add: "M12 5v14M5 12h14",
+  // lock, stroked
+  lock: "M8 11V8a4 4 0 0 1 8 0v3M6 11h12v9H6z",
+  // minus, stroked
+  dash: "M7 12h10",
 } as const;

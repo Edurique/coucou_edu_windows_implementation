@@ -1476,10 +1476,21 @@ input[type="range"]::-webkit-slider-thumb {
   text-overflow: ellipsis;
 }
 
-.gh-label {
-  font: 500 11px var(--font);
-  color: var(--dim-3);
-  padding: 2px 0 0 8px;
+/* The island's own segmented control (settings view), left-aligned here. */
+.gh-tabs {
+  margin-left: 0;
+  padding-left: 2px;
+  gap: 2px;
+}
+
+.gh-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.gh-tabs button:not(.on):hover {
+  color: var(--dim-2);
 }
 
 .gh-list {
@@ -1545,4 +1556,75 @@ input[type="range"]::-webkit-slider-thumb {
 .gh-row .int-ago {
   margin-left: auto;
   padding-left: 6px;
+  min-width: 30px;
+  text-align: right;
+}
+
+/* Projects: the right-hand columns line up from row to row. */
+.gh-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.gh-right .int-ago {
+  margin-left: 0;
+}
+
+.gh-lock {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--dim-3);
+}
+
+.gh-build {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--tint);
+  color: var(--c);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  cursor: default;
+  transition: box-shadow 0.12s ease-out;
+}
+
+.gh-build:hover {
+  box-shadow: 0 0 0 3px var(--tint);
+}
+
+.gh-build.none {
+  background: transparent;
+}
+
+/* "Running": a ring turning in the badge's colour. */
+.gh-ring {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.6px solid currentColor;
+  border-top-color: transparent;
+  animation: gh-spin 0.9s linear infinite;
+}
+
+.gh-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  width: 36px;
+  flex: 0 0 auto;
+  font: 500 10.5px var(--font);
+  color: var(--dim-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.gh-meta.link:hover {
+  color: var(--ink);
 }

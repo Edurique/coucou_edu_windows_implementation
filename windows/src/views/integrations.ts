@@ -239,7 +239,8 @@ export function repoName(repo: string, login: string): string {
   return name && owner.toLowerCase() === login.toLowerCase() ? name : repo;
 }
 
-const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+/** 1284 → "1.3k", as the macOS card writes star counts. */
+export const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /**
  * A highlighted first row that opens something as a whole. A lone `…` was too

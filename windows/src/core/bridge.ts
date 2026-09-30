@@ -112,8 +112,38 @@ export interface GithubData {
   totalStars: number;
   /** Newest first. */
   activity: GithubActivity[];
+  /** Most recently pushed first. */
+  repos: GithubRepo[];
   /** Unix ms of the last complete refresh. */
   fetchedAt: number;
+}
+
+export interface GithubRepo {
+  name: string;
+  /** "owner/name". */
+  fullName: string;
+  url: string;
+  private: boolean;
+  language: string | null;
+  /** GitHub's colour for the language. */
+  languageColor: string | null;
+  stars: number;
+  openPrs: number;
+  /** ISO 8601. */
+  pushedAt: string | null;
+  /** The newest Actions run on any branch; null when there is none to read. */
+  build: GithubBuild | null;
+}
+
+export interface GithubBuild {
+  id: number;
+  state: "success" | "failure" | "running" | "neutral";
+  /** The workflow's name, e.g. "CI". */
+  workflow: string;
+  branch: string | null;
+  url: string;
+  /** ISO 8601. */
+  at: string;
 }
 
 export type GithubActivityKind =
