@@ -1666,21 +1666,39 @@ input[type="range"]::-webkit-slider-thumb {
   row-gap: 2px;
 }
 
+/* Each day is a tiny Mochi-shaped squircle, sized by its level. Hover grows it
+   with the `scale` property, so it adds to the level's `transform` instead of
+   fighting the entrance and breathing animations over it. */
 .gh-grid i {
-  position: relative;
   aspect-ratio: 1;
-  border-radius: 50%;
+  border-radius: 34%;
   background: var(--c);
   transform: scale(var(--s));
+  transition: scale 0.14s ease-out, box-shadow 0.14s ease-out;
+}
+
+/* Lit days get the soft top light of Mochi's own body. */
+.gh-grid i.lit {
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--c), #fff 22%), var(--c));
+}
+
+.gh-grid i:not(.pad):hover {
+  scale: 1.45;
+}
+
+/* …and glow in their green, the way a pill glows in its colour. */
+.gh-grid i.lit:hover {
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
 }
 
 .gh-grid i.pad {
   background: transparent;
 }
 
-/* Entering: the dots light up left to right, after the view's own fade-in. */
+/* Entering: the days light up left to right, after the view's own fade-in.
+   `backwards`, not `both`: once in, the cell's own transform takes over. */
 .gh-grid.sweep i:not(.pad) {
-  animation: gh-dot-in 0.34s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+  animation: gh-dot-in 0.34s cubic-bezier(0.3, 1.2, 0.4, 1) backwards;
   animation-delay: calc(160ms + var(--col, 0) * 6ms);
 }
 
@@ -1693,14 +1711,26 @@ input[type="range"]::-webkit-slider-thumb {
   }
 }
 
-/* Today breathes, like the Resend pill's live dot. */
-.gh-grid i.today::after {
-  content: "";
-  position: absolute;
-  inset: -2.5px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(244, 80, 94, 0.9);
-  animation: pulse 1.8s ease-in-out infinite;
+/* Today breathes a little, the way Mochi does at rest. */
+.gh-grid i.today {
+  animation: gh-breathe 3.2s ease-in-out infinite;
+}
+
+.gh-grid.sweep i.today {
+  animation:
+    gh-dot-in 0.34s cubic-bezier(0.3, 1.2, 0.4, 1) backwards,
+    gh-breathe 3.2s ease-in-out 1.2s infinite;
+  animation-delay: calc(160ms + var(--col, 0) * 6ms), 1.2s;
+}
+
+@keyframes gh-breathe {
+  0%,
+  100% {
+    transform: scale(var(--s));
+  }
+  50% {
+    transform: scale(calc(var(--s) * 1.2));
+  }
 }
 
 .gh-caption {

@@ -226,19 +226,40 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
 
 // ── Contribution graph ────────────────────────────────────────────────────────
 //
-// GitHub's year of squares, redrawn as the island draws everything else: dots,
-// in the GitHub pill's red, growing and brightening with GitHub's own levels.
+// GitHub's year of squares, redrawn as the island draws everything else: tiny
+// squircles — Mochi's own shape — in Mochi's `finished` green, growing and
+// brightening with GitHub's own levels. Under the mouse, Mochi takes the colour
+// of the day.
 
 const DAY_MS = 86_400_000;
 
-/** Level 0 is a speck, level 4 a full dot. */
-const LEVEL_LOOK = [
-  { scale: 0.4, color: "rgba(255,255,255,0.1)" },
-  { scale: 0.62, color: "rgba(244,80,94,0.45)" },
-  { scale: 0.76, color: "rgba(244,80,94,0.65)" },
-  { scale: 0.9, color: "rgba(244,80,94,0.85)" },
-  { scale: 1, color: "rgba(244,80,94,1)" },
-];
+/** Mochi's `finished` green — the colour of work done. */
+const GRAPH_GREEN = "#34D399";
+/** Mochi at rest, the `idle` colour: what an empty day turns him. */
+const IDLE = "#E6E9EE";
+
+/** a → b by t, as a hex colour. */
+function mixHex(a: string, b: string, t: number): string {
+  const ca = parseInt(a.slice(1), 16);
+  const cb = parseInt(b.slice(1), 16);
+  const channel = (shift: number) => {
+    const x = (ca >> shift) & 255;
+    const y = (cb >> shift) & 255;
+    return Math.round(x + (y - x) * t);
+  };
+  return `#${((channel(16) << 16) | (channel(8) << 8) | channel(0)).toString(16).padStart(6, "0")}`;
+}
+
+/**
+ * Per GitHub level, 0 (nothing) to 4 (busiest): how big and how green the cell
+ * is, and how green Mochi turns — with how bright his glow — over that day.
+ */
+const LEVEL_LOOK = [0, 0.4, 0.6, 0.8, 1].map((t, level) => ({
+  scale: [0.42, 0.62, 0.76, 0.9, 1][level],
+  cell: level === 0 ? "rgba(255,255,255,0.1)" : `${GRAPH_GREEN}${Math.round((0.25 + 0.75 * t) * 255).toString(16).padStart(2, "0")}`,
+  mochi: mixHex(IDLE, GRAPH_GREEN, t),
+  glow: 0.15 + 0.5 * t,
+}));
 
 function dayDate(start: string, i: number): Date {
   return new Date(Date.parse(`${start}T00:00:00Z`) + i * DAY_MS);
@@ -264,7 +285,11 @@ function currentStreak(counts: number[]): number {
   return days;
 }
 
-function contributionGraph(c: GithubContributions, sweep: boolean): HTMLElement {
+function contributionGraph(
+  c: GithubContributions,
+  sweep: boolean,
+  tint: ViewActions["tintMochi"],
+): HTMLElement {
   // Sunday-first columns, like the profile page; GitHub's first week is partial.
   const offset = dayDate(c.start, 0).getUTCDay();
   const weeks = Math.ceil((offset + c.counts.length) / 7);
@@ -291,11 +316,12 @@ function contributionGraph(c: GithubContributions, sweep: boolean): HTMLElement 
   grid.style.gridTemplateColumns = columns;
   for (let i = 0; i < offset; i++) grid.append(h("i", { class: "pad" }));
   c.counts.forEach((_, i) => {
-    const look = LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0];
-    const today = i === c.counts.length - 1;
-    const cell = h("i", { class: today ? "today" : "", "data-i": String(i) });
+    const level = c.levels[i] ?? 0;
+    const look = LEVEL_LOOK[level] ?? LEVEL_LOOK[0];
+    const classes = [level > 0 ? "lit" : "", i === c.counts.length - 1 ? "today" : ""].join(" ").trim();
+    const cell = h("i", { class: classes, "data-i": String(i) });
     cell.style.setProperty("--s", String(look.scale));
-    cell.style.setProperty("--c", look.color);
+    cell.style.setProperty("--c", look.cell);
     cell.style.setProperty("--col", String(Math.floor((offset + i) / 7)));
     grid.append(cell);
   });
@@ -306,17 +332,21 @@ function contributionGraph(c: GithubContributions, sweep: boolean): HTMLElement 
     (streak >= 2 ? ` · ${streak} days in a row` : "");
   const caption = h("div", { class: "gh-caption", text: summary });
 
-  // Hovering a day says what it holds; leaving the grid gives the year back.
+  // Hovering a day says what it holds and turns Mochi that day's green;
+  // leaving the grid gives the year back, and Mochi his own colour.
   grid.addEventListener("mouseover", (e) => {
     const index = (e.target as HTMLElement).dataset.i;
     if (index == null) return;
     const i = Number(index);
     caption.textContent = dayLabel(dayDate(c.start, i), c.counts[i] ?? 0);
     caption.classList.add("day");
+    const look = LEVEL_LOOK[c.levels[i] ?? 0] ?? LEVEL_LOOK[0];
+    tint({ color: look.mochi, glow: look.glow });
   });
   grid.addEventListener("mouseleave", () => {
     caption.textContent = summary;
     caption.classList.remove("day");
+    tint(null);
   });
 
   return h("div", { class: "gh-graph" }, months, grid, caption);
@@ -666,6 +696,15 @@ export function buildGithub(actions: ViewActions): ViewHost {
   let key = "";
   let listTab: Tab | null = null;
 
+  /**
+   * A graph removed from under the mouse never gets its mouseleave, which
+   * would leave Mochi green: every emptying of the list gives him his colour.
+   */
+  function clearList() {
+    clear(list);
+    actions.tintMochi(null);
+  }
+
   /** The sheet takes the list's place; the head names the project. */
   function drawSheet(open: Sheet, login: string) {
     tabs.style.display = "none";
@@ -674,7 +713,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clear(status);
     if (open.error) status.append(dot(GITHUB_RED, 5), h("span", { text: open.error }));
     listTab = null;
-    clear(list);
+    clearList();
     if (open.data) {
       const content = projectSheet(open.data);
       if (open.react) {
@@ -773,7 +812,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const sweep = freshTab || sweepNext;
       sweepNext = false;
       listTab = tab;
-      clear(list);
+      clearList();
       if (!d || !configured) {
         updateFade();
         return;
@@ -792,7 +831,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
         }
       } else {
         // The year first, then what happened lately.
-        if (d.contributions) list.append(contributionGraph(d.contributions, sweep));
+        if (d.contributions) list.append(contributionGraph(d.contributions, sweep, actions.tintMochi));
         if (d.activity.length === 0) {
           list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
         }
