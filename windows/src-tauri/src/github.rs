@@ -451,12 +451,18 @@ pub async fn refresh(app: AppHandle) {
     }
 }
 
-/// Profile, star count and projects in one request. Sorted by last push, which
-/// is the order the Projects tab wants.
+/// Profile, star count and projects in one request, both lists sorted by last
+/// push. The star count and the repository count stay about what you own, as
+/// on macOS; the Projects tab also takes what you contributed to elsewhere —
+/// as far as the token can see, which for a fine-grained token means your own
+/// repositories, organisations it was made for, and public ones.
 const PROFILE_QUERY: &str = "query { viewer { login name url \
     repositories(ownerAffiliations: OWNER, first: 100, orderBy: {field: PUSHED_AT, direction: DESC}) { \
-    totalCount nodes { name nameWithOwner url isPrivate isArchived pushedAt stargazerCount \
-    primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } } } } }";
+    totalCount nodes { ...Project } } \
+    repositoriesContributedTo(first: 25, includeUserRepositories: true, \
+    orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } } } \
+    fragment Project on Repository { name nameWithOwner url isPrivate isArchived pushedAt \
+    stargazerCount primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } }";
 
 async fn fetch() -> Result<Snapshot, GhError> {
     let gh = Gh::from_store()?;
@@ -486,7 +492,13 @@ async fn fetch() -> Result<Snapshot, GhError> {
 
     let activity = fetch_activity(&gh, &login).await?;
 
-    let mut repos = parse_repos(nodes);
+    let contributed = viewer
+        .get("repositoriesContributedTo")
+        .and_then(|r| r.get("nodes"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut repos = parse_repos(nodes, contributed);
     for repo in &mut repos {
         repo.build = latest_build(&gh, &repo.full_name).await?;
     }
@@ -511,11 +523,14 @@ async fn fetch() -> Result<Snapshot, GhError> {
     })
 }
 
-/// The projects tab: the most recently pushed repositories, archived ones left
-/// out since nothing happens there any more.
-fn parse_repos(nodes: &[Value]) -> Vec<Repo> {
-    nodes
+/// The projects tab: what you own and what you contributed to, merged, most
+/// recently pushed first. Archived repositories are left out since nothing
+/// happens there any more.
+fn parse_repos(owned: &[Value], contributed: &[Value]) -> Vec<Repo> {
+    let mut seen = std::collections::HashSet::new();
+    let mut repos: Vec<Repo> = owned
         .iter()
+        .chain(contributed)
         .filter(|n| !n.get("isArchived").and_then(Value::as_bool).unwrap_or(false))
         .filter_map(|n| {
             let full_name = text(n.get("nameWithOwner"))?;
@@ -538,8 +553,13 @@ fn parse_repos(nodes: &[Value]) -> Vec<Repo> {
                 build: None,
             })
         })
-        .take(MAX_REPOS)
-        .collect()
+        // Your own repositories you contributed to come back in both lists.
+        .filter(|r| seen.insert(r.full_name.clone()))
+        .collect();
+    // ISO 8601 sorts as text; a repository never pushed to goes last.
+    repos.sort_by(|a, b| b.pushed_at.cmp(&a.pushed_at));
+    repos.truncate(MAX_REPOS);
+    repos
 }
 
 /// The newest Actions run of a repository, whatever its branch, asked with the
@@ -1034,7 +1054,7 @@ mod tests {
                 "primaryLanguage": null, "pullRequests": null,
             }),
         ];
-        let repos = parse_repos(&nodes);
+        let repos = parse_repos(&nodes, &[]);
         assert_eq!(repos.len(), 2);
         assert_eq!(repos[0].name, "coucou");
         assert_eq!(repos[0].language.as_deref(), Some("Rust"));
@@ -1051,7 +1071,26 @@ mod tests {
         let nodes: Vec<Value> = (0..20)
             .map(|i| json!({ "name": format!("r{i}"), "nameWithOwner": format!("edu/r{i}") }))
             .collect();
-        assert_eq!(parse_repos(&nodes).len(), MAX_REPOS);
+        assert_eq!(parse_repos(&nodes, &[]).len(), MAX_REPOS);
+    }
+
+    #[test]
+    fn contributions_elsewhere_join_the_projects_once_in_push_order() {
+        let repo = |full: &str, pushed: &str| {
+            let name = full.split('/').nth(1).unwrap();
+            json!({ "name": name, "nameWithOwner": full, "pushedAt": pushed })
+        };
+        let owned = vec![
+            repo("edu/coucou", "2026-09-30T10:00:00Z"),
+            repo("edu/notes", "2026-08-01T10:00:00Z"),
+        ];
+        let contributed = vec![
+            repo("louis/coucou", "2026-09-30T12:00:00Z"),
+            repo("edu/coucou", "2026-09-30T10:00:00Z"),
+            json!({ "name": "old", "nameWithOwner": "org/old", "isArchived": true, "pushedAt": "2026-09-30T23:00:00Z" }),
+        ];
+        let names: Vec<String> = parse_repos(&owned, &contributed).into_iter().map(|r| r.full_name).collect();
+        assert_eq!(names, ["louis/coucou", "edu/coucou", "edu/notes"]);
     }
 
     #[test]

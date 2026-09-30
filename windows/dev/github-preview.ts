@@ -35,7 +35,9 @@ const run = (state: "success" | "failure" | "running" | "neutral", m: number) =>
 });
 
 const repos: GithubRepo[] = [
-  repo("coucou", ["Rust", "#dea584"], 1204, 2, run("running", 1), 4),
+  // A project you contribute to without owning it: shown with its owner.
+  { ...repo("coucou", ["Swift", "#F05138"], 1204, 3, run("success", 20), 2), fullName: "louis-cfm/coucou" },
+  repo("coucou", ["Rust", "#dea584"], 4, 2, run("running", 1), 4),
   repo("tour-convention-geneve", ["TypeScript", "#3178c6"], 38, 5, run("failure", 50), 50),
   repo("dotfiles", ["Shell", "#89e051"], 12, 0, run("success", 60 * 26), 60 * 26),
   repo("notes", null, 0, 0, null, 60 * 30, true),

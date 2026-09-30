@@ -92,12 +92,13 @@ function meta(icon: SVGSVGElement, count: number, onClick?: () => void): HTMLEle
   return el;
 }
 
-function repoRow(repo: GithubRepo): HTMLElement {
+/** Your own repositories by name; somebody else's with their owner in front. */
+function repoRow(repo: GithubRepo, login: string): HTMLElement {
   return h(
     "div",
     { class: "gh-row", onclick: () => void Bridge.openUrl(repo.url) },
     dot(repo.languageColor ?? "#4B5563", 6),
-    h("span", { class: "gh-row-title", text: repo.name }),
+    h("span", { class: "gh-row-title", text: repoName(repo.fullName, login) }),
     repo.private ? h("i", { class: "gh-lock", title: "Private" }, svg(ICONS.lock, 9, { stroke: 2.2 })) : null,
     h("span", { class: "gh-row-where", text: repo.language ?? "" }),
     h(
@@ -240,7 +241,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
         if (d.repos.length === 0) {
           list.append(h("div", { class: "int-empty", text: "No repositories yet." }));
         }
-        for (const repo of d.repos) list.append(repoRow(repo));
+        for (const repo of d.repos) list.append(repoRow(repo, d.login));
       } else if (d.activity.length === 0) {
         list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
       } else {
