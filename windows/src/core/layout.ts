@@ -88,8 +88,10 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   settings: { height: 160, botX: 54, botY: null, botDiameter: 46, agentMode: "none" },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0, agentMode: "none" },
   // Windows only, no macOS counterpart yet: the GitHub panel. As tall as the
-  // chat gets, with the chat's Mochi, since both are reading views.
-  github: { height: 300, botX: 52, botY: null, botDiameter: 44, agentMode: "none" },
+  // chat gets. Laid out like a Claude Code session's view: Mochi full size at
+  // the top of his own column, lined up with the words under him, the screen
+  // in a panel on the right.
+  github: { height: 300, botX: 48, botY: 80, botDiameter: 54, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually

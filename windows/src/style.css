@@ -1396,72 +1396,199 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* ── GitHub panel (github view) ─────────────────────────────────────────── */
 
-/* The panel's card wears the colour of the screen on it, through the cards'
-   own wash (see .card.wash). Registering --wash as a colour lets it glide from
-   one screen's colour to the next instead of switching; unregistered, a
-   custom property can't be interpolated. */
+/* Laid out like a Claude Code session's view: Mochi's column on the left —
+   Mochi at full size, whose GitHub this is, and the way down to the screen on
+   show — and the screen itself in a darker panel on the right, headed like an
+   editor's tab. */
+.gh-card {
+  display: flex;
+}
+
+/* Mochi is drawn by the island at the top of this column (VIEW_LAYOUTS.github):
+   the column starts under him. */
+.gh-side {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 106px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 90px 8px 12px 13px;
+}
+
+.gh-side-who {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.gh-side-who b {
+  font: 600 13px var(--font);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gh-side-who span {
+  font: 400 11px var(--font);
+  color: var(--dim-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The tabs at the top, and deeper, the way down: every level a way back. */
+.gh-trail {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.gh-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 21px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dim-3);
+  font: 500 12px var(--font);
+  text-align: left;
+  cursor: default;
+  transition: color 0.12s ease-out;
+}
+
+button.gh-step:hover {
+  color: var(--dim);
+}
+
+.gh-step.on {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.gh-step > i {
+  width: 14px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.gh-step.on > i {
+  color: var(--c, var(--ink));
+}
+
+.gh-step > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.gh-step > .dot {
+  margin-left: -3px;
+}
+
+/* The panel wears the colour of the screen on it. Registering --wash as a
+   colour lets it glide from one screen's colour to the next instead of
+   switching; unregistered, a custom property can't be interpolated. */
 @property --wash {
   syntax: "<color>";
   inherits: true;
   initial-value: rgba(0, 0, 0, 0);
 }
 
-.gh-card {
+.gh-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 8px 8px 8px 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--card-flat);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
   transition: --wash 0.45s ease-out;
 }
 
-/* Unlike the island's own wash, which rises from the floor, this light hangs
-   from the top, behind the head that names the screen: the floor belongs to
-   the list's fade (.gh-list.more), and a row fading into a glow reads as
-   neither. Sized in px so it reaches the head and no further, whatever the
-   card's height. */
-.gh-card.wash::after {
-  background: radial-gradient(420px 150px at 50% -60px, var(--wash) 0%, rgba(0, 0, 0, 0) 72%);
+/* A light hanging from the top, behind the head that names the screen — the
+   floor belongs to the list's fade (.gh-list.more), and a row fading into a
+   glow reads as neither. Sized in px so it reaches the head and no further. */
+.gh-main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(400px 130px at 50% -54px, var(--wash) 0%, rgba(0, 0, 0, 0) 72%);
+  pointer-events: none;
 }
 
-.gh-head-badge {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  flex: 0 0 auto;
-}
-
-.gh-head-badge .gh-block-icon {
-  margin-top: 0;
-}
-
-/* Same left inset as the chat: both leave room for the 44 pt Mochi. */
-.gh-body {
+.gh-main > * {
   position: relative;
-  z-index: 1;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 14px 10px 84px;
 }
 
 .gh-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
-  margin-left: -8px;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 7px 0 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.gh-head b {
+/* What is open, as an editor names its file: a tab with a mark and a name. */
+.gh-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  height: 22px;
+  padding: 0 9px 0 4px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.gh-tab b {
   font: 600 12px var(--font);
   color: var(--ink);
-  white-space: nowrap;
-}
-
-.gh-sub {
-  font: 400 11px var(--font);
-  color: var(--dim-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.gh-head-badge {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  flex: 0 0 auto;
+}
+
+.gh-head-badge .gh-block-icon {
+  margin-top: 0;
+  width: 16px;
+  height: 16px;
+}
+
+/* Where it sits, on the right, like the file's path. */
+.gh-sub {
+  font: 400 11px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding-right: 2px;
 }
 
 .gh-icon {
@@ -1498,6 +1625,7 @@ input[type="range"]::-webkit-slider-thumb {
   font: 400 11px var(--font);
   color: var(--dim-3);
   min-width: 0;
+  padding: 7px 12px 0;
 }
 
 .gh-status:empty {
@@ -1510,23 +1638,6 @@ input[type="range"]::-webkit-slider-thumb {
   text-overflow: ellipsis;
 }
 
-/* The island's own segmented control (settings view), left-aligned here. */
-.gh-tabs {
-  margin-left: 0;
-  padding-left: 2px;
-  gap: 2px;
-}
-
-.gh-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.gh-tabs button:not(.on):hover {
-  color: var(--dim-2);
-}
-
 .gh-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -1534,6 +1645,7 @@ input[type="range"]::-webkit-slider-thumb {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  padding: 6px 6px 8px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }

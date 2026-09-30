@@ -274,7 +274,7 @@ island.alert(params.get("view") === "overview" ? "overview" : "github");
 // The tab is the panel's own state; get there the way a person would.
 if (params.get("tab") === "projects") {
   requestAnimationFrame(() => {
-    document.querySelector<HTMLElement>(".gh-tabs button:nth-child(2)")?.click();
+    document.querySelector<HTMLElement>(".gh-trail .gh-step:nth-child(2)")?.click();
     if (params.has("sheet")) {
       requestAnimationFrame(() => document.querySelector<HTMLElement>(".gh-list .gh-row:nth-child(2)")?.click());
     }

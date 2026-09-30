@@ -61,4 +61,6 @@ export const ICONS = {
   dash: "M7 12h10",
   // a rocket, for deployments, stroked
   rocket: "M12 3c3 2.2 4.5 5.2 4.5 9l-1.8 3h-5.4l-1.8-3c0-3.8 1.5-6.8 4.5-9zM12 9.2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 1 1 0-3.2M9.3 15l-1.8 4.5 2.8-1.6M14.7 15l1.8 4.5-2.8-1.6",
+  // a pulse, for activity, stroked
+  pulse: "M3 12h4l2.5-6 5 12 2.5-6H21",
 } as const;

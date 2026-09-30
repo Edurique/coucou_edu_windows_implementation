@@ -186,12 +186,19 @@ function push(screen: Screen) {
   touch();
 }
 
-/** One level back. */
-function pop() {
-  const left = stack.pop();
-  if (left) stopSearching(left);
+/** Back up to `depth` screens deep — 0 for the lists. */
+function popTo(depth: number) {
+  while (stack.length > depth) {
+    const left = stack.pop();
+    if (left) stopSearching(left);
+  }
   motion = "back";
   touch();
+}
+
+/** One level back. */
+function pop() {
+  popTo(stack.length - 1);
 }
 
 function clearStack() {
@@ -1617,47 +1624,111 @@ export function buildGithub(actions: ViewActions): ViewHost {
   );
   // GitHub's red dot on the lists; the screen's own badge over them.
   const badge = h("span", { class: "gh-head-badge" });
+  // Like an editor's tab: what is open on the left, where it sits on the right.
   const head = h(
     "div",
     { class: "gh-head" },
-    back, badge, who, sub, h("div", { class: "grow" }), refreshBtn, openBtn,
+    back, h("div", { class: "gh-tab" }, badge, who), h("div", { class: "grow" }), sub, refreshBtn, openBtn,
   );
   const status = h("div", { class: "gh-status" });
-
-  const tabButtons: Record<Tab, HTMLButtonElement> = {
-    activity: h("button", { text: "Activity" }),
-    projects: h("button", { text: "Projects" }),
-  };
-  for (const [name, button] of Object.entries(tabButtons) as [Tab, HTMLButtonElement][]) {
-    button.addEventListener("click", () => {
-      if (tab === name) return;
-      actions.blip();
-      // Projects sits to the right of Activity: its list comes from there.
-      motion = name === "projects" ? "tab-right" : "tab-left";
-      tab = name;
-      State.notify();
-    });
-  }
-  const tabs = h("div", { class: "seg gh-tabs" }, tabButtons.activity, tabButtons.projects);
-
   const list = h("div", { class: "gh-list" });
-  const body = h("div", { class: "gh-body" }, head, status, tabs, list);
-  const card = h("div", { class: "card wash gh-card" }, body);
+  const main = h("div", { class: "gh-main" }, head, status, list);
+
+  // Mochi's column: Mochi himself (drawn by the island), whose GitHub this
+  // is, then the tabs — or, deeper, the way down.
+  const account = h("b", { text: "GitHub" });
+  const accountSub = h("span", { text: "GitHub" });
+  const trail = h("div", { class: "gh-trail" });
+  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, account, accountSub), trail);
+
+  const card = h("div", { class: "card gh-card" }, side, main);
   const el = h("div", { class: "view" }, card);
 
-  /** Says which kind of screen is up: the head's badge and the card's glow. */
+  /** Says which kind of screen is up: the tab's badge and the panel's light. */
   function dress(look: ScreenLook | null) {
     clear(badge);
     if (look) {
       badge.append(roundIcon(look.color, look.icon()));
-      // Stronger than the floor wash: the light is smaller, and partly behind the head.
-      card.style.setProperty("--wash", `${look.color}73`);
+      main.style.setProperty("--wash", `${look.color}73`);
     } else {
       badge.append(dot(GITHUB_RED, 7));
-      card.style.setProperty("--wash", "rgba(0,0,0,0)");
+      main.style.setProperty("--wash", "rgba(0,0,0,0)");
     }
   }
   dress(null);
+
+  function goTab(name: Tab) {
+    if (tab === name) return;
+    actions.blip();
+    // Projects sits under Activity: its list comes from the right, as before.
+    motion = name === "projects" ? "tab-right" : "tab-left";
+    tab = name;
+    State.notify();
+  }
+
+  /** One line of the column: a mark, a word, and where it leads, if anywhere. */
+  function step(label: string, icon: Element, on: boolean, color: string | null, go: (() => void) | null, extra?: Node) {
+    const el = go
+      ? h("button", { class: on ? "gh-step on" : "gh-step", onclick: go }, h("i", {}, icon), h("span", { text: label }), extra ?? null)
+      : h("div", { class: on ? "gh-step on" : "gh-step" }, h("i", {}, icon), h("span", { text: label }), extra ?? null);
+    if (color) el.style.setProperty("--c", color);
+    return el;
+  }
+
+  const TABS: Record<Tab, { label: string; icon: () => SVGSVGElement }> = {
+    activity: { label: "Activity", icon: () => svg(ICONS.pulse, 12, { stroke: 2 }) },
+    projects: { label: "Projects", icon: () => svg(ICONS.stack, 11) },
+  };
+
+  /** A screen's name in the column: short, it's only a way back. */
+  function stepLabel(s: Screen, login: string): string {
+    switch (s.type) {
+      case "project":
+        return repoName(s.fullName, login);
+      case "detail":
+        return detailHead(s);
+      case "diff":
+        return splitPath(s.file.path).base;
+      case "job":
+        return jobOf(s)?.job.name ?? "Job";
+    }
+  }
+
+  /**
+   * The lists: both tabs, the open one lit. Deeper: the way down from the tab
+   * it started on, the screen on show lit in its colour, every level above it
+   * a click away. Past four levels the middle folds into "…".
+   */
+  function drawTrail(d: GithubData | null) {
+    clear(trail);
+    if (!d) return;
+    const failing = d.repos.some((r) => r.build?.state === "failure");
+    const tabStep = (name: Tab, on: boolean, go: () => void) =>
+      step(TABS[name].label, TABS[name].icon(), on, null, go, name === "projects" && failing ? dot(GITHUB_RED, 5) : undefined);
+    if (stack.length === 0) {
+      trail.append(
+        tabStep("activity", tab === "activity", () => goTab("activity")),
+        tabStep("projects", tab === "projects", () => goTab("projects")),
+      );
+      return;
+    }
+    const levels = [
+      tabStep(tab, false, () => {
+        actions.blip();
+        popTo(0);
+      }),
+      ...stack.map((s, i) => {
+        const look = screenLook(s);
+        const last = i === stack.length - 1;
+        return step(stepLabel(s, d.login), look.icon(), last, look.color, last ? null : () => {
+          actions.blip();
+          popTo(i + 1);
+        });
+      }),
+    ];
+    const folded = step("…", h("span"), false, null, null);
+    trail.append(...(levels.length > 4 ? [levels[0], folded, ...levels.slice(-2)] : levels));
+  }
 
   /** The bottom fade says "there's more": it goes once the end is on screen. */
   const updateFade = () => {
@@ -1752,7 +1823,6 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
   /** A screen of the stack takes the list's place; the head names what it shows. */
   function drawScreen(screen: Screen, login: string) {
-    tabs.style.display = "none";
     clear(status);
     listTab = null;
     const scroll = screen === drawn ? list.scrollTop : 0;
@@ -1760,8 +1830,9 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clearList();
     const look = screenLook(screen);
     dress(look);
-    /** "Pull request · coucou": what kind of screen, then where. */
-    const kind = (where: string) => (where ? `${look.label} · ${where}` : look.label);
+    /** "Pull request · coucou": what kind of screen, then where — the kind only once. */
+    const kind = (where: string) =>
+      [look.label !== who.textContent && look.label, where].filter(Boolean).join(" · ");
     if (screen.type === "job") {
       const found = jobOf(screen);
       who.textContent = found?.job.name ?? "Job";
@@ -1850,25 +1921,24 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const done = motion;
       motion = null;
 
+      // Under Mochi, as under a Claude Code session's: who, then through what.
+      account.textContent = d && configured ? d.login : "GitHub";
+      accountSub.textContent = !configured ? "Not connected" : d ? "GitHub" : "Loading…";
+
       if (s && d && configured) {
         drawScreen(s, d.login);
+        drawTrail(d);
         play(done, null);
         return;
       }
 
       dress(null);
-      tabs.style.display = d && configured ? "" : "none";
-      for (const [name, button] of Object.entries(tabButtons)) {
-        button.classList.toggle("on", name === tab);
-      }
-      // A broken build is worth a glance even from the other tab.
-      const failing = d?.repos.some((r) => r.build?.state === "failure") ?? false;
-      clear(tabButtons.projects);
-      tabButtons.projects.append("Projects");
-      if (failing) tabButtons.projects.append(dot(GITHUB_RED, 5));
-
-      who.textContent = d ? `@${d.login}` : "GitHub";
-      sub.textContent = d?.name ?? "";
+      // A broken build is worth a glance even from the other tab: the column
+      // puts a red dot on Projects.
+      drawTrail(d && configured ? d : null);
+      drawn = null;
+      who.textContent = d && configured ? TABS[tab].label : "GitHub";
+      sub.textContent = "";
 
       clear(status);
       if (!configured) {
