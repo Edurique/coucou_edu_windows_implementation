@@ -1185,6 +1185,41 @@ input[type="range"]::-webkit-slider-thumb {
   height: 18px;
 }
 
+/* A card row that opens something as a whole (the GitHub card): it lights up
+   in its own colour under the mouse, like the pills. */
+.int-open {
+  width: 100%;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  background: var(--row);
+  transition: background 0.12s ease-out, transform 0.08s ease-out;
+}
+
+.int-open:hover {
+  background: var(--row-hover);
+}
+
+.int-open:active {
+  transform: scale(0.98);
+}
+
+/* The name takes the room, so the time and the `…` stay together on the right. */
+.int-open .int-name {
+  flex: 1 1 auto;
+}
+
+.int-open .int-more {
+  color: var(--dim-2);
+  transition: color 0.12s ease-out;
+}
+
+.int-open:hover .int-more,
+.int-open:hover .int-name {
+  color: var(--ink);
+}
+
 .int-back {
   width: 28px;
   height: 28px;

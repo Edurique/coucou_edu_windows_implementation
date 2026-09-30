@@ -241,26 +241,39 @@ export function repoName(repo: string, login: string): string {
 
 const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-/** The summary in the overview; `…` opens the full panel, like Vercel's detail. */
+/**
+ * A highlighted first row that opens something as a whole. A lone `…` was too
+ * small to read as clickable, so the row lights up in its own colour under the
+ * mouse, the way the pills do, and the `…` brightens with it.
+ */
+function openRow(accent: string, onOpen: () => void, ...children: Node[]): HTMLElement {
+  const row = h(
+    "button",
+    { class: "int-row first int-open", onclick: onOpen },
+    dot(accent, 5),
+    ...children,
+    h("i", { class: "int-more" }, svg(ICONS.ellipsis, 8)),
+  );
+  row.style.setProperty("--row", `${accent}14`);
+  row.style.setProperty("--row-hover", `${accent}33`);
+  return row;
+}
+
+/** The summary in the overview; its first row opens the full panel. */
 function githubCard(onPanel: () => void): HTMLElement {
   const d = githubData()!;
   const error = State.integrations.integration_github?.error ?? null;
-  const more = h(
-    "button",
-    { class: "int-more", title: "Open the GitHub panel", onclick: onPanel },
-    svg(ICONS.ellipsis, 8),
-  );
 
   const latest = d.activity[0];
   const row = latest
-    ? listRow(
+    ? openRow(
         ACTIVITY_STYLE[latest.kind].color,
-        true,
+        onPanel,
         h("span", { class: "int-name", text: latest.title }),
         h("span", { class: "int-ago", text: timeAgo(latest.at) }),
-        more,
       )
-    : listRow("#6B7079", true, h("span", { class: "int-name", text: "No recent activity" }), more);
+    : openRow("#6B7079", onPanel, h("span", { class: "int-name", text: "No recent activity" }));
+  row.title = "Open the GitHub panel";
 
   const card = h("div", { class: "int-card" }, header("#F4505E", "GitHub", `@${d.login}`));
   // What's shown is the last good answer; say why it isn't fresher.
