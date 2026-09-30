@@ -1396,6 +1396,31 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* ── GitHub panel (github view) ─────────────────────────────────────────── */
 
+/* The panel's card wears the colour of the screen on it, through the cards'
+   own wash (see .card.wash). Registering --wash as a colour lets it glide from
+   one screen's colour to the next instead of switching; unregistered, a
+   custom property can't be interpolated. */
+@property --wash {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(0, 0, 0, 0);
+}
+
+.gh-card {
+  transition: --wash 0.45s ease-out;
+}
+
+.gh-head-badge {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  flex: 0 0 auto;
+}
+
+.gh-head-badge .gh-block-icon {
+  margin-top: 0;
+}
+
 /* Same left inset as the chat: both leave room for the 44 pt Mochi. */
 .gh-body {
   position: relative;

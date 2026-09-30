@@ -1195,6 +1195,66 @@ function detailMood(d: GithubDetail): BotEmoteName | null {
   }
 }
 
+/**
+ * What kind of screen this is, said three ways at once so it can't be
+ * mistaken for another: an icon, a word, and a colour — for the head's badge
+ * and for the card's glow, the island's way of colouring a whole view
+ * (amber for a permission, red for an error).
+ */
+interface ScreenLook {
+  label: string;
+  color: string;
+  icon: () => SVGSVGElement;
+}
+
+const NEUTRAL = "#9398A1";
+
+function screenLook(screen: Screen): ScreenLook {
+  if (screen.type === "project") {
+    return {
+      label: "Project",
+      color: screen.data?.languages[0]?.color ?? NEUTRAL,
+      icon: () => svg(ICONS.stack, 10),
+    };
+  }
+  if (screen.type === "diff") {
+    return {
+      label: "File",
+      color: (FILE_STATUS[screen.file.status ?? ""] ?? MODIFIED).color,
+      icon: () => svg(ICONS.doc, 10),
+    };
+  }
+  const d = screen.data;
+  switch (screen.target.kind) {
+    // Grey until the state is known, so a loading sheet doesn't wear one colour
+    // and then switch to another.
+    case "pull": {
+      const state = d?.kind === "pull" ? d.state : null;
+      return {
+        label: "Pull request",
+        color: state ? PULL_STYLE[state].color : NEUTRAL,
+        icon: () => svg(state === "merged" ? ICONS.merge : ICONS.pullRequest, 10, { stroke: 2.2 }),
+      };
+    }
+    case "issue":
+      return {
+        label: "Issue",
+        color: d?.kind === "issue" ? ISSUE_COLOR[d.state] : NEUTRAL,
+        icon: () => svg(ICONS.issue, 10, { stroke: 2.2 }),
+      };
+    case "commits":
+      return {
+        label: screen.target.count === 1 ? "Commit" : "Commits",
+        color: "#3B9EFF",
+        icon: () => svg(ICONS.commit, 10, { stroke: 2.2 }),
+      };
+    case "release":
+      return { label: "Release", color: "#22D3EE", icon: () => svg(ICONS.tag, 10, { stroke: 2.2 }) };
+    case "project":
+      return { label: "Project", color: NEUTRAL, icon: () => svg(ICONS.stack, 10) };
+  }
+}
+
 /** "#12", "#4", "Commits", "v0.2.0" — what the head says while a sheet is open. */
 function detailHead(target: GithubTarget): string {
   switch (target.kind) {
@@ -1319,10 +1379,12 @@ export function buildGithub(actions: ViewActions): ViewHost {
     },
     svg(ICONS.arrowUpRight, 10),
   );
+  // GitHub's red dot on the lists; the screen's own badge over them.
+  const badge = h("span", { class: "gh-head-badge" });
   const head = h(
     "div",
     { class: "gh-head" },
-    back, dot(GITHUB_RED, 7), who, sub, h("div", { class: "grow" }), refreshBtn, openBtn,
+    back, badge, who, sub, h("div", { class: "grow" }), refreshBtn, openBtn,
   );
   const status = h("div", { class: "gh-status" });
 
@@ -1344,7 +1406,21 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
   const list = h("div", { class: "gh-list" });
   const body = h("div", { class: "gh-body" }, head, status, tabs, list);
-  const el = h("div", { class: "view" }, h("div", { class: "card" }, body));
+  const card = h("div", { class: "card wash gh-card" }, body);
+  const el = h("div", { class: "view" }, card);
+
+  /** Says which kind of screen is up: the head's badge and the card's glow. */
+  function dress(look: ScreenLook | null) {
+    clear(badge);
+    if (look) {
+      badge.append(roundIcon(look.color, look.icon()));
+      card.style.setProperty("--wash", `${look.color}52`);
+    } else {
+      badge.append(dot(GITHUB_RED, 7));
+      card.style.setProperty("--wash", "rgba(0,0,0,0)");
+    }
+  }
+  dress(null);
 
   /** The bottom fade says "there's more": it goes once the end is on screen. */
   const updateFade = () => {
@@ -1440,14 +1516,18 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clear(status);
     listTab = null;
     clearList();
+    const look = screenLook(screen);
+    dress(look);
+    /** "Pull request · coucou": what kind of screen, then where. */
+    const kind = (where: string) => (where ? `${look.label} · ${where}` : look.label);
     if (screen.type === "diff") {
       const { dir, base } = splitPath(screen.file.path);
       who.textContent = base;
-      sub.textContent = dir;
+      sub.textContent = kind(dir);
       list.append(diffView(screen.file, screen.url));
     } else if (screen.type === "project") {
       who.textContent = repoName(screen.fullName, login);
-      sub.textContent = screen.data?.languages[0]?.name ?? "";
+      sub.textContent = kind(screen.data?.languages[0]?.name ?? "");
       if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
       if (screen.data) {
         const content = projectSheet(screen.data);
@@ -1458,7 +1538,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       }
     } else {
       who.textContent = detailHead(screen.target);
-      sub.textContent = repoName(screen.target.repo, login);
+      sub.textContent = kind(repoName(screen.target.repo, login));
       if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
       if (screen.data) {
         const content = detailView(screen.data, login, screen.url);
@@ -1524,6 +1604,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
         return;
       }
 
+      dress(null);
       tabs.style.display = d && configured ? "" : "none";
       for (const [name, button] of Object.entries(tabButtons)) {
         button.classList.toggle("on", name === tab);
