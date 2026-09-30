@@ -149,7 +149,6 @@ export interface GithubPullDetail {
   url: string;
   state: "open" | "draft" | "merged" | "closed";
   author: string | null;
-  body: string | null;
   base: string | null;
   head: string | null;
   additions: number;

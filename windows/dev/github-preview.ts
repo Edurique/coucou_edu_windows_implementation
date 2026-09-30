@@ -63,7 +63,6 @@ const details: Record<GithubTarget["kind"], GithubDetail> = {
   pull: {
     kind: "pull", repo: "mochi/coucou", number: 12, title: "GitHub panel for the Windows island", url: "https://github.com",
     state: "merged", author: "mochi", base: "main", head: "windows-github-panel",
-    body: "Turns the GitHub pill into a real panel: recent activity, projects with their CI, the contribution graph, and a sheet for every line so GitHub itself is the last place to go.",
     additions: 1332, deletions: 64, changedFiles: 14, commits: 18, comments: 3, review: "approved",
     reviewers: [{ login: "louis", state: "approved" }, { login: "kirzen", state: "commented" }],
     labels: [{ name: "windows", color: "#0e8a16" }, { name: "enhancement", color: "#a2eeef" }],

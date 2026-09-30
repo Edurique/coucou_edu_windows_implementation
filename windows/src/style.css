@@ -1784,6 +1784,113 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--ink-2);
 }
 
+/* ── GitHub panel: moving between screens ───────────────────────────────── */
+/* The island's own entrance curve and rhythm (.view.on): a deeper screen
+   comes from the right, going back from the left, a day's activity rises. */
+
+.gh-list.gh-from-right {
+  animation: gh-from-right 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+.gh-list.gh-from-left {
+  animation: gh-from-left 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+@keyframes gh-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gh-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.gh-head.gh-swap b,
+.gh-head.gh-swap .gh-sub {
+  animation: gh-swap 0.26s ease-out both;
+}
+
+@keyframes gh-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.gh-below {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 0 0 auto;
+}
+
+.gh-below.gh-rise {
+  animation: gh-rise 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+/* Picking a day: the rest of the year steps back and the day steps forward,
+   instead of snapping. No fill mode — once over, the .picked rules hold. */
+.gh-grid.just-picked i:not(.pad):not(.on) {
+  animation: gh-dim 0.26s ease-out;
+}
+
+.gh-grid.just-picked i.on {
+  animation: gh-grow 0.3s cubic-bezier(0.3, 1.2, 0.4, 1);
+}
+
+.gh-grid.just-unpicked i:not(.pad) {
+  animation: gh-undim 0.26s ease-out;
+}
+
+@keyframes gh-dim {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.3;
+  }
+}
+
+@keyframes gh-undim {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes gh-grow {
+  from {
+    scale: 1;
+  }
+  to {
+    scale: 1.45;
+  }
+}
+
+/* The tab pill slides its colour across rather than switching. */
+.gh-tabs button {
+  transition: background-color 0.18s ease-out, color 0.18s ease-out;
+}
+
 /* A picked day, under the graph: a head like a sheet's, then the day's rows. */
 .gh-day {
   display: flex;

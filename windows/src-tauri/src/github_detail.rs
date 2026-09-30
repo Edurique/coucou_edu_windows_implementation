@@ -90,8 +90,6 @@ pub struct PullDetail {
     /// open, draft, merged or closed.
     pub state: &'static str,
     pub author: Option<String>,
-    /// The description as plain text, cut short.
-    pub body: Option<String>,
     pub base: Option<String>,
     pub head: Option<String>,
     pub additions: i64,
@@ -205,7 +203,7 @@ static CACHE: LazyLock<Mutex<HashMap<String, (u64, Detail)>>> = LazyLock::new(||
 
 const PULL_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
     repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
-    number title url state isDraft merged mergedAt createdAt closedAt bodyText \
+    number title url state isDraft merged mergedAt createdAt closedAt \
     additions deletions changedFiles baseRefName headRefName headRefOid reviewDecision \
     author { login } mergedBy { login } commits { totalCount } comments { totalCount } \
     latestReviews(first: 6) { nodes { state author { login } } } \
@@ -391,7 +389,6 @@ fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
         url: text(node.get("url"))?,
         state,
         author: text(node.pointer("/author/login")),
-        body: text(node.get("bodyText")).map(|b| excerpt(&b)),
         base: text(node.get("baseRefName")),
         head: text(node.get("headRefName")),
         additions: count("/additions"),
@@ -672,7 +669,7 @@ mod tests {
             "number": 12, "title": "Panel", "url": "https://github.com/edu/coucou/pull/12",
             "state": "MERGED", "isDraft": false, "merged": true, "mergedAt": "2026-09-30T18:00:00Z",
             "createdAt": "2026-09-28T10:00:00Z", "closedAt": "2026-09-30T18:00:00Z",
-            "bodyText": "Adds   the\npanel.", "additions": 320, "deletions": 40, "changedFiles": 9,
+            "additions": 320, "deletions": 40, "changedFiles": 9,
             "baseRefName": "main", "headRefName": "windows-github-panel", "reviewDecision": "APPROVED",
             "author": { "login": "edu" }, "mergedBy": { "login": "louis" },
             "commits": { "totalCount": 5 }, "comments": { "totalCount": 3 },
@@ -686,7 +683,6 @@ mod tests {
         assert_eq!((pr.state, pr.review, pr.merged_by.as_deref()), ("merged", Some("approved"), Some("louis")));
         assert_eq!((pr.base.as_deref(), pr.head.as_deref()), (Some("main"), Some("windows-github-panel")));
         assert_eq!((pr.commits, pr.comments, pr.changed_files), (5, 3, 9));
-        assert_eq!(pr.body.as_deref(), Some("Adds the panel."));
         assert_eq!(pr.reviewers, [Review { login: "louis".into(), state: "approved" }]);
         assert_eq!(pr.labels, [Label { name: "windows".into(), color: "#0e8a16".into() }]);
     }

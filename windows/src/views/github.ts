@@ -9,7 +9,7 @@ import { ICONS } from "./icons";
 import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
   Bridge,
-  type GithubActivity, type GithubBuild, type GithubCommitsDetail, type GithubContributions, type GithubDay,
+  type GithubActivity, type GithubBuild, type GithubCommitsDetail, type GithubContributions, type GithubData, type GithubDay,
   type GithubDeploy, type GithubDetail, type GithubFile, type GithubIssueDetail, type GithubLabel,
   type GithubProject, type GithubPull, type GithubPullDetail, type GithubReleaseDetail, type GithubRepo,
   type GithubTarget,
@@ -87,6 +87,8 @@ interface DayPick extends Pending<GithubDay> {
   index: number;
   /** "YYYY-MM-DD". */
   date: string;
+  /** The day's lines have been drawn once: later redraws don't replay their entrance. */
+  shown: boolean;
 }
 
 /**
@@ -97,6 +99,15 @@ interface DayPick extends Pending<GithubDay> {
 let stack: Screen[] = [];
 const top = (): Screen | null => stack[stack.length - 1] ?? null;
 let day: DayPick | null = null;
+
+/**
+ * How the next draw arrives: a deeper screen from the right, back from the
+ * left, a tab from its own side, a day's activity rising under the graph.
+ * Null — a refresh landing in the background — moves nothing, so what is being
+ * read never jumps.
+ */
+type Motion = "deeper" | "back" | "tab-right" | "tab-left" | "day" | "undo-day";
+let motion: Motion | null = null;
 /** Bumped on every change to a sheet or a day, so the view knows to redraw. */
 let stamp = 0;
 
@@ -161,6 +172,7 @@ async function load<T>(target: Pending<T>, isCurrent: () => boolean, fetch: () =
 function push(screen: Screen) {
   Sound.play("blip");
   stack.push(screen);
+  motion = "deeper";
   touch();
 }
 
@@ -168,6 +180,7 @@ function push(screen: Screen) {
 function pop() {
   const left = stack.pop();
   if (left) stopSearching(left);
+  motion = "back";
   touch();
 }
 
@@ -234,14 +247,16 @@ function pickDay(index: number, date: string) {
     return;
   }
   if (day) stopSearching(day);
-  const picked: DayPick = { ...pending<GithubDay>(), index, date };
+  const picked: DayPick = { ...pending<GithubDay>(), index, date, shown: false };
   day = picked;
+  motion = "day";
   void loadDay(picked);
 }
 
 function unpickDay() {
   if (day) stopSearching(day);
   day = null;
+  motion = "undo-day";
   touch();
 }
 
@@ -269,6 +284,8 @@ export function enterGithubPanel() {
   if (day) stopSearching(day);
   day = null;
   clearStack();
+  // The island's own view transition brings the panel in; the graph sweeps.
+  motion = null;
   touch();
   const d = githubData();
   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);
@@ -440,11 +457,13 @@ interface GraphOptions {
   tint: ViewActions["tintMochi"];
   /** The picked day, if any: the others fade, as on GitHub. */
   picked: number | null;
+  /** A day was just picked or let go: the fade plays instead of snapping. */
+  settle: "picked" | "unpicked" | null;
   onPick(index: number, date: string): void;
 }
 
 function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement {
-  const { sweep, tint, picked } = o;
+  const { sweep, tint, picked, settle } = o;
   // Sunday-first columns, like the profile page; GitHub's first week is partial.
   const offset = dayDate(c.start, 0).getUTCDay();
   const weeks = Math.ceil((offset + c.counts.length) / 7);
@@ -466,7 +485,12 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
   }
 
   const grid = h("div", {
-    class: ["gh-grid", sweep ? "sweep" : "", picked != null ? "picked" : ""].join(" ").trim(),
+    class: [
+      "gh-grid",
+      sweep ? "sweep" : "",
+      picked != null ? "picked" : "",
+      settle ? `just-${settle}` : "",
+    ].join(" ").trim(),
   });
   for (let i = 0; i < offset; i++) grid.append(h("i", { class: "pad" }));
   c.counts.forEach((_, i) => {
@@ -589,8 +613,11 @@ function daySection(pick: DayPick, login: string, onClose: () => void): HTMLElem
   if (pick.data.items.length === 0 && pick.data.privateCount === 0) {
     section.append(h("div", { class: "int-empty", text: "Nothing public that day." }));
   }
-  if (pick.react) {
+  // The day's lines come in one by one the first time they are drawn — after a
+  // wait, or at once from the cache.
+  if (pick.react || !pick.shown) {
     pick.react = false;
+    pick.shown = true;
     section.classList.add("enter");
     Array.from(section.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
   }
@@ -1022,7 +1049,6 @@ function pullView(p: GithubPullDetail, login: string): HTMLElement {
       sub: line(commits, p.comments > 0 && comments),
     }),
     ...fileList(p.files, p.url, "Files"),
-    description(p.body),
   );
 }
 
@@ -1308,6 +1334,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
     button.addEventListener("click", () => {
       if (tab === name) return;
       actions.blip();
+      // Projects sits to the right of Activity: its list comes from there.
+      motion = name === "projects" ? "tab-right" : "tab-left";
       tab = name;
       State.notify();
     });
@@ -1330,6 +1358,28 @@ export function buildGithub(actions: ViewActions): ViewHost {
   let refreshing = false;
   let key = "";
   let listTab: Tab | null = null;
+  /** What the drawn graph shows, and what sits under it (see sync). */
+  let graphKey = "";
+  let below: HTMLElement | null = null;
+
+  /** Everything under the graph — a picked day, or the recent activity — as one piece. */
+  function belowSection(d: GithubData): HTMLElement {
+    const section = h("div", { class: "gh-below" });
+    if (day && d.contributions) {
+      section.append(
+        daySection(day, d.login, () => {
+          actions.blip();
+          unpickDay();
+        }),
+      );
+      return section;
+    }
+    if (d.activity.length === 0) {
+      section.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
+    }
+    for (const a of d.activity) section.append(activityRow(a, d.login));
+    return section;
+  }
 
   /**
    * A graph removed from under the mouse never gets its mouseleave, which
@@ -1338,6 +1388,38 @@ export function buildGithub(actions: ViewActions): ViewHost {
   function clearList() {
     clear(list);
     actions.tintMochi(null);
+  }
+
+  const MOTIONS = ["gh-from-right", "gh-from-left", "gh-rise", "gh-swap"];
+
+  /** Restarts a one-off animation on an element that may have played it before. */
+  function replay(el: HTMLElement, name: string) {
+    el.classList.remove(...MOTIONS);
+    void el.offsetWidth;
+    el.classList.add(name);
+  }
+
+  /**
+   * The motion the last action asked for, on what it changed: the whole list
+   * (and the head's words) for a screen, the list for a tab, only what sits
+   * under the graph for a day — the graph itself stays put.
+   */
+  function play(done: Motion | null, below: HTMLElement | null) {
+    switch (done) {
+      case "deeper":
+      case "back":
+        replay(list, done === "deeper" ? "gh-from-right" : "gh-from-left");
+        replay(head, "gh-swap");
+        break;
+      case "tab-right":
+      case "tab-left":
+        replay(list, done === "tab-right" ? "gh-from-right" : "gh-from-left");
+        break;
+      case "day":
+      case "undo-day":
+        if (below) replay(below, "gh-rise");
+        break;
+    }
   }
 
   /**
@@ -1432,8 +1514,13 @@ export function buildGithub(actions: ViewActions): ViewHost {
       if (next === key) return;
       key = next;
 
+      // Taken now: whatever draws next is what the action was about.
+      const done = motion;
+      motion = null;
+
       if (s && d && configured) {
         drawScreen(s, d.login);
+        play(done, null);
         return;
       }
 
@@ -1478,7 +1565,24 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const sweep = freshTab || sweepNext;
       sweepNext = false;
       listTab = tab;
+
+      // A picked day loads in two or three draws (the loader, then the data).
+      // Rebuilding the graph on each would cut its fade short: while nothing
+      // the graph shows has changed, only what is under it is redrawn.
+      const nextGraphKey = d && tab === "activity" ? [d.fetchedAt, d.login, day?.index ?? ""].join("|") : "";
+      if (!sweep && nextGraphKey && nextGraphKey === graphKey && below?.isConnected && d) {
+        const fresh = belowSection(d);
+        below.replaceWith(fresh);
+        below = fresh;
+        list.scrollTop = scroll;
+        updateFade();
+        play(done, below);
+        return;
+      }
+      graphKey = nextGraphKey;
+
       clearList();
+      below = null;
       if (!d || !configured) {
         updateFade();
         return;
@@ -1499,6 +1603,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
               sweep,
               tint: actions.tintMochi,
               picked: picked?.index ?? null,
+              settle: done === "day" ? "picked" : done === "undo-day" ? "unpicked" : null,
               onPick: (index, date) => {
                 actions.blip();
                 pickDay(index, date);
@@ -1508,22 +1613,12 @@ export function buildGithub(actions: ViewActions): ViewHost {
           // Mochi wears the picked day's colour for as long as it is picked.
           if (picked) actions.tintMochi(mochiShade(d.contributions, picked.index));
         }
-        if (picked) {
-          list.append(
-            daySection(picked, d.login, () => {
-              actions.blip();
-              unpickDay();
-            }),
-          );
-        } else {
-          if (d.activity.length === 0) {
-            list.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
-          }
-          for (const a of d.activity) list.append(activityRow(a, d.login));
-        }
+        below = belowSection(d);
+        list.append(below);
       }
       list.scrollTop = scroll;
       updateFade();
+      play(done, below);
     },
   };
 }
