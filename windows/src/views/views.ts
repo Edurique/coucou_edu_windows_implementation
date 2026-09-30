@@ -11,7 +11,7 @@ import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
-import { buildGithub, refreshGithubIfStale } from "./github";
+import { buildGithub, enterGithubPanel } from "./github";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -160,7 +160,7 @@ function buildOverview(actions: ViewActions): ViewHost {
     openSettings: () => actions.openSettingsWindow(),
     openPanel() {
       actions.blip();
-      refreshGithubIfStale();
+      enterGithubPanel();
       actions.setView("github");
     },
   };

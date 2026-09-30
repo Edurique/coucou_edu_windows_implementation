@@ -3,7 +3,7 @@
 // Not part of the app bundle. `npm run dev`, then /dev/github-preview.html.
 
 import "../src/style.css";
-import type { GithubActivity, GithubData, GithubRepo } from "../src/core/bridge";
+import { Bridge, type GithubActivity, type GithubData, type GithubProject, type GithubRepo } from "../src/core/bridge";
 import { State } from "../src/core/state";
 import { Island } from "../src/island/island";
 
@@ -56,6 +56,42 @@ const data: GithubData = {
   fetchedAt: Date.now() - (params.has("error") ? 12 * 60_000 : 0),
 };
 
+// A project's sheet normally comes from Rust; here every project gets this one.
+const runState = ["success", "success", "failure", "success", "success", "neutral", "success", "success"] as const;
+const sheet: GithubProject = {
+  fullName: "mochi/coucou",
+  url: "https://github.com",
+  description: "A tiny friend that lives at the top of your screen and keeps an eye on your Claude Code sessions.",
+  homepage: "https://coucou.example.com",
+  private: false,
+  createdAt: "2024-03-12T09:00:00Z",
+  stars: 4,
+  forks: 1,
+  languages: [
+    { name: "Rust", color: "#dea584", share: 0.46 },
+    { name: "TypeScript", color: "#3178c6", share: 0.38 },
+    { name: "CSS", color: "#663399", share: 0.12 },
+    { name: "Other", color: null, share: 0.04 },
+  ],
+  runs: runState.map((state, i) => ({
+    id: i, state, workflow: "CI", branch: "main",
+    title: i === 0 ? "Keep the last snapshot through an error" : "Earlier work",
+    actor: "mochi", url: "https://github.com",
+    startedAt: minutesAgo(62 + i * 90), updatedAt: minutesAgo(60 + i * 90),
+  })),
+  pull: {
+    number: 12, title: "GitHub panel for the Windows island", url: "https://github.com",
+    state: "merged", author: "mochi", additions: 1320, deletions: 94, changedFiles: 14,
+    review: "approved", comments: 3, at: minutesAgo(4),
+  },
+  deploy: {
+    environment: "Production", state: "success", url: "https://coucou.example.com",
+    creator: "vercel", sha: "a1b2c3d", at: minutesAgo(58),
+  },
+  missing: params.has("locked") ? ["deployments"] : [],
+};
+Bridge.githubProject = async () => sheet;
+
 State.loadIntegrationTasks();
 State.integrations.integration_github = {
   data: data as unknown as Record<string, unknown>,
@@ -72,5 +108,10 @@ island.alert(params.get("view") === "overview" ? "overview" : "github");
 
 // The tab is the panel's own state; get there the way a person would.
 if (params.get("tab") === "projects") {
-  requestAnimationFrame(() => document.querySelector<HTMLElement>(".gh-tabs button:nth-child(2)")?.click());
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>(".gh-tabs button:nth-child(2)")?.click();
+    if (params.has("sheet")) {
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(".gh-list .gh-row:nth-child(2)")?.click());
+    }
+  });
 }

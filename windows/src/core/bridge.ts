@@ -101,7 +101,67 @@ export const Bridge = {
   // ── GitHub ────────────────────────────────────────────────────────────────
   /** Settings → Test connection. Runs on the stored token; the token never comes back. */
   githubTest: () => callOrThrow<GithubAccount>("github_test"),
+  /** A project's sheet, fetched on the click. `force` skips the minute of cache. */
+  githubProject: (fullName: string, force: boolean) =>
+    callOrThrow<GithubProject>("github_project", { fullName, force }),
 };
+
+/** The sheet behind a click on a project — the Project struct in github.rs. */
+export interface GithubProject {
+  fullName: string;
+  url: string;
+  description: string | null;
+  homepage: string | null;
+  private: boolean;
+  createdAt: string | null;
+  stars: number;
+  forks: number;
+  /** Largest first, the tail folded into "Other" (color null). */
+  languages: { name: string; color: string | null; share: number }[];
+  /** Newest first, up to eight — the CI streak. */
+  runs: GithubRun[];
+  pull: GithubPull | null;
+  deploy: GithubDeploy | null;
+  /** What the token may not read here: "actions", "deployments", "pull requests". */
+  missing: string[];
+}
+
+export interface GithubRun {
+  id: number;
+  state: GithubBuild["state"];
+  workflow: string;
+  branch: string | null;
+  /** The commit or pull request the run is about. */
+  title: string | null;
+  actor: string | null;
+  url: string;
+  startedAt: string | null;
+  updatedAt: string;
+}
+
+export interface GithubPull {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "draft" | "merged" | "closed";
+  author: string | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  review: "approved" | "changes requested" | "review required" | null;
+  comments: number;
+  /** Merged at, or last update. */
+  at: string;
+}
+
+export interface GithubDeploy {
+  environment: string;
+  state: "success" | "failure" | "running" | "inactive";
+  url: string | null;
+  creator: string | null;
+  sha: string | null;
+  at: string;
+}
 
 /** `State.integrations.integration_github.data` — the Snapshot in github.rs. */
 export interface GithubData {

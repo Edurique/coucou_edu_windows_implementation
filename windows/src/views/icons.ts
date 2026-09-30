@@ -59,4 +59,6 @@ export const ICONS = {
   lock: "M8 11V8a4 4 0 0 1 8 0v3M6 11h12v9H6z",
   // minus, stroked
   dash: "M7 12h10",
+  // a rocket, for deployments, stroked
+  rocket: "M12 3c3 2.2 4.5 5.2 4.5 9l-1.8 3h-5.4l-1.8-3c0-3.8 1.5-6.8 4.5-9zM12 9.2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 1 1 0-3.2M9.3 15l-1.8 4.5 2.8-1.6M14.7 15l1.8 4.5-2.8-1.6",
 } as const;

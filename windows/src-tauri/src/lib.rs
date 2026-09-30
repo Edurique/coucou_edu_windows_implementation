@@ -298,6 +298,13 @@ async fn github_test() -> Result<github::Account, String> {
     github::test().await
 }
 
+/// A click on a project in the GitHub panel: its CI, last pull request and last
+/// deployment. On demand only, cached a minute; `force` is the ↻ button.
+#[tauri::command]
+async fn github_project(full_name: String, force: bool) -> Result<github::Project, String> {
+    github::project(&full_name, force).await
+}
+
 /// Opens the configured n8n instance — the URL lives in the Credential Manager.
 #[tauri::command]
 fn open_n8n() {
@@ -423,6 +430,7 @@ pub fn run() {
             secret_set,
             secret_clear,
             github_test,
+            github_project,
             refresh_integration,
             open_n8n,
             open_settings_window,

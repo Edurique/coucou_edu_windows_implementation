@@ -199,12 +199,25 @@ impl Gh {
     /// comes back as data, with those fields null; only a query that produced no
     /// data at all is an error.
     pub async fn graphql(&self, query: &str) -> Result<Value, GhError> {
+        self.graphql_with(query, json!({})).await.map(|(data, _)| data)
+    }
+
+    /// Same, with variables — so a repository name is never pasted into the
+    /// query text — and the errors of a partial answer, which say which fields
+    /// the token was refused.
+    pub async fn graphql_with(&self, query: &str, variables: Value) -> Result<(Value, Vec<Value>), GhError> {
         let request = self
             .request(Method::POST, &format!("{API}/graphql"))
-            .json(&json!({ "query": query }));
+            .json(&json!({ "query": query, "variables": variables }));
         let reply = self.send(request, "/graphql").await?.ok_or(GhError::BadResponse)?;
+        let errors = reply
+            .json
+            .get("errors")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         match reply.json.get("data") {
-            Some(data) if !data.is_null() => Ok(data.clone()),
+            Some(data) if !data.is_null() => Ok((data.clone(), errors)),
             _ => {
                 // An HTTP 200 that failed: `send` logged nothing. Only GitHub's
                 // own words about the query — no data, no token.
@@ -783,6 +796,306 @@ fn parse_event(event: &Value) -> Option<Activity> {
     Some(Activity { id, kind, repo, title, detail, url, at })
 }
 
+// ── Project sheet (a click on a project) ──────────────────────────────────────
+//
+// Fetched on demand only — never by the tick — and kept a minute, so going
+// back and forth between projects costs nothing.
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub full_name: String,
+    pub url: String,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub private: bool,
+    pub created_at: Option<String>,
+    pub stars: i64,
+    pub forks: i64,
+    /// Largest first, the long tail folded into "Other".
+    pub languages: Vec<LanguageShare>,
+    /// Newest first.
+    pub runs: Vec<Run>,
+    /// The pull request touched most recently, whoever opened it.
+    pub pull: Option<Pull>,
+    pub deploy: Option<Deploy>,
+    /// Sections the token may not read for this repository: "actions",
+    /// "deployments", "pull requests". The sheet says so rather than looking empty.
+    pub missing: Vec<&'static str>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageShare {
+    pub name: String,
+    pub color: Option<String>,
+    /// 0…1 of the repository's code.
+    pub share: f64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub id: u64,
+    pub state: &'static str,
+    pub workflow: String,
+    pub branch: Option<String>,
+    /// The commit or pull request title the run is about.
+    pub title: Option<String>,
+    pub actor: Option<String>,
+    pub url: String,
+    pub started_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pull {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// open, draft, merged or closed.
+    pub state: &'static str,
+    pub author: Option<String>,
+    pub additions: i64,
+    pub deletions: i64,
+    pub changed_files: i64,
+    /// approved, changes requested or review required; None when not asked.
+    pub review: Option<&'static str>,
+    pub comments: i64,
+    /// Merged at for a merged one, last update otherwise.
+    pub at: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Deploy {
+    pub environment: String,
+    /// success, failure, running or inactive (replaced by a newer one).
+    pub state: &'static str,
+    /// Where it went live, when the deployment says.
+    pub url: Option<String>,
+    pub creator: Option<String>,
+    pub sha: Option<String>,
+    pub at: String,
+}
+
+const PROJECT_QUERY: &str = "query($owner: String!, $name: String!) { \
+    repository(owner: $owner, name: $name) { \
+    nameWithOwner url description homepageUrl isPrivate createdAt stargazerCount forkCount \
+    languages(first: 6, orderBy: {field: SIZE, direction: DESC}) { totalSize edges { size node { name color } } } \
+    pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { \
+    number title url state isDraft merged mergedAt updatedAt additions deletions changedFiles \
+    reviewDecision author { login } comments { totalCount } } } \
+    deployments(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { \
+    environment createdAt commitOid creator { login } latestStatus { state environmentUrl createdAt } } } } }";
+
+/// Runs shown as the CI streak.
+const STREAK: usize = 8;
+const PROJECT_TTL: u64 = 60;
+/// Languages named in the bar before the rest becomes "Other".
+const MAX_LANGUAGES: usize = 4;
+
+static PROJECTS: LazyLock<Mutex<HashMap<String, (u64, Project)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// "owner/name" with nothing else in it: the name ends up in a URL path.
+fn split_full_name(full_name: &str) -> Option<(&str, &str)> {
+    let (owner, name) = full_name.split_once('/')?;
+    let valid = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    (valid(owner) && valid(name)).then_some((owner, name))
+}
+
+/// True when a partial GraphQL answer refused the field `field`.
+fn refused(errors: &[Value], field: &str) -> bool {
+    errors.iter().any(|e| {
+        e.get("path")
+            .and_then(Value::as_array)
+            .is_some_and(|path| path.iter().any(|p| p.as_str() == Some(field)))
+    })
+}
+
+pub async fn project(full_name: &str, force: bool) -> Result<Project, String> {
+    let (owner, name) = split_full_name(full_name).ok_or("Unknown repository")?;
+    let now = unix_now();
+    if !force {
+        if let Some((at, cached)) = PROJECTS.lock().unwrap().get(full_name) {
+            if now.saturating_sub(*at) < PROJECT_TTL {
+                return Ok(cached.clone());
+            }
+        }
+    }
+
+    let gh = Gh::from_store().map_err(|e| e.message())?;
+    let (data, errors) = gh
+        .graphql_with(PROJECT_QUERY, json!({ "owner": owner, "name": name }))
+        .await
+        .map_err(|e| e.message())?;
+    let repo = data
+        .get("repository")
+        .filter(|r| !r.is_null())
+        .ok_or_else(|| GhError::NotFound.message())?;
+
+    let mut missing = Vec::new();
+    if refused(&errors, "pullRequests") {
+        missing.push("pull requests");
+    }
+    if refused(&errors, "deployments") {
+        missing.push("deployments");
+    }
+    let runs = match gh.get(&format!("/repos/{owner}/{name}/actions/runs?per_page={STREAK}")).await {
+        Ok(reply) => parse_runs(&reply.json),
+        Err(GhError::Forbidden) => {
+            missing.push("actions");
+            Vec::new()
+        }
+        // Actions switched off for this repository.
+        Err(GhError::NotFound) => Vec::new(),
+        Err(e) => return Err(e.message()),
+    };
+
+    let project = parse_project(repo, runs, missing).ok_or_else(|| GhError::BadResponse.message())?;
+    PROJECTS
+        .lock()
+        .unwrap()
+        .insert(full_name.to_string(), (now, project.clone()));
+    Ok(project)
+}
+
+fn parse_runs(json: &Value) -> Vec<Run> {
+    let Some(runs) = json.get("workflow_runs").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    runs.iter()
+        .filter_map(|run| {
+            let status = run.get("status").and_then(Value::as_str).unwrap_or("completed");
+            let conclusion = run.get("conclusion").and_then(Value::as_str);
+            Some(Run {
+                id: run.get("id")?.as_u64()?,
+                state: build_state(status, conclusion),
+                workflow: text(run.get("name")).unwrap_or_else(|| "Workflow".into()),
+                branch: text(run.get("head_branch")),
+                title: text(run.get("display_title"))
+                    .or_else(|| text(run.pointer("/head_commit/message")))
+                    .and_then(|t| t.lines().next().map(str::to_string)),
+                actor: text(run.pointer("/triggering_actor/login"))
+                    .or_else(|| text(run.pointer("/actor/login"))),
+                url: text(run.get("html_url"))?,
+                started_at: text(run.get("run_started_at")),
+                updated_at: text(run.get("updated_at")).or_else(|| text(run.get("created_at")))?,
+            })
+        })
+        .take(STREAK)
+        .collect()
+}
+
+fn parse_languages(languages: Option<&Value>) -> Vec<LanguageShare> {
+    let Some(languages) = languages else { return Vec::new() };
+    let total = languages.get("totalSize").and_then(Value::as_f64).unwrap_or(0.0);
+    let Some(edges) = languages.get("edges").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    if total <= 0.0 {
+        return Vec::new();
+    }
+    let mut shares: Vec<LanguageShare> = edges
+        .iter()
+        .filter_map(|edge| {
+            Some(LanguageShare {
+                name: text(edge.pointer("/node/name"))?,
+                color: text(edge.pointer("/node/color")),
+                share: edge.get("size")?.as_f64()? / total,
+            })
+        })
+        .collect();
+    if shares.len() > MAX_LANGUAGES {
+        let rest: f64 = shares.drain(MAX_LANGUAGES..).map(|l| l.share).sum();
+        shares.push(LanguageShare { name: "Other".into(), color: None, share: rest });
+    }
+    // What the six largest don't cover also counts as "Other".
+    let covered: f64 = shares.iter().map(|l| l.share).sum();
+    if covered < 0.995 {
+        match shares.last_mut().filter(|l| l.name == "Other") {
+            Some(other) => other.share += 1.0 - covered,
+            None => shares.push(LanguageShare { name: "Other".into(), color: None, share: 1.0 - covered }),
+        }
+    }
+    shares
+}
+
+fn parse_pull(node: &Value) -> Option<Pull> {
+    let merged = node.get("merged").and_then(Value::as_bool).unwrap_or(false);
+    let state = match (merged, node.get("state").and_then(Value::as_str)?) {
+        (true, _) => "merged",
+        (false, "CLOSED") => "closed",
+        _ if node.get("isDraft").and_then(Value::as_bool).unwrap_or(false) => "draft",
+        _ => "open",
+    };
+    let review = match node.get("reviewDecision").and_then(Value::as_str) {
+        Some("APPROVED") => Some("approved"),
+        Some("CHANGES_REQUESTED") => Some("changes requested"),
+        Some("REVIEW_REQUIRED") => Some("review required"),
+        _ => None,
+    };
+    let merged_at = if merged { text(node.get("mergedAt")) } else { None };
+    let at = merged_at.or_else(|| text(node.get("updatedAt")))?;
+    Some(Pull {
+        number: node.get("number")?.as_u64()?,
+        title: text(node.get("title")).unwrap_or_else(|| "Untitled".into()),
+        url: text(node.get("url"))?,
+        state,
+        author: text(node.pointer("/author/login")),
+        additions: node.get("additions").and_then(Value::as_i64).unwrap_or(0),
+        deletions: node.get("deletions").and_then(Value::as_i64).unwrap_or(0),
+        changed_files: node.get("changedFiles").and_then(Value::as_i64).unwrap_or(0),
+        review,
+        comments: node.pointer("/comments/totalCount").and_then(Value::as_i64).unwrap_or(0),
+        at,
+    })
+}
+
+fn parse_deploy(node: &Value) -> Option<Deploy> {
+    let status = node.get("latestStatus").filter(|s| !s.is_null());
+    let state = match status.and_then(|s| s.get("state")).and_then(Value::as_str) {
+        Some("SUCCESS") => "success",
+        Some("FAILURE") | Some("ERROR") => "failure",
+        Some("INACTIVE") => "inactive",
+        _ => "running",
+    };
+    Some(Deploy {
+        environment: text(node.get("environment")).unwrap_or_else(|| "production".into()),
+        state,
+        url: text(status.and_then(|s| s.get("environmentUrl"))),
+        creator: text(node.pointer("/creator/login")),
+        sha: text(node.get("commitOid")).map(|sha| sha.chars().take(7).collect()),
+        at: text(status.and_then(|s| s.get("createdAt"))).or_else(|| text(node.get("createdAt")))?,
+    })
+}
+
+fn parse_project(repo: &Value, runs: Vec<Run>, missing: Vec<&'static str>) -> Option<Project> {
+    let full_name = text(repo.get("nameWithOwner"))?;
+    Some(Project {
+        url: text(repo.get("url")).unwrap_or_else(|| format!("https://github.com/{full_name}")),
+        full_name,
+        description: text(repo.get("description")),
+        homepage: text(repo.get("homepageUrl")),
+        private: repo.get("isPrivate").and_then(Value::as_bool).unwrap_or(false),
+        created_at: text(repo.get("createdAt")),
+        stars: repo.get("stargazerCount").and_then(Value::as_i64).unwrap_or(0),
+        forks: repo.get("forkCount").and_then(Value::as_i64).unwrap_or(0),
+        languages: parse_languages(repo.get("languages")),
+        runs,
+        pull: repo.pointer("/pullRequests/nodes/0").and_then(parse_pull),
+        deploy: repo.pointer("/deployments/nodes/0").and_then(parse_deploy),
+        missing,
+    })
+}
+
 // ── Connection test (settings window) ─────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -868,6 +1181,8 @@ pub async fn test() -> Result<Account, String> {
         checks.push(check("Pull requests", pulls));
         let runs = gh.get(&format!("/repos/{repo}/actions/runs?per_page=1")).await.map(|_| ());
         checks.push(check("Actions", runs));
+        let deployments = gh.get(&format!("/repos/{repo}/deployments?per_page=1")).await.map(|_| ());
+        checks.push(check("Deployments", deployments));
     }
 
     let events = gh.get(&format!("/users/{login}/events?per_page=1")).await.map(|_| ());
@@ -1124,6 +1439,96 @@ mod tests {
     fn a_repository_without_workflows_has_no_build() {
         assert_eq!(parse_run(&json!({ "total_count": 0, "workflow_runs": [] })), None);
         assert_eq!(parse_run(&json!({})), None);
+    }
+
+    #[test]
+    fn only_a_plain_owner_slash_name_reaches_a_url() {
+        assert_eq!(split_full_name("edu/coucou"), Some(("edu", "coucou")));
+        assert_eq!(split_full_name("louis-cfm/my_repo.rs"), Some(("louis-cfm", "my_repo.rs")));
+        for bad in ["coucou", "edu/", "/coucou", "edu/../x", "edu/co?x=1", "a/b/c", "../etc", "edu/.."] {
+            assert_eq!(split_full_name(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_refused_field_is_found_in_the_error_path() {
+        let errors = vec![json!({ "type": "FORBIDDEN", "path": ["repository", "deployments"] })];
+        assert!(refused(&errors, "deployments"));
+        assert!(!refused(&errors, "pullRequests"));
+        assert!(!refused(&[], "deployments"));
+    }
+
+    #[test]
+    fn languages_keep_four_and_fold_the_rest() {
+        let langs = json!({ "totalSize": 1000, "edges": [
+            { "size": 500, "node": { "name": "Rust", "color": "#dea584" } },
+            { "size": 200, "node": { "name": "TypeScript", "color": "#3178c6" } },
+            { "size": 100, "node": { "name": "CSS", "color": "#663399" } },
+            { "size": 80, "node": { "name": "HTML", "color": "#e34c26" } },
+            { "size": 60, "node": { "name": "Shell", "color": "#89e051" } },
+            { "size": 40, "node": { "name": "Nix", "color": null } },
+        ]});
+        let shares = parse_languages(Some(&langs));
+        let names: Vec<&str> = shares.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Rust", "TypeScript", "CSS", "HTML", "Other"]);
+        // Shell + Nix + the 2 % the six largest didn't cover.
+        assert!((shares[4].share - 0.12).abs() < 1e-9);
+        assert!((shares.iter().map(|l| l.share).sum::<f64>() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_empty_repository_has_no_language_bar() {
+        assert!(parse_languages(Some(&json!({ "totalSize": 0, "edges": [] }))).is_empty());
+        assert!(parse_languages(None).is_empty());
+    }
+
+    #[test]
+    fn a_pull_request_says_where_it_stands() {
+        let pr = |merged: bool, state: &str, draft: bool| json!({
+            "number": 12, "title": "Panel", "url": "https://github.com/edu/coucou/pull/12",
+            "state": state, "isDraft": draft, "merged": merged,
+            "mergedAt": if merged { json!("2026-09-30T18:00:00Z") } else { Value::Null },
+            "updatedAt": "2026-09-30T19:00:00Z", "additions": 320, "deletions": 40, "changedFiles": 9,
+            "reviewDecision": "APPROVED", "author": { "login": "edu" }, "comments": { "totalCount": 3 },
+        });
+        let merged = parse_pull(&pr(true, "MERGED", false)).unwrap();
+        assert_eq!((merged.state, merged.at.as_str()), ("merged", "2026-09-30T18:00:00Z"));
+        assert_eq!((merged.additions, merged.deletions, merged.comments), (320, 40, 3));
+        assert_eq!(merged.review, Some("approved"));
+        assert_eq!(parse_pull(&pr(false, "OPEN", true)).unwrap().state, "draft");
+        assert_eq!(parse_pull(&pr(false, "OPEN", false)).unwrap().state, "open");
+        let closed = parse_pull(&pr(false, "CLOSED", false)).unwrap();
+        assert_eq!((closed.state, closed.at.as_str()), ("closed", "2026-09-30T19:00:00Z"));
+    }
+
+    #[test]
+    fn a_deployment_reads_its_latest_status() {
+        let live = json!({
+            "environment": "Production", "createdAt": "2026-09-30T10:00:00Z",
+            "commitOid": "a1b2c3d4e5f6", "creator": { "login": "vercel" },
+            "latestStatus": { "state": "SUCCESS", "environmentUrl": "https://coucou.vercel.app", "createdAt": "2026-09-30T10:02:00Z" },
+        });
+        let d = parse_deploy(&live).unwrap();
+        assert_eq!((d.state, d.environment.as_str(), d.sha.as_deref()), ("success", "Production", Some("a1b2c3d")));
+        assert_eq!((d.url.as_deref(), d.at.as_str()), (Some("https://coucou.vercel.app"), "2026-09-30T10:02:00Z"));
+
+        let pending = json!({ "environment": "Preview", "createdAt": "2026-09-30T11:00:00Z", "latestStatus": null });
+        let d = parse_deploy(&pending).unwrap();
+        assert_eq!((d.state, d.at.as_str(), d.url), ("running", "2026-09-30T11:00:00Z", None));
+    }
+
+    #[test]
+    fn runs_carry_what_the_ci_line_says() {
+        let runs = json!({ "workflow_runs": [{
+            "id": 7, "name": "CI", "head_branch": "main", "status": "completed", "conclusion": "success",
+            "display_title": "Fix the hook timeout\nmore", "triggering_actor": { "login": "edu" },
+            "html_url": "https://github.com/edu/coucou/actions/runs/7",
+            "run_started_at": "2026-09-30T10:00:00Z", "updated_at": "2026-09-30T10:02:14Z",
+        }, { "id": 6 }]});
+        let list = parse_runs(&runs);
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].state, list[0].title.as_deref(), list[0].actor.as_deref()), ("success", Some("Fix the hook timeout"), Some("edu")));
+        assert_eq!(list[0].started_at.as_deref(), Some("2026-09-30T10:00:00Z"));
     }
 
     #[test]
