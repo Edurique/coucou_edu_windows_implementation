@@ -10,6 +10,10 @@
 //
 // Nothing is polled until its key exists in the Credential Manager, and no
 // request goes anywhere the user has not configured.
+//
+// One pill has no key and makes no request: what Spotify plays is asked of
+// Windows (media.rs). It is looked at often and speaks only when what it says
+// has changed.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -76,7 +80,23 @@ pub fn start(app: AppHandle) {
     spawn(app.clone(), "integration_github", 7, crate::github::TICK_SECS, crate::github::refresh);
     crate::github::watch_live(app.clone());
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
-    spawn(app, "integration_notion", 9, 300, poll_notion);
+    spawn(app.clone(), "integration_notion", 9, 300, poll_notion);
+    spawn(app.clone(), SPOTIFY, 4, SPOTIFY_EVERY, poll_spotify);
+    // Windows says when the song changes: the island hears of it at once, and
+    // again a moment later, when the song's cover has caught up with its name.
+    crate::media::watch(move || {
+        if PAUSED.load(Ordering::Relaxed) || !enabled(&app, SPOTIFY) {
+            return;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            poll_spotify(app.clone()).await;
+            for wait in COVER_LOOKS_MS {
+                tokio::time::sleep(Duration::from_millis(wait)).await;
+                poll_spotify(app.clone()).await;
+            }
+        });
+    });
 }
 
 /// True when the user has this integration switched on in settings.
@@ -121,8 +141,41 @@ pub async fn poll_once(app: AppHandle, id: &str) {
         "integration_resend" => poll_resend(app).await,
         "integration_notion" => poll_notion(app).await,
         "integration_calcom" => poll_calcom(app).await,
+        // Asked for by hand: said again even if nothing changed.
+        SPOTIFY => {
+            *TOLD.lock().unwrap() = None;
+            poll_spotify(app).await
+        }
         _ => {}
     }
+}
+
+// ── Spotify: asked of Windows, no key ─────────────────────────────────────────
+
+const SPOTIFY: &str = "integration_spotify";
+/// Seconds between two looks. Windows says when a song changes (media::watch),
+/// so these are the net under it: a look asks Windows, not the network.
+const SPOTIFY_EVERY: u64 = 5;
+/// After a change, the waits before looking again: a song's cover reaches
+/// Windows a moment after its name.
+const COVER_LOOKS_MS: [u64; 2] = [900, 1800];
+
+/// What the island was last told, so it is told again only when it changes:
+/// a look that finds the same song must not wake the island.
+static TOLD: Mutex<Option<Value>> = Mutex::new(None);
+
+async fn poll_spotify(app: AppHandle) {
+    // Asking Windows waits on it: off the async runtime's own threads.
+    let Ok(now) = tauri::async_runtime::spawn_blocking(crate::media::now_playing).await else { return };
+    let data = serde_json::to_value(now).unwrap_or_else(|_| json!({}));
+    {
+        let mut told = TOLD.lock().unwrap();
+        if told.as_ref() == Some(&data) {
+            return;
+        }
+        *told = Some(data.clone());
+    }
+    emit(&app, IntegrationUpdate { id: SPOTIFY, data, error: None, event: None });
 }
 
 /// Remembers the newest id per integration so an event fires once, not on every poll.
