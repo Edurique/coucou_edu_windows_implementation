@@ -88,10 +88,10 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   settings: { height: 160, botX: 54, botY: null, botDiameter: 46, agentMode: "none" },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0, agentMode: "none" },
   // Windows only, no macOS counterpart yet: the GitHub panel, laid out like a
-  // Claude Code session's view — Mochi full size in the upper part of his own
-  // column, the screen in a panel on the right. As tall as the window allows
-  // (PANEL_H), like that view.
-  github: { height: 320, botX: 56, botY: 91, botDiameter: 54, agentMode: "none" },
+  // Claude Code session's view — the biggest Mochi of any view, centred in the
+  // upper part of his own column (its middle is x 67), the screen in a panel
+  // on the right. As tall as the window allows (PANEL_H), like that view.
+  github: { height: 320, botX: 67, botY: 108, botDiameter: 71, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually
