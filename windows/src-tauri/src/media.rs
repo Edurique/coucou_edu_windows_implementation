@@ -6,6 +6,9 @@
 // it is playing or paused, and its cover, and lets it be paused or skipped.
 // It is all local: nothing is asked of Spotify, nothing touches the network.
 //
+// Windows also says when any of it changes, so the island hears of a new song
+// as it starts rather than at the next look (`watch`).
+//
 // Only the Spotify desktop app has a session of its own; Spotify in a browser
 // tab is the browser's, and is not looked for.
 //
@@ -13,7 +16,8 @@
 // which read the window's title; this asks the system instead, which also
 // knows the cover and a paused song.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use windows::Media::Control::{
@@ -21,6 +25,7 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionMediaProperties as Properties,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
 };
+use windows::Foundation::TypedEventHandler;
 use windows::Storage::Streams::DataReader;
 
 /// What marks a session as Spotify's, in the id of the app it belongs to:
@@ -28,6 +33,10 @@ use windows::Storage::Streams::DataReader;
 const SPOTIFY: &str = "spotify";
 /// Largest cover handed to the island, in bytes. Spotify's are a few dozen kilobytes.
 const MAX_COVER: u32 = 512 * 1024;
+/// How long after a song starts its cover is read again at each look: Spotify
+/// names the song first and hands its cover over a moment later, and until
+/// then Windows still holds the cover of the song before.
+const COVER_SETTLES: Duration = Duration::from_millis(2500);
 
 /// What Spotify is playing. `open` is false when the app has no session:
 /// closed, or opened and never played since.
@@ -43,8 +52,15 @@ pub struct NowPlaying {
     pub cover: Option<String>,
 }
 
-/// The cover of the song last asked about: read once per song, not at every look.
-static COVER: Mutex<Option<(String, String)>> = Mutex::new(None);
+/// The cover of the song last asked about, and when that song was first seen:
+/// once it has settled it is read no more.
+struct Cover {
+    song: String,
+    picture: Option<String>,
+    since: Instant,
+}
+
+static COVER: Mutex<Option<Cover>> = Mutex::new(None);
 
 fn spotify() -> Option<Session> {
     let sessions = Sessions::RequestAsync().ok()?.get().ok()?.GetSessions().ok()?;
@@ -68,18 +84,24 @@ pub fn now_playing() -> NowPlaying {
     NowPlaying { open: true, playing, title, artist, album, cover }
 }
 
-/// The song's cover, from the cache when it is the song last asked about. A
-/// song whose cover is not there yet — it comes a moment after the song
-/// changes — is asked again at the next look.
+/// The song's cover. Read from Windows while the song is new — what is there
+/// at first may be the cover of the song before — and from the cache once it
+/// has settled, so a song that goes on playing costs no read.
 fn cover_of(song: &Properties, key: &str) -> Option<String> {
-    if let Some((known, cover)) = COVER.lock().unwrap().as_ref() {
-        if known == key {
-            return Some(cover.clone());
+    let mut cover = COVER.lock().unwrap();
+    match cover.as_mut() {
+        Some(known) if known.song == key => {
+            if known.picture.is_none() || known.since.elapsed() < COVER_SETTLES {
+                known.picture = read_cover(song).or(known.picture.take());
+            }
+            known.picture.clone()
+        }
+        _ => {
+            let picture = read_cover(song);
+            *cover = Some(Cover { song: key.to_string(), picture: picture.clone(), since: Instant::now() });
+            picture
         }
     }
-    let cover = read_cover(song)?;
-    *COVER.lock().unwrap() = Some((key.to_string(), cover.clone()));
-    Some(cover)
 }
 
 fn read_cover(song: &Properties) -> Option<String> {
@@ -134,6 +156,82 @@ pub fn press(action: &str) -> Result<(), String> {
         Ok(true) => Ok(()),
         _ => Err("Spotify did not take it".into()),
     }
+}
+
+/// Spotify's session while it is listened to, with what it takes to stop.
+struct Heard {
+    session: Session,
+    on_song: i64,
+    on_play: i64,
+}
+
+impl Heard {
+    /// Listens to the session: `changed` is called when the song changes, when
+    /// it is paused or resumed, and when the cover arrives.
+    fn to(session: Session, changed: &Arc<dyn Fn() + Send + Sync>) -> Option<Self> {
+        let tell = changed.clone();
+        let on_song = session
+            .MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
+                tell();
+                Ok(())
+            }))
+            .ok()?;
+        let tell = changed.clone();
+        let on_play = session
+            .PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
+                tell();
+                Ok(())
+            }))
+            .ok()?;
+        Some(Self { session, on_song, on_play })
+    }
+}
+
+impl Drop for Heard {
+    fn drop(&mut self) {
+        let _ = self.session.RemoveMediaPropertiesChanged(self.on_song);
+        let _ = self.session.RemovePlaybackInfoChanged(self.on_play);
+    }
+}
+
+/// What `watch` holds on to: Windows stops telling the moment these are let go.
+struct Watch {
+    _sessions: Sessions,
+    spotify: Option<Heard>,
+}
+
+static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
+
+/// Has Windows say when what Spotify plays changes, instead of finding out at
+/// the next look: `changed` is called at once, from one of the system's own
+/// threads. Spotify opened or closed later is followed too. If Windows cannot
+/// be asked, the looks at regular intervals are all there is.
+pub fn watch(changed: impl Fn() + Send + Sync + 'static) {
+    let changed: Arc<dyn Fn() + Send + Sync> = Arc::new(changed);
+    // Asking for the sessions waits on Windows: on a thread of its own.
+    std::thread::spawn(move || {
+        let Ok(sessions) = Sessions::RequestAsync().and_then(|asked| asked.get()) else { return };
+        // The sessions changed — Spotify opened, closed, or another player did:
+        // whoever was listened to is let go, and Spotify, if it is there, is listened to anew.
+        let follow = {
+            let changed = changed.clone();
+            move || {
+                let heard = spotify().and_then(|session| Heard::to(session, &changed));
+                crate::log::line(if heard.is_some() { "spotify: listening to its session" } else { "spotify: no session to listen to" });
+                if let Some(watch) = WATCH.lock().unwrap().as_mut() {
+                    watch.spotify = heard;
+                }
+                changed();
+            }
+        };
+        *WATCH.lock().unwrap() = Some(Watch { _sessions: sessions.clone(), spotify: None });
+        let on_sessions = follow.clone();
+        let _ = sessions.SessionsChanged(&TypedEventHandler::new(move |_, _| {
+            on_sessions();
+            Ok(())
+        }));
+        follow();
+    });
 }
 
 #[cfg(test)]

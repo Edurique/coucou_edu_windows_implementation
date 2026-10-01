@@ -340,8 +340,7 @@ let announced: number | null = null;
 /**
  * The card says it is here on purpose: a new song is being announced. For as
  * long as the island stays open on it (`ms`), a wash of Spotify's green
- * breathes behind the cover and a line of light along the card's foot runs
- * down, the time left before the island folds back.
+ * breathes behind the cover.
  */
 export function announceOnCard(ms: number) {
   spotify ??= buildSpotifyCard();

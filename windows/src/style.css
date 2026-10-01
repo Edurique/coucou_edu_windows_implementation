@@ -4232,9 +4232,8 @@ button.gh-block:hover {
 
 /* ── A song being announced ─────────────────────────────────────────────────
    The island opened on its own: light says why. A wash of Spotify's green
-   breathes behind the cover, a line of light along the card's foot runs down
-   the time left before the island folds back, a sheen passes over the cover
-   and it glows. Each plays once. */
+   breathes behind the cover, a sheen passes over the cover and it glows.
+   Each plays once. */
 .media-card.announce::before {
   content: "";
   position: absolute;
@@ -4250,25 +4249,6 @@ button.gh-block:hover {
   45% { opacity: 0.55; }
   70% { opacity: 0.9; }
   100% { opacity: 0; }
-}
-
-.media-card.announce::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 2px;
-  width: 100%;
-  border-radius: 2px;
-  background: #1db954;
-  box-shadow: 0 0 10px 1px rgba(29, 185, 84, 0.8);
-  transform-origin: left center;
-  animation: announce-line var(--announce, 4.5s) linear both;
-}
-
-@keyframes announce-line {
-  from { transform: scaleX(1); }
-  to { transform: scaleX(0); }
 }
 
 /* The words of the card stay above its light. */

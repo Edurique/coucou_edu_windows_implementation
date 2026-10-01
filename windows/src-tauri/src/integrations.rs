@@ -81,7 +81,22 @@ pub fn start(app: AppHandle) {
     crate::github::watch_live(app.clone());
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
     spawn(app.clone(), "integration_notion", 9, 300, poll_notion);
-    spawn(app, SPOTIFY, 4, SPOTIFY_EVERY, poll_spotify);
+    spawn(app.clone(), SPOTIFY, 4, SPOTIFY_EVERY, poll_spotify);
+    // Windows says when the song changes: the island hears of it at once, and
+    // again a moment later, when the song's cover has caught up with its name.
+    crate::media::watch(move || {
+        if PAUSED.load(Ordering::Relaxed) || !enabled(&app, SPOTIFY) {
+            return;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            poll_spotify(app.clone()).await;
+            for wait in COVER_LOOKS_MS {
+                tokio::time::sleep(Duration::from_millis(wait)).await;
+                poll_spotify(app.clone()).await;
+            }
+        });
+    });
 }
 
 /// True when the user has this integration switched on in settings.
@@ -138,9 +153,12 @@ pub async fn poll_once(app: AppHandle, id: &str) {
 // ── Spotify: asked of Windows, no key ─────────────────────────────────────────
 
 const SPOTIFY: &str = "integration_spotify";
-/// Seconds between two looks. A song changes every few minutes and should not
-/// be shown a minute late; a look asks Windows, not the network.
+/// Seconds between two looks. Windows says when a song changes (media::watch),
+/// so these are the net under it: a look asks Windows, not the network.
 const SPOTIFY_EVERY: u64 = 5;
+/// After a change, the waits before looking again: a song's cover reaches
+/// Windows a moment after its name.
+const COVER_LOOKS_MS: [u64; 2] = [900, 1800];
 
 /// What the island was last told, so it is told again only when it changes:
 /// a look that finds the same song must not wake the island.
