@@ -193,7 +193,11 @@ export class Island {
       },
       keyboard: (on) => void Bridge.focusWindow(on),
       openSession: (changes) => {
-        enterSessionPanel(changes === true);
+        enterSessionPanel(changes ? "changes" : "journal");
+        this.setView("session");
+      },
+      openSessions: () => {
+        enterSessionPanel("sessions");
         this.setView("session");
       },
       pickSession: (id) => this.pickSession(id),
@@ -417,7 +421,7 @@ export class Island {
   private pickSession(id: string) {
     if (id === State.frontId) return;
     Sound.play("blip");
-    // Its tab is in the bar whatever pill is in front: picking a session is asking for Claude's.
+    // The list of sessions is reached whatever pill is in front: picking one is asking for Claude's.
     if (State.focusId !== CLAUDE_ID) State.setFocus(CLAUDE_ID);
     State.bringForward(id);
     const session = State.session;
