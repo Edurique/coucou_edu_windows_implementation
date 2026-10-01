@@ -1062,6 +1062,15 @@ function statusWord(file: GithubFile): HTMLElement {
   return word;
 }
 
+/**
+ * From the island's finished or error card: into the panel, straight to what
+ * the news is about.
+ */
+export function openGithubNews(open: { target: GithubTarget; label: string; url: string }) {
+  enterGithubPanel();
+  openTarget(open.target, open.label, open.url);
+}
+
 /** One file touched, under its extension's badge; it opens the file's diff. */
 function fileRow(file: GithubFile, url: string): HTMLElement {
   const { dir, base } = splitPath(file.path);
@@ -1720,6 +1729,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
       h("em", { text: open ? "Open" : "Dismiss" }),
     );
     line.style.setProperty("--c", color);
+    // The bar leaves room for a few words: the whole of it on hover.
+    line.title = news.detail ? `${news.label} · ${news.detail}` : news.label;
     notice.append(line);
   }
 

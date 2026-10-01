@@ -21,9 +21,11 @@ const KEY_FOR: Record<string, string> = {
 const clearTimers = new Map<string, number>();
 
 /**
- * Integrations whose news takes the pill for itself: their Mochi steps to the
- * front and the pill says the news in words. Among four mini Mochis a badge on
- * one is easy to miss, and "a build broke" is worth more than a dot.
+ * Integrations whose news opens the island, the way a Claude Code session's
+ * result does: their Mochi steps to the front and the island unfolds on the
+ * finished or the error card, which says the news in words. Among four mini
+ * Mochis a badge on one is easy to miss — and the folded pill has no room
+ * for words: the island hides in a MacBook's notch, its middle is the notch.
  */
 const SPEAKS_UP = new Set(["integration_github"]);
 /** The pill each of them took the front from, to hand it back. */
@@ -84,20 +86,24 @@ function handle(island: Island, update: IntegrationUpdate) {
       // Only while the island is away or folded: open, it is showing something
       // the user is reading, and the news has its own place there.
       const front = State.focusTask;
+      let opened = false;
       if (
         SPEAKS_UP.has(update.id) && State.mode !== "expanded" && State.focusId !== update.id &&
         State.focusId && !(front && WAITING.has(front.state))
       ) {
         if (!borrowedFrom.has(update.id)) borrowedFrom.set(update.id, State.focusId);
         State.setFocus(update.id);
+        opened = true;
       }
       if (State.focusId !== update.id) {
         task.pillBadge = event.success ? "finished" : "error";
       }
       Sound.play(event.success ? "finish" : "error");
       // Same as the Swift pollers: show the compact island so the badge is seen,
-      // but never steal the screen for a successful deploy.
-      island.reveal();
+      // but never steal the screen for a successful deploy. News that speaks up
+      // unfolds the island on its card instead; it folds back on its own.
+      if (opened) island.alert(event.success ? "finished" : "error");
+      else island.reveal();
 
       const existing = clearTimers.get(update.id);
       if (existing != null) window.clearTimeout(existing);

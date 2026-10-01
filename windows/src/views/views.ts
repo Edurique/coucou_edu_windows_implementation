@@ -11,7 +11,8 @@ import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
-import { buildGithub, enterGithubPanel } from "./github";
+import { buildGithub, enterGithubPanel, openGithubNews } from "./github";
+import type { IntegrationNews } from "../core/bridge";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -353,6 +354,29 @@ function buildQuestion(): ViewHost {
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
+/** The news of the Mochi at the front, when its integration sent some. */
+function frontNews(): IntegrationNews | null {
+  const task = State.focusTask;
+  return (task && State.integrations[task.id]?.news) || null;
+}
+
+/**
+ * The two buttons of a card that tells an integration's news instead of a
+ * session's result: into the panel, to what the news is about; or just OK.
+ */
+function newsActions(actions: ViewActions): HTMLElement {
+  return h("div", { class: "actions" },
+    btn("Open", "primary", () => {
+      const open = frontNews()?.open;
+      actions.blip();
+      if (open) openGithubNews(open);
+      else enterGithubPanel();
+      actions.setView("github");
+    }),
+    btn("OK", "secondary", () => actions.collapse()),
+  );
+}
+
 function buildError(actions: ViewActions): ViewHost {
   const who = h("div");
   const title = h("div", { class: "title", text: "Workflow stopped." });
@@ -361,12 +385,22 @@ function buildError(actions: ViewActions): ViewHost {
     btn("Retry", "primary", () => actions.setView(State.defaultView())),
     btn("Open in n8n", "secondary", () => actions.openUrl("")),
   );
-  const el = h("div", { class: "view" }, card("red", stack(116, 16, who, title, detail, row)));
+  const newsRow = newsActions(actions);
+  const el = h("div", { class: "view" }, card("red", stack(116, 16, who, title, detail, row, newsRow)));
   return {
     el,
     sync() {
       const task = State.focusTask;
+      const news = frontNews();
+      row.style.display = news ? "none" : "";
+      newsRow.style.display = news ? "" : "none";
       clear(who);
+      if (news) {
+        who.append(agentWho(task, ""));
+        title.textContent = news.label;
+        detail.textContent = news.detail ?? "";
+        return;
+      }
       who.append(agentWho(task, task?.source === "n8n" ? "n8n" : "Claude Code"));
       title.textContent = task?.source === "n8n" ? "Workflow stopped." : "Session stopped on an error.";
       detail.textContent = task?.steps.at(-1) ?? "No detail available.";
@@ -383,11 +417,23 @@ function buildFinished(actions: ViewActions): ViewHost {
     btn("Open terminal", "primary", () => actions.openTerminal()),
     btn("OK", "secondary", () => actions.collapse()),
   );
-  const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, row)));
+  const detail = h("div", { class: "detail" });
+  const newsRow = newsActions(actions);
+  const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, detail, row, newsRow)));
   return {
     el,
     sync() {
+      const news = frontNews();
+      row.style.display = news ? "none" : "";
+      newsRow.style.display = news ? "" : "none";
+      detail.style.display = news?.detail ? "" : "none";
       clear(who);
+      if (news) {
+        who.append(agentWho(State.focusTask, ""));
+        title.textContent = news.label;
+        detail.textContent = news.detail ?? "";
+        return;
+      }
       who.append(agentWho(State.focusTask, "Claude Code finished"));
       title.textContent = State.focusTask?.steps.at(-1) ?? "Session finished";
     },

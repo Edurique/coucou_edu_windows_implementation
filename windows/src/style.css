@@ -165,32 +165,6 @@ body {
   transition: opacity 0.25s ease-in-out;
 }
 
-/* What the pill at the front has to say, in the folded island: between Mochi
-   on the left and the mini grid on the right. */
-#pill-news {
-  position: absolute;
-  left: 62px;
-  right: 62px;
-  top: 0;
-  height: 32px;
-  font: 600 11px/32px var(--font);
-  color: var(--green-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.25s ease-in-out;
-}
-
-#pill-news.on {
-  opacity: 1;
-}
-
-#pill-news.bad {
-  color: var(--red-text);
-}
-
 /* A mini Mochi: the slot is the body, the canvas is larger and overflows it so
    hands, badges and particles are not cut off. */
 .mini {
@@ -1726,16 +1700,19 @@ button.gh-step:hover {
 /* News that came in while the panel was open — a build that broke, a pull
    request that went in: a line in the news's colour that opens what it is
    about. It leaves with the pill's badge. It stands above the card, in the
-   free middle of the island's bar (between its tabs and its two icons), so
-   it never mixes with what is being read. */
+   island's bar, so it never mixes with what is being read — at the right of
+   the bar, against its two icons: the island hides in a MacBook's notch, so
+   the middle of the bar is the notch itself and nothing can be shown there.
+   The left bound keeps it clear of the notch's 184 pt, centred in the
+   island's 640. */
 .gh-notice-slot {
   position: absolute;
-  left: 116px;
-  right: 62px;
+  left: 404px;
+  right: 80px;
   top: -29px;
   height: 24px;
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
   z-index: 3;
   pointer-events: none;
 }
@@ -1772,11 +1749,18 @@ button.gh-step:hover {
 }
 
 .gh-notice > b {
+  flex: 0 1 auto;
+  min-width: 0;
   font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* Between the notch and the bar's icons there is room for what happened and
+   nothing more: the detail waits in the sheet the line opens. */
 .gh-notice > span {
+  display: none;
   flex: 1 1 auto;
   min-width: 0;
   color: var(--dim);

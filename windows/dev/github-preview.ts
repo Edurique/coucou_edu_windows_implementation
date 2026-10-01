@@ -272,8 +272,8 @@ if (params.has("news")) {
     : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com" } };
 }
 // With the news, Mochi's state as the island's handler sets it. `view=pill`
-// shows it the way it arrives with the island away: the compact pill, GitHub's
-// Mochi at the front, the news in words.
+// shows it the way it arrives with the island away: GitHub's Mochi at the
+// front, the island unfolded on the finished or the error card.
 const news = State.integrations.integration_github.news;
 const pill = params.get("view") === "pill";
 if (news) {
@@ -289,7 +289,7 @@ State.setFocus("integration_github");
 State.isPinned = true;
 
 const island = new Island(document.getElementById("root")!);
-if (pill) island.reveal();
+if (pill && news) island.alert(news.success ? "finished" : "error");
 else island.alert(params.get("view") === "overview" ? "overview" : "github");
 
 // The tab is the panel's own state; get there the way a person would.
