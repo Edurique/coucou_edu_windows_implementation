@@ -2242,10 +2242,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
   }
 
   /** One line of the column: a mark, a word, and where it leads, if anywhere. */
-  function step(label: string, icon: Element, on: boolean, color: string | null, go: (() => void) | null, extra?: Node) {
+  function step(label: string, icon: Element, on: boolean, color: string | null, go: (() => void) | null) {
     const el = go
-      ? h("button", { class: on ? "gh-step on" : "gh-step", onclick: go }, h("i", {}, icon), h("span", { text: label }), extra ?? null)
-      : h("div", { class: on ? "gh-step on" : "gh-step" }, h("i", {}, icon), h("span", { text: label }), extra ?? null);
+      ? h("button", { class: on ? "gh-step on" : "gh-step", onclick: go }, h("i", {}, icon), h("span", { text: label }))
+      : h("div", { class: on ? "gh-step on" : "gh-step" }, h("i", {}, icon), h("span", { text: label }));
     if (color) el.style.setProperty("--c", color);
     return el;
   }
@@ -2304,12 +2304,9 @@ export function buildGithub(actions: ViewActions): ViewHost {
     trail.classList.toggle("deep", d != null && stack.length > 0);
     if (!d) return;
     if (stack.length === 0) {
-      // A broken build is worth a glance even from the other tab.
-      const failing = d.repos.some((r) => r.build?.state === "failure");
       trail.append(
         step(TABS.activity.label, TABS.activity.icon(), tab === "activity", null, () => goTab("activity")),
-        step(TABS.projects.label, TABS.projects.icon(), tab === "projects", null, () => goTab("projects"),
-          failing ? dot(COLOR.red, 5) : undefined),
+        step(TABS.projects.label, TABS.projects.icon(), tab === "projects", null, () => goTab("projects")),
       );
       return;
     }
@@ -2571,8 +2568,6 @@ export function buildGithub(actions: ViewActions): ViewHost {
       }
 
       dress(null);
-      // A broken build is worth a glance even from the other tab: the column
-      // puts a red dot on Projects.
       drawTrail(d && configured ? d : null);
       drawn = null;
       who.textContent = d && configured ? TABS[tab].label : "GitHub";

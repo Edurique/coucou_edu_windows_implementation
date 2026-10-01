@@ -1552,10 +1552,6 @@ button.gh-step:hover {
   min-width: 0;
 }
 
-.gh-step > .dot {
-  margin-left: -3px;
-}
-
 /* Deeper, the column is no longer a choice between two tabs but the way down
    to the screen on show, and has to read as one: the levels above are a notch
    brighter than an unlit tab (each is a way back), a rail ties every mark to
