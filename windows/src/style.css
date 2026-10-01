@@ -2253,6 +2253,24 @@ button.gh-step:hover {
   justify-items: start;
 }
 
+/* Lines added and removed sit at the row's right edge, each in a column of
+   its own: down the list they read like figures in a table, instead of
+   trailing wherever each path happens to end. */
+.gh-file .gh-pm {
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+.gh-file .gh-pm > span {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
+}
+
+.gh-file .gh-pm > .gh-add {
+  min-width: 5ch;
+}
+
 /* The panel is the editor: the code runs from one edge to the other. */
 .gh-list.code {
   padding: 0;
