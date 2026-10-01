@@ -4005,3 +4005,28 @@ button.gh-block:hover {
   padding-top: 20px !important;
   padding-bottom: 20px !important;
 }
+
+/* On a project's row: whether the pill speaks up for it. Struck through and
+   dim when it is muted. */
+.gh-bell {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dim-2);
+  cursor: default;
+  transition: color 0.2s ease-out, background 0.2s ease-out;
+}
+
+.gh-bell:hover {
+  background: var(--gh-plate);
+  color: var(--ink);
+}
+
+.gh-bell.off {
+  color: var(--dim-5);
+}
