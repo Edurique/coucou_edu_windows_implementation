@@ -1231,7 +1231,7 @@ input[type="range"]::-webkit-slider-thumb {
 .int-week {
   display: inline-flex;
   gap: 2px;
-  margin: 0 2px 0 auto;
+  margin: 0 4px 0 auto;
   align-self: center;
 }
 
@@ -1247,9 +1247,13 @@ input[type="range"]::-webkit-slider-thumb {
   color: #f5a524;
 }
 
-/* A line of the card that opens its sheet in the panel. */
+/* A line of the card that opens its sheet in the panel. Its dot sits just
+   inside the account's dot over it, as on the macOS cards, not a row's full
+   padding in. */
 .int-go {
   width: 100%;
+  padding-left: 4px;
+  padding-right: 4px;
   border: 0;
   background: transparent;
   font: inherit;
