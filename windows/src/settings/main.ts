@@ -257,7 +257,7 @@ function apiSection(hasKey: boolean): HTMLElement {
   );
 }
 
-// ── GitHub section ────────────────────────────────────────────────────────────
+// ── GitHub setup ──────────────────────────────────────────────────────────────
 
 const GITHUB_ID = "integration_github";
 const GITHUB_KEY = "github-token";
@@ -266,7 +266,9 @@ const DAY_MS = 86_400_000;
 /** A token this close to its end gets a word about it. */
 const EXPIRES_SOON_DAYS = 7;
 
-function githubSection(hasToken: boolean): HTMLElement {
+/** GitHub's line in the integrations, and what opens under it once it is on. */
+function githubSetup(present: Record<string, boolean>): IntegrationSetup {
+  const hasToken = present[GITHUB_KEY] ?? false;
   const dot = statusDot(hasToken);
   const state = h("span", { class: "hint" });
 
@@ -356,11 +358,10 @@ function githubSection(hasToken: boolean): HTMLElement {
 
   show(hasToken);
 
-  return h(
-    "section",
-    {},
-    h("h2", {}, dot, h("span", { text: "GitHub" })),
-    state,
+  const status = h("div", { class: "row", style: "gap:8px;padding-top:5px" }, dot, state);
+  const panel = h(
+    "div",
+    { class: "setup" },
     h("div", { class: "row" }, h("label", { text: "Token" }), field, saveBtn, clearBtn),
     h(
       "div",
@@ -378,6 +379,7 @@ function githubSection(hasToken: boolean): HTMLElement {
     h("div", { class: "row" }, testBtn),
     feedback,
   );
+  return { status, panel };
 }
 
 function githubResult(account: GithubAccount): HTMLElement {
@@ -418,15 +420,22 @@ interface IntegrationDef {
   color: string;
   /** Credential Manager keys, in the order they are shown. */
   fields: { key: string; label: string; placeholder: string; secret: boolean }[];
-  /** Shown instead of the fields when the key lives in its own section. */
-  note?: string;
+  /** For an integration that needs more than its fields. */
+  setup?: (present: Record<string, boolean>) => IntegrationSetup;
+}
+
+interface IntegrationSetup {
+  /** Where it stands, on the integration's own line. */
+  status: HTMLElement;
+  /** Opens under the line while the integration is on. */
+  panel: HTMLElement;
 }
 
 const INTEGRATIONS: IntegrationDef[] = [
   { id: "integration_stripe", name: "Stripe", color: "#0570DE",
     fields: [{ key: "stripe-api-key", label: "Secret key", placeholder: "sk_live_…", secret: true }] },
   { id: "integration_github", name: "GitHub", color: "#F4505E",
-    fields: [], note: "Token and connection test in the GitHub section above." },
+    fields: [], setup: githubSetup },
   { id: "integration_vercel", name: "Vercel", color: "#7C5CFF",
     fields: [{ key: "vercel-token", label: "Token", placeholder: "…", secret: true }] },
   { id: "integration_n8n", name: "n8n", color: "#F29B38",
@@ -456,6 +465,14 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
   for (const def of INTEGRATIONS) {
     const active = settings.activeIntegrations.includes(def.id);
     const sw = h("button", { class: active ? "switch on" : "switch" });
+    const setup = def.setup?.(present);
+    const drawer = setup ? h("div", { class: "drawer" }, h("div", {}, setup.panel)) : null;
+    const open = (on: boolean) => {
+      drawer?.classList.toggle("open", on);
+      // Folded away, its fields are out of reach of the keyboard too.
+      if (setup) setup.panel.inert = !on;
+    };
+    open(active);
     sw.addEventListener("click", () => {
       const on = settings.activeIntegrations.includes(def.id);
       if (on) {
@@ -465,12 +482,13 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
         settings.activeIntegrations = [...settings.activeIntegrations, def.id];
       }
       sw.classList.toggle("on", !on);
+      open(!on);
       updateNote();
       void save();
     });
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
-    if (def.note) rows.append(h("div", { class: "hint", style: "padding-top:3px", text: def.note }));
+    if (setup) rows.append(setup.status);
     for (const field of def.fields) {
       const input = h("input", {
         type: field.secret ? "password" : "text",
@@ -501,16 +519,15 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
       );
     }
 
-    list.append(
-      h("div", { style: "display:flex;gap:12px;align-items:flex-start" },
-        h("div", { style: "display:flex;align-items:center;gap:8px;min-width:132px;padding-top:4px" },
-          sw,
-          h("i", { class: "dot", style: `background:${def.color}` }),
-          h("span", { style: "font-size:12.5px", text: def.name }),
-        ),
-        rows,
+    const line = h("div", { style: "display:flex;gap:12px;align-items:flex-start" },
+      h("div", { style: "display:flex;align-items:center;gap:8px;min-width:132px;padding-top:4px" },
+        sw,
+        h("i", { class: "dot", style: `background:${def.color}` }),
+        h("span", { style: "font-size:12.5px", text: def.name }),
       ),
+      rows,
     );
+    list.append(drawer ? h("div", {}, line, drawer) : line);
   }
 
   updateNote();
@@ -602,7 +619,6 @@ async function main() {
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
     claudeSection(status),
     apiSection(hasKey),
-    githubSection(present[GITHUB_KEY] ?? false),
     integrationsSection(present),
     generalSection(),
     h("div", {
