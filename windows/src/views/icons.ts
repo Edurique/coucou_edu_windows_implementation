@@ -65,4 +65,9 @@ export const ICONS = {
   pulse: "M3 12h4l2.5-6 5 12 2.5-6H21",
   // What was said: a speech bubble, drawn as a line like the other GitHub marks.
   comment: "M4 5.5h16v10.5h-8.5L7 20v-4H4z",
+
+  // A session's steps, stroked: an edit, a command, a search.
+  pencil: "M4.5 19.5l1-4.2L16.6 4.2l3.2 3.2L8.7 18.5l-4.2 1zM14.4 6.4l3.2 3.2",
+  terminal: "M5 7.5 9.5 12 5 16.5M12.5 17H19",
+  search: "M10.5 4.5a6 6 0 1 1 0 12 6 6 0 0 1 0-12M15 15l4.5 4.5",
 } as const;

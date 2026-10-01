@@ -10,7 +10,7 @@ import {
   type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { State } from "../core/state";
+import { CLAUDE_ID, QUESTION_TOOL, State, type SessionStep } from "../core/state";
 import { BotEngine, hexToRGB, type RGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
@@ -18,6 +18,7 @@ import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { githubData } from "../views/integrations";
+import { enterSessionPanel } from "../views/session";
 import { followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
@@ -127,11 +128,15 @@ export class Island {
       setFocus: (id) => {
         State.setFocus(id);
         Sound.play("blip");
+        // A request that came in while another pill had the front only left a
+        // badge: bringing Claude's pill forward is asking for its card.
+        if (id !== CLAUDE_ID) return;
+        if (State.pendingQuestion) this.setView("question");
+        else if (State.pendingApproval) this.setView("approval");
+        // No card for the session in front, but one behind it is waiting: its turn.
+        else if (State.waiting.length > 0) this.afterRequest(true);
       },
-      openTerminal: () => {
-        const cwd = State.focusTask?.sessionCwd ?? null;
-        void Bridge.openInVSCode(cwd);
-      },
+      openTerminal: () => this.openClient(),
       // The ↗ button — same targets as openAgentTarget() on macOS.
       openTarget: () => {
         const task = State.focusTask;
@@ -144,7 +149,7 @@ export class Island {
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
         };
-        if (task.id === "integration_claude") void Bridge.openInVSCode(task.sessionCwd ?? null);
+        if (task.id === CLAUDE_ID) this.openClient();
         else if (task.id === "integration_n8n") void Bridge.openN8n();
         else if (task.id === "integration_github" && githubData()) void Bridge.openUrl(githubData()!.profileUrl);
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
@@ -158,13 +163,39 @@ export class Island {
         if (!req) return;
         Sound.play(d === "deny" ? "blip" : "approve");
         void Bridge.approvalDecision(req.requestId, d);
-        State.pendingApproval = null;
-        State.isPinned = false;
-        this.fsm.pinned = false;
-        State.updateTask("integration_claude", "working");
-        State.setPillBadge("integration_claude", null);
-        this.setView(State.defaultView());
+        this.noteOutcome(req.tool, (step) => (step.permission = d === "deny" ? "denied" : "allowed"));
+        this.settleRequest();
       },
+      answer: (answers) => {
+        const req = State.pendingQuestion;
+        if (!req) return;
+        Sound.play("approve");
+        void Bridge.approvalAnswer(req.requestId, answers);
+        this.noteOutcome(QUESTION_TOOL, (step) => (step.answers = answers));
+        this.settleRequest();
+      },
+      skipQuestion: () => {
+        const req = State.pendingQuestion;
+        if (!req) return;
+        Sound.play("blip");
+        void Bridge.approvalDecision(req.requestId, "skip");
+        this.noteOutcome(QUESTION_TOOL, (step) => (step.state = "failed"));
+        this.settleRequest();
+      },
+      passQuestion: () => {
+        const req = State.pendingQuestion;
+        if (!req) return;
+        Sound.play("blip");
+        // Declined, not denied: Claude Code asks it in its own window at once.
+        void Bridge.approvalDecline(req.requestId);
+        this.settleRequest();
+      },
+      keyboard: (on) => void Bridge.focusWindow(on),
+      openSession: (changes) => {
+        enterSessionPanel(changes === true);
+        this.setView("session");
+      },
+      pickSession: (id) => this.pickSession(id),
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
@@ -206,8 +237,7 @@ export class Island {
     this.countdown = h("div", { id: "countdown" });
 
     this.header = buildHeader(actions);
-    this.views = buildViews(actions, () => this.animateGeometry(false));
-    this.viewsEl = h("div", { id: "views" });
+    this.views = buildViews(actions, () => this.animateGeometry(false));    this.viewsEl = h("div", { id: "views" });
     for (const v of this.views.values()) this.viewsEl.append(v.el);
     this.contentEl = h("div", { id: "content" }, this.header.el, this.viewsEl);
 
@@ -348,6 +378,59 @@ export class Island {
     State.notify();
   }
 
+  /** Writes what was decided on the island in the journal, on the step that was waiting for it. */
+  private noteOutcome(tool: string, write: (step: SessionStep) => void) {
+    const step = [...State.session.steps].reverse().find((s) => s.tool === tool && s.state === "running");
+    if (step) write(step);
+  }
+
+  /** The request on the card got its answer: its session is back at work. */
+  private settleRequest() {
+    const session = State.session;
+    session.approval = null;
+    session.question = null;
+    session.state = "working";
+    this.afterRequest(true);
+  }
+
+  /**
+   * The request of the session in front is done with. Another session waiting
+   * for an answer comes forward with its own; with none, the island is free
+   * to close again. `show` moves the view too: to that card, or back to the
+   * overview.
+   */
+  afterRequest(show: boolean) {
+    const next = State.pendingApproval || State.pendingQuestion ? State.session : State.waiting[0];
+    if (next) State.bringForward(next.id);
+    State.isPinned = next != null;
+    this.fsm.pinned = next != null;
+    State.setPillBadge(CLAUDE_ID, next && State.focusId !== CLAUDE_ID ? "approval" : null);
+    State.present();
+    if (show) this.setView(next ? (next.question ? "question" : "approval") : State.defaultView());
+  }
+
+  /**
+   * Puts another session in front, at the user's asking: its card if it is
+   * waiting for an answer, and never the card of the one that was there.
+   */
+  private pickSession(id: string) {
+    if (id === State.frontId) return;
+    Sound.play("blip");
+    State.bringForward(id);
+    const session = State.session;
+    const waits = session.question != null || session.approval != null;
+    State.isPinned = waits;
+    this.fsm.pinned = waits;
+    if (waits) this.setView(session.question ? "question" : "approval");
+    else if (State.view === "approval" || State.view === "question") this.setView(State.defaultView());
+  }
+
+  /** Where the session runs: the Claude app brought forward, or its folder in VS Code. */
+  private openClient() {
+    if (State.session.client === "desktop") void Bridge.openClaudeApp();
+    else void Bridge.openInVSCode(State.tasks.find((t) => t.id === CLAUDE_ID)?.sessionCwd ?? null);
+  }
+
   collapse() {
     State.isPinned = false;
     this.fsm.pinned = false;
@@ -366,11 +449,6 @@ export class Island {
 
   reveal() {
     this.fsm.reveal();
-  }
-
-  /** An alert stopped waiting for an answer: let the island auto-close again. */
-  dropPin() {
-    this.fsm.pinned = false;
   }
 
   // ── File drop ───────────────────────────────────────────────────────────────
@@ -485,7 +563,10 @@ export class Island {
 
   private targetSize(): { w: number; h: number; r: number } {
     const news = State.focusId != null && State.integrations[State.focusId]?.news != null;
-    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length, news);
+    const proposal = State.pendingApproval?.proposal != null;
+    // A view that knows how tall its content is has the last word.
+    const fitted = this.views?.get(State.view)?.height ?? null;
+    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length, news, proposal, fitted);
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
     return { w, h, r };
   }
