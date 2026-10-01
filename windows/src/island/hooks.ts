@@ -73,6 +73,19 @@ function closeSteps() {
   State.session.steps.push({ tool: TURN_DONE, state: "done" });
 }
 
+/** How the Agent SDK names itself as an entry point: "sdk-ts", "sdk-py", "sdk-cli". */
+const SDK_ENTRYPOINT = "sdk";
+
+/**
+ * A session started by a program rather than a person — a review a plugin runs
+ * on each commit, a script. It sends the same hooks from the same folder, and
+ * followed like any other it would take the island away from the conversation
+ * the user is in, steps, title and all.
+ */
+function isAutomated(payload: HookPayload): boolean {
+  return (payload.entrypoint ?? "").toLowerCase().startsWith(SDK_ENTRYPOINT);
+}
+
 function clientOf(payload: HookPayload): ClaudeClient {
   const entry = (payload.entrypoint ?? "").toLowerCase();
   if (entry.includes("desktop")) return "desktop";
@@ -274,7 +287,8 @@ export function registerHookHandlers(island: Island) {
 
 /** Exported for the dev preview, which plays a session without Claude Code. */
 export function handleHook(island: Island, payload: HookPayload) {
-  if (State.paused) {
+  // Paused, or a session nobody is sitting in front of: the island does not look.
+  if (State.paused || isAutomated(payload)) {
     // Silence here used to cost Claude Code nearly two minutes: the relay waited
     // for a decision from an island that had already decided not to look. Say so,
     // and the terminal takes the question immediately.
