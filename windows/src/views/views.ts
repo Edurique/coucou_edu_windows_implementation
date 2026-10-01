@@ -628,6 +628,9 @@ function buildQuestion(actions: ViewActions, onResize: () => void): ViewHost {
     placeholder: "Your answer",
   }) as HTMLInputElement;
   const lines = stack(116, 16, who, title, row, foot);
+  // A question with more options than the window is tall for fills its card:
+  // the list of options scrolls, and the card keeps its least air around it.
+  lines.style.paddingTop = lines.style.paddingBottom = `${CARD_AIR_MIN}px`;
   const el = h("div", { class: "view" }, card("cyan", lines));
 
   /** The request all of this is about: a new one starts from the first question. */
