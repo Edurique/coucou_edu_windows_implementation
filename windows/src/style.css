@@ -1697,48 +1697,53 @@ button.gh-step:hover {
   padding: 7px 12px 0;
 }
 
-/* News that came in while the panel was open — a build that broke, a pull
-   request that went in: a line in the news's colour that opens what it is
-   about. It leaves with the pill's badge. It stands above the card, in the
-   island's bar, so it never mixes with what is being read — at the right of
-   the bar, against its two icons: the island hides in a MacBook's notch, so
-   the middle of the bar is the notch itself and nothing can be shown there.
-   The left bound keeps it clear of the notch's 184 pt, centred in the
-   island's 640. */
-.gh-notice-slot {
-  position: absolute;
-  left: 404px;
-  right: 80px;
-  top: -29px;
-  height: 24px;
+/* The panel and, over it, the news that came in while it was open. */
+.gh-col {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
-  justify-content: flex-end;
-  z-index: 3;
-  pointer-events: none;
+  flex-direction: column;
+}
+
+/* News that came in while the panel was open — a build that broke, a pull
+   request that went in: one line in the card, over the panel and as wide as
+   it, on the card's own ground. Apart from what is being read, and clear of
+   the island's bar, whose middle is the notch on a MacBook. It opens what it
+   is about, and leaves with the pill's badge. */
+.gh-notice-slot {
+  flex: 0 0 auto;
+  margin: 6px 8px 0 0;
+}
+
+.gh-notice-slot:empty {
+  display: none;
+}
+
+.gh-notice-slot:not(:empty) + .gh-main {
+  margin-top: 5px;
 }
 
 .gh-notice {
-  pointer-events: auto;
-  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 7px;
-  flex: 0 0 auto;
+  width: 100%;
   min-width: 0;
   height: 24px;
-  padding: 0 10px;
+  padding: 0 9px 0 8px;
   border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--c) 16%, #000);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--c) 10%, transparent);
   color: var(--ink);
   font: 500 11px var(--font);
   text-align: left;
   cursor: default;
   animation: gh-rise 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+  transition: background 0.12s ease-out;
 }
 
 .gh-notice:hover {
-  background: color-mix(in srgb, var(--c) 22%, transparent);
+  background: color-mix(in srgb, var(--c) 17%, transparent);
 }
 
 .gh-notice > i {
@@ -1757,11 +1762,8 @@ button.gh-step:hover {
   text-overflow: ellipsis;
 }
 
-/* Between the notch and the bar's icons there is room for what happened and
-   nothing more: the detail waits in the sheet the line opens. */
 .gh-notice > span {
-  display: none;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   color: var(--dim);
   font-weight: 400;
@@ -1774,10 +1776,16 @@ button.gh-step:hover {
   flex: 0 0 auto;
   color: var(--c);
   font-style: normal;
+  font-weight: 600;
 }
 
-.gh-notice:empty {
-  display: none;
+/* A result card telling an integration's news: the facts under the title, on
+   one line, quieter than a session's detail. */
+.news-facts {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .gh-status:empty {

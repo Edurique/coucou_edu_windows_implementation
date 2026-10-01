@@ -268,8 +268,8 @@ State.integrations.integration_github = {
 // in while it is open.
 if (params.has("news")) {
   State.integrations.integration_github.news = params.get("news") === "merge"
-    ? { success: true, label: "#12 merged", detail: "GitHub panel for the Windows island", open: { target: pullTarget("mochi/coucou", 12), label: "#12", url: "https://github.com" } }
-    : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com" } };
+    ? { success: true, label: "#12 merged", detail: "GitHub panel for the Windows island", open: { target: pullTarget("mochi/coucou", 12), label: "#12", url: "https://github.com", title: "#12 GitHub panel for the Windows island", facts: ["coucou", "merged by louis", "+1332 \u2212" + "64", "14 files"] } }
+    : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com", title: "CI failed on coucou", facts: ["test \u203a cargo test", "main", "\u201cKeep the last snapshot through an error\u201d", "by mochi"] } };
 }
 // With the news, Mochi's state as the island's handler sets it. `view=pill`
 // shows it the way it arrives with the island away: GitHub's Mochi at the

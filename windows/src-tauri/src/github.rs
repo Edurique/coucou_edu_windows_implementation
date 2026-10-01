@@ -451,8 +451,24 @@ pub fn watch_demo(app: AppHandle) {
             let Ok(what) = std::fs::read_to_string(&trigger) else { continue };
             let _ = std::fs::remove_file(&trigger);
             let event = match what.trim() {
-                "fail" => IntegrationEvent { success: false, label: "CI failed on coucou".into(), detail: Some("main".into()), open: None },
-                "merge" => IntegrationEvent { success: true, label: "#12 merged".into(), detail: Some("GitHub panel for the Windows island".into()), open: None },
+                "fail" => IntegrationEvent {
+                    success: false,
+                    label: "CI failed on coucou".into(),
+                    detail: Some("main".into()),
+                    open: Some(json!({
+                        "title": "CI failed on coucou",
+                        "facts": ["test \u{203a} cargo test", "main", "\u{201c}Keep the last snapshot through an error\u{201d}", "by mochi", "after 2m 16s"],
+                    })),
+                },
+                "merge" => IntegrationEvent {
+                    success: true,
+                    label: "#12 merged".into(),
+                    detail: Some("GitHub panel for the Windows island".into()),
+                    open: Some(json!({
+                        "title": "#12 GitHub panel for the Windows island",
+                        "facts": ["coucou", "merged by louis", "+1332 \u{2212}64", "14 files"],
+                    })),
+                },
                 _ => continue,
             };
             // No data: the island keeps what it shows and only takes the news.
@@ -470,6 +486,11 @@ struct Merged {
     number: u64,
     title: String,
     url: String,
+    /// Who merged it, and its size: what the island's card says about it.
+    merged_by: Option<String>,
+    additions: i64,
+    deletions: i64,
+    files: i64,
 }
 
 fn parse_merged(viewer: &Value) -> Vec<Merged> {
@@ -487,6 +508,10 @@ fn parse_merged(viewer: &Value) -> Vec<Merged> {
                         number,
                         title: text(n.get("title")).unwrap_or_default(),
                         url: text(n.get("url")).unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}")),
+                        merged_by: text(n.pointer("/mergedBy/login")),
+                        additions: n.get("additions").and_then(Value::as_i64).unwrap_or(0),
+                        deletions: n.get("deletions").and_then(Value::as_i64).unwrap_or(0),
+                        files: n.get("changedFiles").and_then(Value::as_i64).unwrap_or(0),
                         repo,
                     })
                 })
@@ -509,6 +534,8 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
             success: false,
             label: format!("{} failed on {}", build.workflow, repo.name),
             detail: build.branch.clone(),
+            // The card's title and facts are filled in by `tell_failure`, which
+            // asks GitHub which job and which step broke.
             open: Some(json!({ "target": Target::Run { repo: repo.full_name.clone(), id: build.id }, "label": build.workflow, "url": build.url })),
         })
     });
@@ -523,9 +550,57 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
                 "target": Target::Pull { repo: pull.repo.clone(), number: pull.number },
                 "label": format!("#{}", pull.number),
                 "url": pull.url,
+                "title": format!("#{} {}", pull.number, pull.title),
+                "facts": merge_facts(pull),
             })),
         })
     })
+}
+
+/// What the card says under a merged pull request: where, by whom, how big.
+fn merge_facts(pull: &Merged) -> Vec<String> {
+    let mut facts = vec![pull.repo.rsplit('/').next().unwrap_or(&pull.repo).to_string()];
+    if let Some(who) = &pull.merged_by {
+        facts.push(format!("merged by {who}"));
+    }
+    facts.push(format!("+{} \u{2212}{}", pull.additions, pull.deletions));
+    facts.push(if pull.files == 1 { "1 file".to_string() } else { format!("{} files", pull.files) });
+    facts
+}
+
+/// What the card says under a build that broke: the job and the step it broke
+/// at, the branch, the commit it ran for, who started it, how long it lasted.
+fn failure_facts(run: &crate::github_detail::RunDetail) -> Vec<String> {
+    let mut facts = Vec::new();
+    if let Some(job) = run.jobs.iter().find(|j| j.state == "failure") {
+        facts.push(match job.steps.iter().find(|s| s.state == "failure") {
+            Some(step) => format!("{} \u{203a} {}", job.name, step.name),
+            None => job.name.clone(),
+        });
+    }
+    if let Some(branch) = &run.branch {
+        facts.push(branch.clone());
+    }
+    if let Some(title) = &run.title {
+        facts.push(format!("\u{201c}{title}\u{201d}"));
+    }
+    if let Some(actor) = &run.actor {
+        facts.push(format!("by {actor}"));
+    }
+    facts
+}
+
+/// A build broke: one more question to GitHub — which job, which step — so
+/// the card can say more than "it failed". Asked only then, and the answer
+/// stays in the sheets' cache for the click that opens the run. If it can't
+/// be had, the news goes out as it is.
+async fn tell_failure(event: &mut IntegrationEvent) {
+    let Some(open) = event.open.as_mut().filter(|_| !event.success) else { return };
+    let Some(target) = open.get("target").cloned().and_then(|t| serde_json::from_value::<Target>(t).ok()) else { return };
+    if let Ok(crate::github_detail::Detail::Run(run)) = crate::github_detail::detail(target, false).await {
+        open["title"] = json!(event.label);
+        open["facts"] = json!(failure_facts(&run));
+    }
 }
 
 /// Everything the panel shows. The tick, the Refresh button, opening the panel
@@ -553,8 +628,10 @@ pub async fn refresh(app: AppHandle) {
                 cache.merged = Some(merged.into_iter().map(|m| m.key).collect());
                 event
             };
-            if let Some(e) = &event {
+            let mut event = event;
+            if let Some(e) = &mut event {
                 log::line(format!("github news: {} ({})", e.label, if e.success { "good" } else { "bad" }));
+                tell_failure(e).await;
             }
             emit(&app, IntegrationUpdate { id: ID, data, error: None, event });
         }
@@ -590,7 +667,7 @@ const PROFILE_QUERY: &str = "query { viewer { login name url \
     repositoriesContributedTo(first: 25, includeUserRepositories: true, \
     orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } \
     merged: pullRequests(states: MERGED, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) { \
-    nodes { number title url repository { nameWithOwner } } } } } \
+    nodes { number title url additions deletions changedFiles mergedBy { login } repository { nameWithOwner } } } } } \
     fragment Project on Repository { name nameWithOwner url isPrivate isArchived pushedAt \
     stargazerCount primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } }";
 

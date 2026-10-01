@@ -13,7 +13,7 @@ import {
   type GithubActivity, type GithubBuild, type GithubCommitsDetail, type GithubContributions, type GithubData, type GithubDay,
   type GithubDeploy, type GithubDetail, type GithubFile, type GithubIssueDetail, type GithubJob, type GithubLabel,
   type GithubProject, type GithubPull, type GithubPullDetail, type GithubReleaseDetail, type GithubRepo,
-  type GithubRunDetail, type GithubTarget, type GithubTimed,
+  type GithubRunDetail, type GithubTarget, type GithubTimed, type IntegrationNews,
 } from "../core/bridge";
 import type { BotEmoteName } from "../core/layout";
 import { Sound } from "../core/sound";
@@ -1066,9 +1066,9 @@ function statusWord(file: GithubFile): HTMLElement {
  * From the island's finished or error card: into the panel, straight to what
  * the news is about.
  */
-export function openGithubNews(open: { target: GithubTarget; label: string; url: string }) {
+export function openGithubNews(open: NonNullable<IntegrationNews["open"]>) {
   enterGithubPanel();
-  openTarget(open.target, open.label, open.url);
+  if (open.target) openTarget(open.target, open.label ?? "", open.url ?? "");
 }
 
 /** One file touched, under its extension's badge; it opens the file's diff. */
@@ -1668,8 +1668,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
   );
   const status = h("div", { class: "gh-status" });
   const list = h("div", { class: "gh-list" });
-  // News that came in with the panel open; see drawNotice. It sits above the
-  // card, in the island's own bar, not in what is being read.
+  // News that came in with the panel open; see drawNotice. It sits in the
+  // card, over the panel and as wide as it — not in what is being read.
   const notice = h("div", { class: "gh-notice-slot" });
   const main = h("div", { class: "gh-main" }, head, status, list);
 
@@ -1680,8 +1680,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
   const trail = h("div", { class: "gh-trail" });
   const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, account, accountSub), trail);
 
-  const card = h("div", { class: "card gh-card" }, side, main);
-  const el = h("div", { class: "view" }, card, notice);
+  const card = h("div", { class: "card gh-card" }, side, h("div", { class: "gh-col" }, notice, main));
+  const el = h("div", { class: "view" }, card);
 
   /** Says which kind of screen is up: the tab's badge, and its colour on the tab. */
   function dress(look: ScreenLook | null) {
@@ -1701,10 +1701,12 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
   /**
    * With the panel open the pill is out of sight, and Mochi turning red says
-   * that something happened, not what. The news gets a line of its own above
-   * the card, in the free middle of the island's bar — apart from what is
-   * being read: what happened, and a click away, the run or the pull request
-   * it is about. It leaves when the pill's badge does, or once it is opened.
+   * that something happened, not what. The news gets a line of its own in the
+   * card, over the panel and as wide as it — apart from what is being read,
+   * and clear of the island's bar, whose middle is the notch on a MacBook:
+   * what happened, the facts that go with it, and a click away, the run or
+   * the pull request it is about. It leaves when the pill's badge does, or
+   * once it is opened.
    */
   function drawNotice() {
     clear(notice);
@@ -1719,18 +1721,16 @@ export function buildGithub(actions: ViewActions): ViewHost {
         class: "gh-notice",
         onclick: () => {
           info.news = null;
-          if (open) openTarget(open.target, open.label, open.url);
+          if (open?.target) openTarget(open.target, open.label ?? "", open.url ?? "");
           else touch();
         },
       },
       h("i", {}, svg(news.success ? ICONS.merge : ICONS.xmark, 11, news.success ? { stroke: 2.2 } : {})),
-      h("b", { text: news.label }),
-      h("span", { text: news.detail ?? "" }),
-      h("em", { text: open ? "Open" : "Dismiss" }),
+      h("b", { text: open?.title ?? news.label }),
+      h("span", { text: (open?.facts ?? (news.detail ? [news.detail] : [])).join("  ·  ") }),
+      h("em", { text: open?.target ? "Open" : "Dismiss" }),
     );
     line.style.setProperty("--c", color);
-    // The bar leaves room for a few words: the whole of it on hover.
-    line.title = news.detail ? `${news.label} · ${news.detail}` : news.label;
     notice.append(line);
   }
 

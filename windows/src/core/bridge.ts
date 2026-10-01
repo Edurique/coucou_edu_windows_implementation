@@ -432,8 +432,12 @@ export interface IntegrationNews {
   success: boolean;
   label: string;
   detail: string | null;
-  /** What the island can open for it (GitHub: the run, the pull request). */
-  open?: { target: GithubTarget; label: string; url: string };
+  /**
+   * What the island can say and open for it (GitHub): a title and a line of
+   * facts for the card — the step that broke, who merged — and the run or
+   * the pull request to go to.
+   */
+  open?: { target?: GithubTarget; label?: string; url?: string; title?: string; facts?: string[] };
 }
 
 export interface IntegrationUpdate {

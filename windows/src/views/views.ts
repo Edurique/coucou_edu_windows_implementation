@@ -377,6 +377,18 @@ function newsActions(actions: ViewActions): HTMLElement {
   );
 }
 
+/**
+ * What an integration's news puts on a result card, in the card's own three
+ * lines: who and what kind of news, the news itself, then the facts that go
+ * with it — the step that broke, who merged, how big.
+ */
+function tellNews(news: IntegrationNews, who: HTMLElement, title: HTMLElement, facts: HTMLElement) {
+  who.append(agentWho(State.focusTask, news.success ? "pull request merged" : "a build broke"));
+  title.textContent = news.open?.title ?? news.label;
+  const said = news.open?.facts ?? (news.detail ? [news.detail] : []);
+  facts.textContent = said.join("  ·  ");
+}
+
 function buildError(actions: ViewActions): ViewHost {
   const who = h("div");
   const title = h("div", { class: "title", text: "Workflow stopped." });
@@ -385,8 +397,9 @@ function buildError(actions: ViewActions): ViewHost {
     btn("Retry", "primary", () => actions.setView(State.defaultView())),
     btn("Open in n8n", "secondary", () => actions.openUrl("")),
   );
+  const facts = h("div", { class: "sub news-facts" });
   const newsRow = newsActions(actions);
-  const el = h("div", { class: "view" }, card("red", stack(116, 16, who, title, detail, row, newsRow)));
+  const el = h("div", { class: "view" }, card("red", stack(116, 16, who, title, detail, facts, row, newsRow)));
   return {
     el,
     sync() {
@@ -394,11 +407,11 @@ function buildError(actions: ViewActions): ViewHost {
       const news = frontNews();
       row.style.display = news ? "none" : "";
       newsRow.style.display = news ? "" : "none";
+      detail.style.display = news ? "none" : "";
+      facts.style.display = news ? "" : "none";
       clear(who);
       if (news) {
-        who.append(agentWho(task, ""));
-        title.textContent = news.label;
-        detail.textContent = news.detail ?? "";
+        tellNews(news, who, title, facts);
         return;
       }
       who.append(agentWho(task, task?.source === "n8n" ? "n8n" : "Claude Code"));
@@ -417,21 +430,19 @@ function buildFinished(actions: ViewActions): ViewHost {
     btn("Open terminal", "primary", () => actions.openTerminal()),
     btn("OK", "secondary", () => actions.collapse()),
   );
-  const detail = h("div", { class: "detail" });
+  const facts = h("div", { class: "sub news-facts" });
   const newsRow = newsActions(actions);
-  const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, detail, row, newsRow)));
+  const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, facts, row, newsRow)));
   return {
     el,
     sync() {
       const news = frontNews();
       row.style.display = news ? "none" : "";
       newsRow.style.display = news ? "" : "none";
-      detail.style.display = news?.detail ? "" : "none";
+      facts.style.display = news ? "" : "none";
       clear(who);
       if (news) {
-        who.append(agentWho(State.focusTask, ""));
-        title.textContent = news.label;
-        detail.textContent = news.detail ?? "";
+        tellNews(news, who, title, facts);
         return;
       }
       who.append(agentWho(State.focusTask, "Claude Code finished"));
