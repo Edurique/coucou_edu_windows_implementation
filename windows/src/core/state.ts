@@ -233,6 +233,9 @@ const task = (
 /** The pill that follows Claude Code sessions. */
 export const CLAUDE_ID = "integration_claude";
 
+/** The pill that shows what Spotify plays. */
+export const SPOTIFY_ID = "integration_spotify";
+
 /** AgentTask.integrationAgents — same ids, names and colours as macOS. */
 export const INTEGRATION_AGENTS: AgentTask[] = [
   task("integration_claude", "VS Code", "#F5F6F8", "claudeCode"),
@@ -243,11 +246,14 @@ export const INTEGRATION_AGENTS: AgentTask[] = [
   task("integration_notion", "Notion", "#8C8C8C", "n8n"),
   task("integration_calcom", "Cal.com", "#C9956A", "n8n"),
   task("integration_stripe", "Stripe", "#0570DE", "n8n"),
+  // Windows only for now: asked of the system, no key (see media.rs).
+  task(SPOTIFY_ID, "Spotify", "#1DB954", "n8n"),
 ];
 
 export const TOGGLEABLE_INTEGRATION_IDS = [
   "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
   "integration_notion", "integration_calcom", "integration_stripe",
+  SPOTIFY_ID,
 ];
 
 /** What an integration poller last reported. */
@@ -273,6 +279,8 @@ export interface Settings {
   model: string;
   /** GitHub projects ("owner/name") whose news the pill keeps to itself. */
   githubMuted: string[];
+  /** The island unfolds for a moment on each new song Spotify plays. */
+  announceSongs: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -288,6 +296,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hooksInstalled: false,
   model: "claude-opus-5",
   githubMuted: [],
+  announceSongs: true,
 };
 
 type Listener = () => void;

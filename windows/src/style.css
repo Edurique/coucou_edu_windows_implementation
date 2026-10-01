@@ -1397,6 +1397,7 @@ input[type="range"]::-webkit-slider-thumb {
   --gh-tile: color-mix(in srgb, var(--card), #fff 3.5%);     /* a block of a sheet */
   --gh-tile-hover: color-mix(in srgb, var(--card), #fff 7%);
 
+  --spotify: #1db954;        /* Spotify's green: its pill, what plays, a song announced */
   --on-light: #0b0c0e;       /* a mark or a word on a light or a coloured ground */
 
   --code: #d6d9df;
@@ -4026,4 +4027,260 @@ button.gh-block:hover {
 
 .gh-bell.off {
   color: var(--dim-5);
+}
+
+/* The Spotify card: the cover's place where Mochi stands on the other cards,
+   as big as the card allows, then the song, who plays it, and the player's
+   keys. The cover itself is the island's (#island-cover), laid over its place. */
+.media-card {
+  position: relative;
+  height: 100%;
+}
+
+.media-cover {
+  position: absolute;
+  left: 11px;
+  top: 11px;
+  bottom: 11px;
+  aspect-ratio: 1;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  background: var(--gh-plate);
+  color: transparent;
+  transition: color 0.3s ease-out;
+}
+
+/* No cover to lay over it: its own mark shows. */
+.media-cover.empty {
+  color: var(--dim-3);
+}
+
+/* The cover of what plays, the island's own: in the folded island and over
+   its place on the card, carried from one to the other (island/cover.ts). */
+#island-cover {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--card-flat);
+  /* The shade under the cover, kept when it glows. */
+  --cover-shade: 0 3px 12px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--cover-shade);
+  /* Gone at once: what it stood on is already leaving. */
+  transition: opacity 0.1s ease-out;
+}
+
+#island-cover.on {
+  opacity: 1;
+  transition: opacity 0.28s ease-out;
+}
+
+/* A new song's cover comes in over the one before, from a little larger. */
+#island-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: cover-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes cover-in {
+  from {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+}
+
+/* Three bars beside "Now playing": they dance while a song plays, and rest. */
+.media-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 9px;
+  margin-left: 1px;
+}
+
+.media-bars > i {
+  width: 2px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--spotify);
+  transform-origin: bottom;
+  transition: height 0.3s ease-out, opacity 0.3s ease-out;
+  opacity: 0.45;
+}
+
+.media-bars.on > i {
+  height: 9px;
+  opacity: 1;
+  animation: media-bar 0.9s ease-in-out infinite alternate;
+}
+
+.media-bars.on > i:nth-child(2) {
+  animation-duration: 0.7s;
+  animation-delay: -0.3s;
+}
+
+.media-bars.on > i:nth-child(3) {
+  animation-duration: 1.1s;
+  animation-delay: -0.6s;
+}
+
+@keyframes media-bar {
+  from {
+    transform: scaleY(0.3);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.media-title {
+  padding-top: 4px;
+  font: 600 13px var(--font);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.media-run {
+  display: inline-block;
+}
+
+/* A title too long for its line runs to its end and back, with a rest at each
+   end, its edges fading out. It stops with everything else when the island is
+   folded (see #content.away). */
+.media-title.runs {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 12px), transparent 100%);
+}
+
+.media-title.runs .media-run {
+  animation: media-run var(--run-time, 8s) ease-in-out infinite alternate;
+}
+
+@keyframes media-run {
+  0%, 18% {
+    transform: translateX(0);
+  }
+  82%, 100% {
+    transform: translateX(var(--run, 0));
+  }
+}
+
+.media-title.quiet {
+  color: var(--dim);
+  font-weight: 500;
+}
+
+.media-artist {
+  font: 400 11.5px var(--font);
+  color: var(--dim-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the song is from. */
+.media-album {
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+/* Under the finger a key gives; play turning into pause pops. */
+.media-key {
+  width: 24px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: var(--gh-plate);
+  color: var(--ink-2);
+  cursor: default;
+  transition: background 0.12s ease-out, transform 0.12s cubic-bezier(0.3, 1.2, 0.4, 1);
+}
+
+.media-key:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.media-key:active {
+  transform: scale(0.88);
+}
+
+.media-key.pressed svg {
+  animation: pop-in 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+.media-key.main {
+  width: 30px;
+  background: var(--ink);
+  color: var(--on-light);
+}
+
+/* ── A song being announced ─────────────────────────────────────────────────
+   The island opened on its own: light says why. A wash of Spotify's green
+   breathes behind the cover, a sheen passes over the cover and it glows.
+   Each plays once. */
+.media-card.announce::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 140% at 12% 50%, color-mix(in srgb, var(--spotify) 34%, transparent), transparent 62%);
+  animation: announce-wash var(--announce, 4.5s) ease-in-out both;
+}
+
+@keyframes announce-wash {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  45% { opacity: 0.55; }
+  70% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+
+/* The words of the card stay above its light. */
+.media-card > * {
+  position: relative;
+}
+
+.media-card > .media-cover {
+  position: absolute;
+}
+
+#island-cover.shine {
+  animation: cover-glow 1.6s ease-out both;
+}
+
+@keyframes cover-glow {
+  0% { box-shadow: var(--cover-shade), 0 0 0 0 color-mix(in srgb, var(--spotify) 90%, transparent); }
+  35% { box-shadow: var(--cover-shade), 0 0 22px 5px color-mix(in srgb, var(--spotify) 65%, transparent); }
+  100% { box-shadow: var(--cover-shade), 0 0 0 0 transparent; }
+}
+
+/* The sheen: a band of light that crosses the cover once. */
+#island-cover.shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.55) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: cover-sheen 0.9s 0.25s ease-in-out both;
+}
+
+@keyframes cover-sheen {
+  to { transform: translateX(120%); }
 }

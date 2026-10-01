@@ -4,10 +4,10 @@
 // Cal.com is the one simplification: macOS shows a three-level calendar
 // (month → day → booking); here it is the list of upcoming bookings.
 
-import { h, svg, clear, dot } from "./dom";
+import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { COLOR } from "./palette";
-import { State, type AgentTask } from "../core/state";
+import { SPOTIFY_ID, State, type AgentTask } from "../core/state";
 import { Bridge, type GithubActivityKind, type GithubData, type GithubTarget } from "../core/bridge";
 
 /** Same shape as the Swift `timeAgo` computed properties. */
@@ -200,6 +200,159 @@ function resendCard(): HTMLElement {
     rows.append(listRow(accent, i === 0, ...cells));
   });
   return h("div", { class: "int-card" }, header("#22C55E", "Resend", "Emails", extra), rows);
+}
+
+// ── Spotify ───────────────────────────────────────────────────────────────────
+
+/** How fast a title too long for its line runs across it, in px per second, and how long it rests at each end. */
+const RUN_PX_PER_S = 28;
+const RUN_REST_S = 1.6;
+
+/** What the card shows of Spotify: what Windows says, as plain values. */
+interface Playing {
+  open: boolean;
+  playing: boolean;
+  title: string;
+  artist: string;
+  album: string;
+  /** The cover as a `data:` URL of a picture, or null. */
+  cover: string | null;
+}
+
+/** What Spotify is playing, as the Rust side last said it. */
+export function nowPlaying(): Playing {
+  const now = get(SPOTIFY_ID);
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const cover = text(now.cover);
+  return {
+    open: now.open === true,
+    playing: now.playing === true,
+    title: text(now.title),
+    artist: text(now.artist),
+    album: text(now.album),
+    // Only ever a picture: nothing else is put in an image's place.
+    cover: cover.startsWith("data:image/") ? cover : null,
+  };
+}
+
+/** What a card is drawn from, for a pill whose data is too big to compare whole: a cover is tens of kilobytes. */
+export function integrationKey(id: string): string {
+  if (id !== SPOTIFY_ID) return JSON.stringify(State.integrations[id]?.data ?? {});
+  const now = nowPlaying();
+  return [now.open, now.playing, now.title, now.artist, now.album, now.cover?.length ?? 0].join("|");
+}
+
+/**
+ * Spotify's card: the cover's place, the song, who plays it, the album it is
+ * from, and the player's keys. The cover stands where Mochi does on every
+ * other card — he has nothing to say here, and steps out — and is drawn by
+ * the island itself (island/cover.ts), which carries it there from the folded
+ * island. A paused song is still the song.
+ *
+ * Built once and changed where it stands: a song that starts brings its words
+ * in, play turns into pause, and nothing else moves — a card built again at
+ * every change would play every entrance again each time.
+ */
+function buildSpotifyCard(color: string): { el: HTMLElement; sync(): void } {
+  const slot = h("div", { class: "media-cover" }, svg(ICONS.play, 22));
+  const kind = h("span");
+  // Three bars that dance while something plays, and rest when it does not.
+  const bars = h("i", { class: "media-bars" }, h("i"), h("i"), h("i"));
+  const head = h("div", { class: "int-head" }, dot(color, 7), h("b", { text: "Spotify" }), kind, bars);
+  const run = h("span", { class: "media-run" });
+  const title = h("div", { class: "media-title" }, run);
+  const artist = h("div", { class: "media-artist" });
+  const album = h("div", { class: "media-album" });
+
+  const key = (icon: string, label: string, action: "toggle" | "next" | "previous") =>
+    h(
+      "button",
+      {
+        class: action === "toggle" ? "media-key main" : "media-key",
+        title: label,
+        // What it did comes back on its own: Windows says when the song or its state changes.
+        onclick: () => void Bridge.mediaKey(action),
+      },
+      svg(icon, 11),
+    );
+  const toggle = key(ICONS.play, "Play", "toggle");
+  const keys = h("div", { class: "media-keys" }, key(ICONS.previous, "Previous", "previous"), toggle, key(ICONS.next, "Next", "next"));
+  const el = h("div", { class: "int-card media-card" }, slot, head, title, artist, album, keys);
+
+  /** A title too long for its line runs from side to side; one that fits stays still. Measured once it is on screen. */
+  function fitTitle() {
+    title.classList.remove("runs");
+    requestAnimationFrame(() => {
+      const over = run.offsetWidth - title.clientWidth;
+      if (over <= 0) return;
+      title.classList.add("runs");
+      title.style.setProperty("--run", `${-over}px`);
+      title.style.setProperty("--run-time", `${(over / RUN_PX_PER_S + RUN_REST_S * 2).toFixed(2)}s`);
+    });
+  }
+
+  let shown = { song: "\u0000", by: "", from: "", playing: null as boolean | null, open: null as boolean | null, cover: null as boolean | null };
+
+  return {
+    el,
+    sync() {
+      const now = nowPlaying();
+      const song = now.title || (now.open ? "Nothing playing" : "Spotify is not playing");
+      const by = now.title ? now.artist : now.open ? "Pick a song in Spotify" : "Play something in the Spotify app";
+      const from = now.title ? now.album : "";
+
+      // The song's words come in together when the song changes.
+      if (song !== shown.song || by !== shown.by || from !== shown.from) {
+        run.textContent = song;
+        title.title = song;
+        title.classList.toggle("quiet", !now.title);
+        artist.textContent = by;
+        artist.title = by;
+        album.textContent = from;
+        album.title = from;
+        album.style.display = from ? "" : "none";
+        for (const line of [title, artist, album]) replay(line, "now-in");
+        fitTitle();
+      }
+      if (now.playing !== shown.playing) {
+        kind.textContent = now.playing ? "Now playing" : now.title ? "Paused" : "Music";
+        bars.classList.toggle("on", now.playing);
+        toggle.title = now.playing ? "Pause" : "Play";
+        toggle.replaceChildren(svg(now.playing ? ICONS.pause : ICONS.play, 11));
+        if (shown.playing != null) replay(toggle, "pressed");
+      }
+      if (now.open !== shown.open) keys.style.display = now.open ? "" : "none";
+      // With a cover the island's own picture lies over this place; without, its mark shows.
+      if ((now.cover != null) !== shown.cover) slot.classList.toggle("empty", now.cover == null);
+      shown = { song, by, from, playing: now.playing, open: now.open, cover: now.cover != null };
+    },
+  };
+}
+
+let spotify: ReturnType<typeof buildSpotifyCard> | null = null;
+let announced: number | null = null;
+
+/**
+ * The card says it is here on purpose: a new song is being announced. For as
+ * long as the island stays open on it (`ms`), a wash of Spotify's green
+ * breathes behind the cover.
+ */
+export function announceOnCard(ms: number) {
+  // The card may never have been shown: it is built for the pill, to be lit as it comes in.
+  const task = State.tasks.find((t) => t.id === SPOTIFY_ID);
+  if (!task) return;
+  spotify ??= buildSpotifyCard(task.color);
+  const { el } = spotify;
+  el.style.setProperty("--announce", `${ms}ms`);
+  replay(el, "announce");
+  if (announced != null) window.clearTimeout(announced);
+  announced = window.setTimeout(() => el.classList.remove("announce"), ms);
+}
+
+function spotifyCard(task: AgentTask): HTMLElement {
+  spotify ??= buildSpotifyCard(task.color);
+  spotify.sync();
+  return spotify.el;
 }
 
 // ── GitHub ────────────────────────────────────────────────────────────────────
@@ -503,6 +656,7 @@ export function hasIntegrationData(id: string): boolean {
     case "integration_notion":
       return arr(id, "pages").length > 0;
     case "integration_calcom":
+    case SPOTIFY_ID:
       return info.loaded;
     default:
       return false;
@@ -532,6 +686,8 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
       return notionCard();
     case "integration_calcom":
       return calcomCard();
+    case SPOTIFY_ID:
+      return spotifyCard(task);
     default:
       return idleCard(task, hooks.openSettings);
   }

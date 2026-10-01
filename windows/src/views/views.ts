@@ -9,7 +9,7 @@ import { CARD_AIR_MIN, VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, 
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
-import { renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
+import { integrationKey, renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
 import { buildGithub, enterGithubPanel, newsFacts } from "./github";
 import { buildSession, sessionName, sessionsChip } from "./session";
 import { diffLine, fileKind, plusMinus, readPatch } from "./code";
@@ -433,13 +433,19 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
         const key = [
           task.id, detailOpen, task.state, task.steps.join("|"),
           info?.loaded, info?.error, info?.configured,
-          JSON.stringify(info?.data ?? {}),
+          integrationKey(task.id),
         ].join("~");
         if (key !== cardKey) {
           cardKey = key;
           mode = "card";
-          clear(leftBody);
-          leftBody.append(renderIntegrationCard(task, hooks));
+          // A card that is kept and changed where it stands comes back as the
+          // same element: taking it out and putting it back would play its
+          // entrances again.
+          const next = renderIntegrationCard(task, hooks);
+          if (leftBody.firstChild !== next || leftBody.childNodes.length !== 1) {
+            clear(leftBody);
+            leftBody.append(next);
+          }
         }
       }
 

@@ -10,7 +10,7 @@ import {
   type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { CLAUDE_ID, QUESTION_TOOL, State, type SessionStep } from "../core/state";
+import { CLAUDE_ID, QUESTION_TOOL, SPOTIFY_ID, State, type SessionStep } from "../core/state";
 import { BotEngine, hexToRGB, type RGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
@@ -22,6 +22,8 @@ import { enterSessionPanel } from "../views/session";
 import { followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
+import { FloatingCover, type CoverPlace } from "./cover";
+import { nowPlaying } from "../views/integrations";
 
 const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
@@ -78,6 +80,8 @@ export class Island {
   private viewState: BotStateName | null = null;
   /** The colour Mochi's body is drawn in, eased towards what it should be. */
   private bodyRGB: RGB | null = null;
+  /** The cover of what Spotify plays: in the folded island and on Spotify's card. */
+  private cover = new FloatingCover();
 
   private running = false;
   private lastFrame = 0;
@@ -88,6 +92,16 @@ export class Island {
   private collapsed = false;
   private collapseTimer: number | null = null;
   private wasInIsland = false;
+
+  /** The cover's light, for a song that is being announced. */
+  shineCover() {
+    this.cover.shine();
+  }
+
+  /** True while the mouse is on the island: whoever opened it for a moment leaves it open. */
+  get hovered(): boolean {
+    return this.wasInIsland;
+  }
   /** Last shape handed to Rust for the click-through test. */
   private pushedRect = { x: -1, y: -1, w: -1, h: -1 };
   private homeCollapseAt: number | null = null;
@@ -148,6 +162,7 @@ export class Island {
           integration_stripe: "https://dashboard.stripe.com/payments",
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
+          [SPOTIFY_ID]: "https://open.spotify.com",
         };
         if (task.id === CLAUDE_ID) this.openClient();
         else if (task.id === "integration_n8n") void Bridge.openN8n();
@@ -263,6 +278,9 @@ export class Island {
       this.greetingCanvas,
       this.uploadCanvas.el,
       this.contentEl,
+      // Inside the island's shape, unlike Mochi: a cover as large as a card
+      // must fold away with the island, not hang under it while it shrinks.
+      this.cover.el,
     );
     this.islandEl = h(
       "div",
@@ -810,7 +828,9 @@ export class Island {
       this.syncDom();
     }
 
-    this.updateBotTargets();
+    const coverPlace = this.coverPlace();
+    this.cover.place(coverPlace, dt);
+    this.updateBotTargets(coverPlace != null);
     this.botCx.step(dt);
     this.botCy.step(dt);
     this.botSize.step(dt);
@@ -851,7 +871,7 @@ export class Island {
       ? settling
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
-        greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling ||
+        greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling || this.cover.moving ||
         // A view showing something live keeps its Mochis moving: a run's crew
         // would otherwise freeze the moment the big one came to rest.
         this.viewState != null;
@@ -864,18 +884,46 @@ export class Island {
     }
   };
 
-  private updateBotTargets() {
+  /**
+   * Where the cover of what Spotify plays goes, with Spotify's pill in front:
+   * in the folded island, where Mochi sits — he looks at the cursor for
+   * nothing while a song plays — and on Spotify's card, in the place the card
+   * keeps for it. Anywhere else, and with no cover, there is none.
+   */
+  private coverPlace(): CoverPlace | null {
+    const now = State.focusId === SPOTIFY_ID ? nowPlaying() : null;
+    this.cover.picture(now?.cover ?? null);
+    if (!now?.cover) return null;
+    if (State.mode === "compact") {
+      const p = botPosition("compact", State.view, this.height.value);
+      return { x: p.cx - p.diameter / 2, y: p.cy - p.diameter / 2, size: p.diameter };
+    }
+    if (State.mode !== "expanded" || State.view !== "overview") return null;
+    const slot = this.viewsEl.querySelector<HTMLElement>(".media-cover");
+    if (!slot?.isConnected) return null;
+    const box = slot.getBoundingClientRect();
+    const island = this.islandEl.getBoundingClientRect();
+    return box.width > 0 ? { x: box.left - island.left, y: box.top - island.top, size: box.width } : null;
+  }
+
+  private updateBotTargets(covered: boolean) {
     const p = botPosition(State.mode, State.view, this.height.value, State.uploadProgress);
     this.botCx.target = p.cx;
     this.botCy.target = p.cy;
     this.botSize.target = p.diameter / 0.6;
 
     const greetingActive = State.mode === "expanded" && State.view === "greeting";
-    // The drop canvas draws its own Mochi; two of them would overlap.
-    const visible = p.opacity > 0 && !greetingActive && !this.uploadActive;
+    // The drop canvas draws its own Mochi; two of them would overlap. And the
+    // cover of what Spotify plays stands where he does: on Spotify's card,
+    // cover or not, and in the folded island while there is one.
+    const coverUp =
+      covered ||
+      (State.mode === "expanded" && State.view === "overview" &&
+        State.focusId === SPOTIFY_ID && State.integrations[SPOTIFY_ID]?.loaded === true);
+    const visible = p.opacity > 0 && !greetingActive && !this.uploadActive && !coverUp;
     this.botCanvas.style.opacity = visible ? "1" : "0";
 
-    if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive) {
+    if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive && !coverUp) {
       const d = p.diameter;
       const color = botGlowColor(State.effectiveState);
       this.botGlow.style.display = "block";
