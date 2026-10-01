@@ -1831,7 +1831,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
   function clearList() {
     clear(list);
     // Only a file's code runs edge to edge; everything else keeps its margins.
-    list.classList.remove("code");
+    list.classList.remove("gh-edge");
     actions.tintMochi(null);
   }
 
@@ -1907,7 +1907,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       sub.textContent = screen.file.path;
       sub.classList.add("path");
       aside.append(statusWord(screen.file), plusMinus(screen.file.additions, screen.file.deletions));
-      list.classList.add("code");
+      list.classList.add("gh-edge");
       list.append(diffView(screen.file, screen.url));
     } else if (screen.type === "project") {
       who.textContent = repoName(screen.fullName, login);

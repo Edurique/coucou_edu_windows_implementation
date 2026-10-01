@@ -2282,7 +2282,7 @@ button.gh-step:hover {
 }
 
 /* The panel is the editor: the code runs from one edge to the other. */
-.gh-list.code {
+.gh-list.gh-edge {
   padding: 0;
 }
 
