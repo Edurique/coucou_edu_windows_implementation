@@ -52,6 +52,8 @@ const OPEN_URLS: Record<string, string> = {
   integration_stripe: "https://dashboard.stripe.com/payments",
   integration_notion: "https://notion.so",
   integration_calcom: "https://app.cal.com/bookings",
+  integration_spotify: "https://open.spotify.com",
+  integration_whatsapp: "https://web.whatsapp.com",
 };
 
 function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
@@ -200,6 +202,79 @@ function resendCard(): HTMLElement {
     rows.append(listRow(accent, i === 0, ...cells));
   });
   return h("div", { class: "int-card" }, header("#22C55E", "Resend", "Emails", extra), rows);
+}
+
+// ── Spotify ───────────────────────────────────────────────────────────────────
+
+const SPOTIFY = "integration_spotify";
+/** After a key is pressed, how long the app takes to say so in its window's title. */
+const KEY_SETTLES_MS = 700;
+
+/** One of the keyboard's media keys, then a look at what it did. */
+function mediaKey(icon: string, title: string, action: "toggle" | "next" | "previous"): HTMLElement {
+  return h(
+    "button",
+    {
+      class: action === "toggle" ? "media-key main" : "media-key",
+      title,
+      onclick: () => {
+        void Bridge.mediaKey(action);
+        window.setTimeout(() => void Bridge.refreshIntegration(SPOTIFY), KEY_SETTLES_MS);
+      },
+    },
+    svg(icon, 11),
+  );
+}
+
+/**
+ * What Spotify is playing, read from its window's title, and the keyboard's
+ * media keys. Paused and idle look the same from here: the app only says a
+ * song's name while it plays.
+ */
+function spotifyCard(): HTMLElement {
+  const now = get(SPOTIFY);
+  const playing = now.playing === true;
+  const open = now.open === true;
+  const title = playing ? String(now.title ?? "") : open ? "Nothing playing" : "Spotify is not open";
+  const artist = playing ? String(now.artist ?? "") : open ? "Paused, or between two songs" : "Only the desktop app is seen";
+  const keys = h(
+    "div",
+    { class: "media-keys" },
+    mediaKey(ICONS.previous, "Previous", "previous"),
+    mediaKey(playing ? ICONS.pause : ICONS.play, playing ? "Pause" : "Play", "toggle"),
+    mediaKey(ICONS.next, "Next", "next"),
+  );
+  return h(
+    "div",
+    { class: "int-card" },
+    header("#1DB954", "Spotify", playing ? "Now playing" : "Music"),
+    h("div", { class: playing ? "media-title" : "media-title quiet", text: title, title }),
+    h("div", { class: "media-artist", text: artist, title: artist }),
+    open ? keys : h("div", { class: "int-actions" }),
+  );
+}
+
+// ── WhatsApp ──────────────────────────────────────────────────────────────────
+
+/**
+ * How many WhatsApp messages are unread, as far as a window's title says:
+ * WhatsApp Web shows the count while its tab is the one a browser window
+ * shows. Open without a count, the pill knows it is there and no more.
+ */
+function whatsappCard(task: AgentTask): HTMLElement {
+  const state = get(task.id);
+  const open = state.open === true;
+  const unread = typeof state.unread === "number" ? state.unread : 0;
+  const figure = h("div", { class: "int-figure" }, h("b", { text: open ? String(unread) : "—" }), h("span", { text: unread === 1 ? "unread message" : "unread messages" }));
+  // One line: the ↗ of the card is the way to WhatsApp.
+  const note = open ? (unread > 0 ? "From its window's title" : "Nothing unread") : "Open WhatsApp Web to count";
+  return h(
+    "div",
+    { class: "int-card" },
+    header(task.color, "WhatsApp", "Messages"),
+    figure,
+    h("div", { class: "int-status" }, dot(open ? "#22C55E" : COLOR.grey, 5), h("span", { text: note })),
+  );
 }
 
 // ── GitHub ────────────────────────────────────────────────────────────────────
@@ -503,6 +578,8 @@ export function hasIntegrationData(id: string): boolean {
     case "integration_notion":
       return arr(id, "pages").length > 0;
     case "integration_calcom":
+    case "integration_spotify":
+    case "integration_whatsapp":
       return info.loaded;
     default:
       return false;
@@ -532,6 +609,10 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
       return notionCard();
     case "integration_calcom":
       return calcomCard();
+    case "integration_spotify":
+      return spotifyCard();
+    case "integration_whatsapp":
+      return whatsappCard(task);
     default:
       return idleCard(task, hooks.openSettings);
   }

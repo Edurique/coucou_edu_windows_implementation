@@ -19,6 +19,9 @@ const KEY_FOR: Record<string, string> = {
   integration_calcom: "calcom-api-key",
 };
 
+/** The pills that have no key: read from what is on this machine, they are set up as soon as they are switched on. */
+const KEYLESS = ["integration_spotify", "integration_whatsapp"];
+
 const clearTimers = new Map<string, number>();
 /** As in the Swift pollers: a pill's finished or error look clears itself after this. */
 const SETTLE_MS = 60_000;
@@ -108,6 +111,13 @@ export async function refreshConfigured() {
     const present = (await Bridge.secretPresent(key)) ?? false;
     const info = State.integrations[id] ?? { data: {}, error: null, loaded: false, configured: false };
     State.integrations[id] = { ...info, configured: present };
+  }
+  for (const id of KEYLESS) {
+    const info = State.integrations[id] ?? { data: {}, error: null, loaded: false, configured: true };
+    State.integrations[id] = { ...info, configured: true };
+    // They speak only when what they say changes: one just switched on, or
+    // an island just loaded, asks for what there is to say now.
+    if (!info.loaded && State.settings.activeIntegrations.includes(id)) void Bridge.refreshIntegration(id);
   }
   const hooks = State.settings.hooksInstalled;
   const claude = State.integrations.integration_claude ?? {

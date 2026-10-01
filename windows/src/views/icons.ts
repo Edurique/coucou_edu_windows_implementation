@@ -70,6 +70,12 @@ export const ICONS = {
   bell: "M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14zM10 20.5a2 2 0 0 0 4 0",
   bellOff: "M6.5 16.5V11a5.5 5.5 0 0 1 9-4.2M17.5 11.5v5l1.5 2H8M10 20.5a2 2 0 0 0 4 0M4.5 4.5l15 15",
 
+  // A player's keys, filled: back, play, pause, on.
+  previous: "M18.5 5.5 9 12l9.5 6.5zM5.5 5.5H8v13H5.5z",
+  play: "M8 5v14l11-7z",
+  pause: "M7 5.5h3.6v13H7zM13.4 5.5H17v13h-3.6z",
+  next: "M5.5 5.5 15 12l-9.5 6.5zM16 5.5h2.5v13H16z",
+
   // A session's steps, stroked: an edit, a command, a search.
   pencil: "M4.5 19.5l1-4.2L16.6 4.2l3.2 3.2L8.7 18.5l-4.2 1zM14.4 6.4l3.2 3.2",
   terminal: "M5 7.5 9.5 12 5 16.5M12.5 17H19",

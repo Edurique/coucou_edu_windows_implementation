@@ -149,6 +149,8 @@ export class Island {
           integration_stripe: "https://dashboard.stripe.com/payments",
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
+          integration_spotify: "https://open.spotify.com",
+          integration_whatsapp: "https://web.whatsapp.com",
         };
         if (task.id === CLAUDE_ID) this.openClient();
         else if (task.id === "integration_n8n") void Bridge.openN8n();

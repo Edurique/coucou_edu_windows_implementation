@@ -8,6 +8,7 @@ mod hooks;
 mod integrations;
 mod island;
 mod log;
+mod media;
 mod pipe;
 mod secrets;
 mod settings;
@@ -357,6 +358,12 @@ async fn refresh_integration(app: AppHandle, id: String) {
     integrations::poll_once(app, &id).await;
 }
 
+/// One of the keyboard's media keys, from the Spotify card: "toggle", "next" or "previous".
+#[tauri::command]
+fn media_key(action: String) -> Result<(), String> {
+    media::press(&action)
+}
+
 /// Lets the island write to the same log as the Rust side.
 #[tauri::command]
 fn log_line(message: String) {
@@ -474,6 +481,7 @@ pub fn run() {
             github_day,
             github_detail,
             refresh_integration,
+            media_key,
             open_n8n,
             open_settings_window,
             set_paused,

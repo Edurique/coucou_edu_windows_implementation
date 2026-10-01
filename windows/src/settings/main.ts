@@ -422,6 +422,8 @@ interface IntegrationDef {
   fields: { key: string; label: string; placeholder: string; secret: boolean }[];
   /** For an integration that needs more than its fields. */
   setup?: (present: Record<string, boolean>) => IntegrationSetup;
+  /** For one that needs nothing: what it reads, in a line. */
+  note?: string;
 }
 
 interface IntegrationSetup {
@@ -449,6 +451,10 @@ const INTEGRATIONS: IntegrationDef[] = [
     fields: [{ key: "notion-api-key", label: "Integration token", placeholder: "ntn_…", secret: true }] },
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
+  { id: "integration_spotify", name: "Spotify", color: "#1DB954", fields: [],
+    note: "No key: reads what the Spotify desktop app is playing from its window's title." },
+  { id: "integration_whatsapp", name: "WhatsApp", color: "#25D366", fields: [],
+    note: "No key: counts unread messages from the title of a WhatsApp Web window. No message is read." },
 ];
 
 const MAX_ACTIVE = 4;
@@ -489,6 +495,7 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
     if (setup) rows.append(setup.status);
+    if (def.note) rows.append(h("span", { class: "hint", style: "padding-top:5px", text: def.note }));
     for (const field of def.fields) {
       const input = h("input", {
         type: field.secret ? "password" : "text",

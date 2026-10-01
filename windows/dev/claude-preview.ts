@@ -25,8 +25,8 @@ State.isPinned = true;
 const island = new Island(document.getElementById("root")!);
 const hook = (payload: HookPayload) => handleHook(island, { ...base, ...payload });
 // From the console: `hook({ hook_event_name: "Stop" })` plays any event by hand,
-// and `island.launch()` the greeting.
-Object.assign(window, { hook, island });
+// `island.launch()` the greeting, and `State` is the island's own.
+Object.assign(window, { hook, island, State });
 
 const edit = (file: string, patch: string, created = false) => {
   const lines = patch.split("\n");

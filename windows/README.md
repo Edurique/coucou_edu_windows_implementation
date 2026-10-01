@@ -240,6 +240,29 @@ Rust side.
 - A sheet is fetched **when you open it**, and kept for a minute.
 - Nothing while Coucou is paused or GitHub is switched off.
 
+## Spotify and WhatsApp
+
+Two pills that need no key and no account. Switch them on in **Settings… →
+Integrations**, like the others — four pills at most show next to Mochi.
+
+| Pill | What it shows | Where it comes from |
+|---|---|---|
+| **Spotify** | The song playing and who plays it, with previous, play/pause and next | The title of the Spotify desktop app's window; the buttons press the keyboard's media keys |
+| **WhatsApp** | How many messages are unread, and a badge when there are more | The title of a WhatsApp Web window, which reads "(3) WhatsApp" |
+
+Reading a window's title is local and instant: nothing is asked of Spotify or
+WhatsApp, nothing touches the network, and no message or contact is ever read.
+It is also where the two stop:
+
+- Spotify playing in a browser is not seen, only the desktop app. Paused and
+  idle look the same: the app names a song only while it plays.
+- WhatsApp is counted while its tab is the one a browser window shows. Behind
+  another tab, or in the desktop app — whose window says "WhatsApp" with no
+  count — the pill knows it is open, not what is unread.
+
+The idea comes from corefusiion's pull request on the main repository
+(Louis-CFM/coucou#80).
+
 ## Build it yourself
 
 You need [Rust](https://rustup.rs), [Node 20+](https://nodejs.org), and the
@@ -319,5 +342,6 @@ problems. It stays on your machine.
   attach it as context, and jumping to a specific terminal window — "Open
   terminal" opens the working folder in VS Code when `code` is on your `PATH`.
 - Cal.com shows the next bookings as a list rather than the Mac's calendar.
+- The [Spotify and WhatsApp](#spotify-and-whatsapp) pills are Windows-only for now.
 - GitHub goes further than the Mac's card: the [panel](#github), the news of a
   broken build or a merged pull request, and comments are Windows-only for now.
