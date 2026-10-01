@@ -10,8 +10,8 @@ import { washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, ty
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
-import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
-import { buildGithub, enterGithubPanel, newsFacts, openGithubNews } from "./github";
+import { renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
+import { buildGithub, enterGithubPanel, newsFacts } from "./github";
 import type { IntegrationNews } from "../core/bridge";
 
 export interface ViewActions {
@@ -173,12 +173,7 @@ function buildOverview(actions: ViewActions): ViewHost {
       State.notify();
     },
     openSettings: () => actions.openSettingsWindow(),
-    openPanel(open) {
-      actions.blip();
-      if (open) openGithubNews(open);
-      else enterGithubPanel();
-      actions.setView("github");
-    },
+    openPanel: (open) => toGithubPanel(actions, open),
   };
 
   return {
@@ -362,6 +357,13 @@ function buildQuestion(): ViewHost {
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
+/** Into the GitHub panel — on its lists, or straight on what `open` is about. */
+function toGithubPanel(actions: ViewActions, open?: GithubOpening) {
+  actions.blip();
+  enterGithubPanel(open);
+  actions.setView("github");
+}
+
 /** The news of the Mochi at the front, when its integration sent some. */
 function frontNews(): IntegrationNews | null {
   const task = State.focusTask;
@@ -374,13 +376,7 @@ function frontNews(): IntegrationNews | null {
  */
 function newsActions(actions: ViewActions): HTMLElement {
   return h("div", { class: "actions" },
-    btn("Open", "primary", () => {
-      const open = frontNews()?.open;
-      actions.blip();
-      if (open) openGithubNews(open);
-      else enterGithubPanel();
-      actions.setView("github");
-    }),
+    btn("Open", "primary", () => toGithubPanel(actions, frontNews()?.open)),
     btn("OK", "secondary", () => actions.collapse()),
   );
 }

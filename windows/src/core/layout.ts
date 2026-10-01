@@ -91,7 +91,7 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   // Claude Code session's view — the biggest Mochi of any view, centred in the
   // upper part of his own column (its middle is x 67), the screen in a panel
   // on the right. As tall as the window allows (PANEL_H), like that view.
-  github: { height: 320, botX: 67, botY: 108, botDiameter: 71, agentMode: "none" },
+  github: { height: PANEL_H, botX: 67, botY: 108, botDiameter: 71, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually

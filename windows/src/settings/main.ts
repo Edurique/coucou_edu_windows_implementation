@@ -28,8 +28,11 @@ function toggle(on: boolean, onChange: (v: boolean) => void): HTMLElement {
   return el;
 }
 
+/** Green for what is in place, red for what is missing. */
+const statusColor = (ok: boolean) => (ok ? "var(--green)" : "var(--red)");
+
 function statusDot(ok: boolean): HTMLElement {
-  return h("i", { class: "dot", style: `background:${ok ? "#22c55e" : "#f4505e"}` });
+  return h("i", { class: "dot", style: `background:${statusColor(ok)}` });
 }
 
 function renderDiff(text: string): HTMLElement {
@@ -197,7 +200,7 @@ function apiSection(hasKey: boolean): HTMLElement {
 
   async function refresh() {
     const present = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-    dot.style.background = present ? "#22c55e" : "#f4505e";
+    dot.style.background = statusColor(present);
     state.textContent = present
       ? "Key saved in the Windows Credential Manager."
       : "No key yet — the chat needs one.";
@@ -256,8 +259,12 @@ function apiSection(hasKey: boolean): HTMLElement {
 
 // ── GitHub section ────────────────────────────────────────────────────────────
 
+const GITHUB_ID = "integration_github";
 const GITHUB_KEY = "github-token";
 const GITHUB_NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+const DAY_MS = 86_400_000;
+/** A token this close to its end gets a word about it. */
+const EXPIRES_SOON_DAYS = 7;
 
 function githubSection(hasToken: boolean): HTMLElement {
   const dot = statusDot(hasToken);
@@ -276,7 +283,7 @@ function githubSection(hasToken: boolean): HTMLElement {
   const feedback = h("div", {});
 
   function show(present: boolean) {
-    dot.style.background = present ? "#22c55e" : "#f4505e";
+    dot.style.background = statusColor(present);
     state.textContent = present
       ? "Token saved in the Windows Credential Manager."
       : "No token yet — the GitHub pill needs one.";
@@ -296,8 +303,8 @@ function githubSection(hasToken: boolean): HTMLElement {
       await Bridge.secretSet(GITHUB_KEY, value);
       field.value = "";
       await refresh();
-      // Fill the pill now rather than at the next five-minute poll.
-      void Bridge.refreshIntegration("integration_github");
+      // Fill the pill now rather than at the next poll.
+      void Bridge.refreshIntegration(GITHUB_ID);
       return true;
     } catch (err) {
       feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
@@ -397,9 +404,9 @@ function tokenExpiry(raw: string | null): string {
   const date = new Date(raw.slice(0, 10));
   if (Number.isNaN(date.getTime())) return `Token expires ${raw}.`;
   const when = date.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
-  const days = Math.ceil((date.getTime() - Date.now()) / 86_400_000);
+  const days = Math.ceil((date.getTime() - Date.now()) / DAY_MS);
   if (days < 0) return `This token expired on ${when}.`;
-  if (days <= 7) return `Token expires on ${when} — in ${days} day${days === 1 ? "" : "s"}. Make a new one soon.`;
+  if (days <= EXPIRES_SOON_DAYS) return `Token expires on ${when} — in ${days} day${days === 1 ? "" : "s"}. Make a new one soon.`;
   return `Token expires on ${when}.`;
 }
 
@@ -595,7 +602,7 @@ async function main() {
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
     claudeSection(status),
     apiSection(hasKey),
-    githubSection(present["github-token"] ?? false),
+    githubSection(present[GITHUB_KEY] ?? false),
     integrationsSection(present),
     generalSection(),
     h("div", {

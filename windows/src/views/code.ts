@@ -7,6 +7,7 @@
 // open), which a diff's fragments wouldn't tell it anyway.
 
 import { h } from "./dom";
+import { COLOR, isLight } from "./palette";
 
 type Comment = "slash" | "hash" | "dash";
 
@@ -15,8 +16,6 @@ export interface FileKind {
   label: string;
   /** GitHub's colour for the language. */
   color: string;
-  /** The colour is light: the badge's letters go dark. */
-  dark?: boolean;
   comment?: Comment;
   /** A programming language: keywords, calls and types are coloured too. */
   words?: boolean;
@@ -35,17 +34,17 @@ const data = (label: string, color: string, more: Partial<FileKind> = {}): FileK
 });
 
 const TS = code("TS", "#3178C6");
-const JS = code("JS", "#F1E05A", { dark: true });
+const JS = code("JS", "#F1E05A");
 const CPP = code("C++", "#F34B7D");
-const SHELL = script("SH", "#89E051", { dark: true });
+const SHELL = script("SH", "#89E051");
 const YAML = data("YML", "#CB171E", { comment: "hash" });
 const IMAGE: FileKind = { label: "IMG", color: "#A074C4" };
 
 const BY_EXTENSION: Record<string, FileKind> = {
   ts: TS, mts: TS, cts: TS, tsx: code("TSX", "#3178C6"),
-  js: JS, mjs: JS, cjs: JS, jsx: code("JSX", "#F1E05A", { dark: true }),
-  rs: code("RS", "#DEA584", { dark: true, apostrophe: false }),
-  go: code("GO", "#00ADD8", { dark: true }),
+  js: JS, mjs: JS, cjs: JS, jsx: code("JSX", "#F1E05A"),
+  rs: code("RS", "#DEA584", { apostrophe: false }),
+  go: code("GO", "#00ADD8"),
   swift: code("SW", "#F05138"),
   kt: code("KT", "#A97BFF"), kts: code("KT", "#A97BFF"),
   java: code("JV", "#B07219"),
@@ -53,30 +52,30 @@ const BY_EXTENSION: Record<string, FileKind> = {
   cpp: CPP, cc: CPP, cxx: CPP, hpp: CPP,
   cs: code("C#", "#178600"),
   php: code("PHP", "#4F5D95"),
-  dart: code("DT", "#00B4AB", { dark: true }),
-  vue: code("VUE", "#41B883", { dark: true }),
+  dart: code("DT", "#00B4AB"),
+  vue: code("VUE", "#41B883"),
   svelte: code("SV", "#FF3E00"),
   astro: code("AST", "#FF5A03"),
   py: script("PY", "#3572A5"),
   rb: script("RB", "#701516"),
   sh: SHELL, bash: SHELL, zsh: SHELL,
   ps1: script("PS", "#012456"),
-  sql: { label: "SQL", color: "#E38C00", dark: true, comment: "dash", words: true, apostrophe: true },
+  sql: { label: "SQL", color: "#E38C00", comment: "dash", words: true, apostrophe: true },
   lua: { label: "LUA", color: "#000080", comment: "dash", words: true, apostrophe: true },
   css: data("CSS", "#663399", { comment: "slash" }),
   scss: data("SCS", "#C6538C", { comment: "slash" }),
   less: data("LES", "#1D365D", { comment: "slash" }),
-  json: data("{ }", "#CBCB41", { dark: true }), jsonc: data("{ }", "#CBCB41", { dark: true, comment: "slash" }),
+  json: data("{ }", "#CBCB41"), jsonc: data("{ }", "#CBCB41", { comment: "slash" }),
   yml: YAML, yaml: YAML,
   toml: data("TML", "#9C4221", { comment: "hash" }),
-  lock: data("LCK", "#6B7079", { comment: "hash" }),
-  env: data("ENV", "#6B7079", { comment: "hash" }),
-  ini: data("INI", "#6B7079", { comment: "hash" }),
+  lock: data("LCK", COLOR.grey, { comment: "hash" }),
+  env: data("ENV", COLOR.grey, { comment: "hash" }),
+  ini: data("INI", COLOR.grey, { comment: "hash" }),
   md: { label: "MD", color: "#083FA1" }, mdx: { label: "MDX", color: "#083FA1" },
   html: { label: "HTM", color: "#E34C26" }, htm: { label: "HTM", color: "#E34C26" },
   xml: { label: "XML", color: "#0060AC" },
-  svg: { label: "SVG", color: "#FFB13B", dark: true },
-  txt: { label: "TXT", color: "#6B7079" },
+  svg: { label: "SVG", color: "#FFB13B" },
+  txt: { label: "TXT", color: COLOR.grey },
   png: IMAGE, jpg: IMAGE, jpeg: IMAGE, gif: IMAGE, webp: IMAGE, ico: IMAGE, icns: IMAGE,
 };
 
@@ -86,8 +85,6 @@ const BY_NAME: Record<string, FileKind> = {
   makefile: script("MK", "#427819", { words: false }),
 };
 
-const UNKNOWN = "#4B5563";
-
 export function fileKind(path: string): FileKind {
   const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
   const named = BY_NAME[name];
@@ -95,13 +92,14 @@ export function fileKind(path: string): FileKind {
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot + 1) : "";
   // An extension nobody listed still gets its own letters, on grey.
-  return BY_EXTENSION[extension] ?? { label: extension ? extension.slice(0, 3).toUpperCase() : "·", color: UNKNOWN };
+  return BY_EXTENSION[extension] ?? { label: extension ? extension.slice(0, 3).toUpperCase() : "·", color: COLOR.blank };
 }
 
 /** The file's kind as an editor's tab shows it: its letters on its colour. */
 export function extBadge(path: string): HTMLElement {
   const kind = fileKind(path);
-  const el = h("span", { class: kind.dark ? "gh-ext dark" : "gh-ext", text: kind.label });
+  // On a light colour the letters go dark.
+  const el = h("span", { class: isLight(kind.color) ? "gh-ext dark" : "gh-ext", text: kind.label });
   el.style.setProperty("--c", kind.color);
   return el;
 }

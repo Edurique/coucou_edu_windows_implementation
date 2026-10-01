@@ -33,6 +33,11 @@ const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
 
+/** How fast Mochi's body goes to a new colour, per second: about 90 % of the way in 0.4 s. */
+const TINT_RATE = 5.5;
+/** Closer than this on every channel (0…1), the body has its colour: a unit of 8-bit colour. */
+const TINT_SETTLED = 0.004;
+
 export class Island {
   readonly fsm = new IslandStateMachine();
 
@@ -852,7 +857,7 @@ export class Island {
       this.bodyRGB = target;
       return target;
     }
-    this.bodyRGB = mixColor(this.bodyRGB, target, 1 - Math.exp(-dt * 5.5));
+    this.bodyRGB = mixColor(this.bodyRGB, target, 1 - Math.exp(-dt * TINT_RATE));
     return this.bodyRGB;
   }
 
@@ -860,7 +865,7 @@ export class Island {
   private get tintSettling(): boolean {
     const target = this.targetBodyColor();
     if (!target || !this.bodyRGB) return false;
-    return this.bodyRGB.some((v, i) => Math.abs(v - target[i]) > 0.004);
+    return this.bodyRGB.some((v, i) => Math.abs(v - target[i]) > TINT_SETTLED);
   }
 
   /** BotCanvasView.lookX / lookY — tanh of the distance to the bot. */

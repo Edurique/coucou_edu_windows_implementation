@@ -7,7 +7,8 @@
 import { h, svg, clear, dot } from "./dom";
 import { extBadge, fileKind, highlight, type FileKind } from "./code";
 import { ICONS } from "./icons";
-import { ACTIVITY_STYLE, GITHUB_LEVELS, compact, githubData, repoName, timeAgo } from "./integrations";
+import { COLOR, wear } from "./palette";
+import { ACTIVITY_STYLE, GITHUB_LEVELS, compact, githubData, repoName, timeAgo, type GithubOpening } from "./integrations";
 import {
   Bridge,
   type GithubActivity, type GithubBuild, type GithubCommentsDetail, type GithubCommitsDetail, type GithubContributions,
@@ -24,7 +25,8 @@ import { State } from "../core/state";
 import type { ViewActions, ViewHost } from "./views";
 
 const ID = "integration_github";
-const GITHUB_RED = "#F4505E";
+/** Where a screen leads when it has no page of its own to give. */
+const GITHUB_HOME = "https://github.com";
 /** Opening the panel refetches first when what it holds is older than this. */
 const STALE_MS = 60_000;
 /** A refresh that comes back instantly still turns the arrow once. */
@@ -36,11 +38,22 @@ let tab: Tab = "activity";
 
 /** Same colours as the pill badges: green check, red cross, amber for "going". */
 const BUILD_STYLE: Record<GithubBuild["state"], { color: string; label: string }> = {
-  success: { color: "#22C55E", label: "passed" },
-  failure: { color: "#F4505E", label: "failed" },
-  running: { color: "#F5A524", label: "running" },
-  neutral: { color: "#6B7079", label: "stopped" },
+  success: { color: COLOR.pass, label: "passed" },
+  failure: { color: COLOR.red, label: "failed" },
+  running: { color: COLOR.amber, label: "running" },
+  neutral: { color: COLOR.grey, label: "stopped" },
 };
+
+/** "comment" or "comments", by how many there are. */
+const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
+
+/** "1 comment", "3 comments". */
+const counted = (n: number, one: string, many?: string) => `${n} ${plural(n, one, many)}`;
+
+/** Numbers an element's parts (--i), so each takes its turn when they come in one by one. */
+function cascade(el: HTMLElement) {
+  Array.from(el.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+}
 
 /**
  * Something the panel fetches on a click — a project's sheet, a day of the
@@ -446,14 +459,15 @@ function mood(p: GithubProject): BotEmoteName {
 let sweepNext = true;
 
 /**
- * On the way into the panel from the card: start from the lists — no sheet,
- * no picked day — and refetch when what they hold is old news.
+ * On the way into the panel — from the card, or from a piece of news: start
+ * from the lists — no sheet, no picked day — and refetch when what they hold
+ * is old news; then, when the way in is `open` on something, straight to that.
  *
  * It must end in touch(): the view redraws only when its key changes, and a
  * sheet dropped without a new stamp stayed on screen, with ‹ then leaving the
  * panel since, as far as it knew, no sheet was open.
  */
-export function enterGithubPanel() {
+export function enterGithubPanel(open?: GithubOpening) {
   sweepNext = true;
   if (day) stopSearching(day);
   day = null;
@@ -463,6 +477,7 @@ export function enterGithubPanel() {
   touch();
   const d = githubData();
   if (!d || Date.now() - d.fetchedAt > STALE_MS) void Bridge.refreshIntegration(ID);
+  if (open?.target) openTarget(open.target, open.label ?? "", open.url ?? "");
 }
 
 /** One line of GitHub activity — the recent feed, or a picked day. It opens its sheet. */
@@ -521,8 +536,7 @@ function buildBadge(build: GithubBuild | null, repo: string): HTMLElement {
     },
     stateMark(build.state, 8),
   );
-  badge.style.setProperty("--c", style.color);
-  badge.style.setProperty("--tint", `${style.color}26`);
+  wear(badge, style.color);
   return badge;
 }
 
@@ -548,7 +562,7 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
   return h(
     "div",
     { class: "gh-row", onclick: onOpen },
-    dot(repo.languageColor ?? "#4B5563", 6),
+    dot(repo.languageColor ?? COLOR.blank, 6),
     h("span", { class: "gh-row-title", text: repoName(repo.fullName, login) }),
     repo.private ? h("i", { class: "gh-lock", title: "Private" }, svg(ICONS.lock, 9, { stroke: 2.2 })) : null,
     h("span", { class: "gh-row-where", text: repo.language ?? "" }),
@@ -569,9 +583,8 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
 // Mochi's shape. Under the mouse, Mochi takes the colour of the day.
 
 const DAY_MS = 86_400_000;
-
-/** Mochi at rest, the `idle` colour: what an empty day turns him. */
-const IDLE = "#E6E9EE";
+/** The room between two weeks, in CSS pixels, before it is rounded to the screen's. */
+const WEEK_GAP = 1.6;
 
 /** a → b by t, as a hex colour. */
 function mixHex(a: string, b: string, t: number): string {
@@ -593,7 +606,7 @@ function mixHex(a: string, b: string, t: number): string {
  */
 const LEVEL_LOOK = [0, 0.4, 0.6, 0.8, 1].map((t, level) => ({
   cell: GITHUB_LEVELS[level],
-  mochi: mixHex(IDLE, GITHUB_LEVELS[4], t),
+  mochi: mixHex(COLOR.idle, GITHUB_LEVELS[4], t),
 }));
 
 function dayDate(start: string, i: number): Date {
@@ -604,7 +617,7 @@ function dayLabel(date: Date, count: number): string {
   const when = date.toLocaleDateString(undefined, {
     weekday: "short", day: "numeric", month: "short", timeZone: "UTC",
   });
-  const what = count === 0 ? "No contributions" : count === 1 ? "1 contribution" : `${count} contributions`;
+  const what = count === 0 ? "No contributions" : counted(count, "contribution");
   return `${what} · ${when}`;
 }
 
@@ -634,6 +647,42 @@ interface GraphOptions {
   settle: "picked" | "unpicked" | null;
   onPick(index: number, date: string): void;
 }
+
+/** The graph on show, with what fitting it takes: its grid, and how many weeks it holds. */
+let fitted: { grid: HTMLElement; graph: HTMLElement; weeks: number } | null = null;
+
+/**
+ * Cells sized as fractions of the width landed on fractions of a screen
+ * pixel, so at 125 % some were drawn a pixel wider than others: every day is
+ * sized in whole device pixels, all alike. Whole cells leave up to a pixel per
+ * week unused — 35 px of empty grid at the right edge — so what is left over
+ * goes to the gaps between weeks instead, one device pixel more here and
+ * there, spread evenly: a pixel of spacing reads as nothing where a pixel of
+ * cell read as a crooked grid. Refitted whenever the width changes (a
+ * scrollbar appearing, for one).
+ */
+const graphFit = new ResizeObserver(() => {
+  if (!fitted) return;
+  const { grid, graph, weeks } = fitted;
+  const available = grid.clientWidth;
+  if (!available) return;
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.floor(available * ratio);
+  const gap = Math.max(1, Math.round(WEEK_GAP * ratio));
+  const cell = Math.floor((width - (weeks - 1) * gap) / weeks);
+  // Fewer than one pixel per gap: never more than one extra in any of them.
+  const spare = width - weeks * cell - (weeks - 1) * gap;
+  const share = (i: number) => Math.floor((i * spare) / (weeks - 1));
+  const columns: string[] = [];
+  for (let i = 0; i < weeks; i++) {
+    // A week's column is its cell and the gap after it; the last has none.
+    const after = i < weeks - 1 ? gap + share(i + 1) - share(i) : 0;
+    columns.push(`${(cell + after) / ratio}px`);
+  }
+  graph.style.setProperty("--cell", `${cell / ratio}px`);
+  graph.style.setProperty("--gap", `${gap / ratio}px`);
+  graph.style.setProperty("--columns", columns.join(" "));
+});
 
 function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement {
   const { sweep, tint, picked, settle } = o;
@@ -682,7 +731,7 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
 
   const streak = currentStreak(c.counts);
   const summary =
-    `${c.total.toLocaleString()} contribution${c.total === 1 ? "" : "s"} in the last year` +
+    `${c.total.toLocaleString()} ${plural(c.total, "contribution")} in the last year` +
     (streak >= 2 ? ` · ${streak} days in a row` : "");
   const caption = h("span", { class: "gh-caption" });
   /** What the caption says when no day is hovered: the picked day, or the year. */
@@ -725,34 +774,10 @@ function contributionGraph(c: GithubContributions, o: GraphOptions): HTMLElement
   const graph = h("div", { class: "gh-graph" }, months, grid, h("div", { class: "gh-graph-foot" }, caption, legend));
   graph.style.setProperty("--weeks", String(weeks));
 
-  // Cells sized as fractions of the width landed on fractions of a screen
-  // pixel, so at 125 % some were drawn a pixel wider than others: every day
-  // is sized in whole device pixels, all alike. Whole cells leave up to a
-  // pixel per week unused — 35 px of empty grid at the right edge — so what
-  // is left over goes to the gaps between weeks instead, one device pixel
-  // more here and there, spread evenly: a pixel of spacing reads as nothing
-  // where a pixel of cell read as a crooked grid. Refitted whenever the
-  // width changes (a scrollbar appearing, for one).
-  new ResizeObserver(() => {
-    const available = grid.clientWidth;
-    if (!available) return;
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.floor(available * ratio);
-    const gap = Math.max(1, Math.round(1.6 * ratio));
-    const cell = Math.floor((width - (weeks - 1) * gap) / weeks);
-    // Fewer than one pixel per gap: never more than one extra in any of them.
-    const spare = width - weeks * cell - (weeks - 1) * gap;
-    const share = (i: number) => Math.floor((i * spare) / (weeks - 1));
-    const columns: string[] = [];
-    for (let i = 0; i < weeks; i++) {
-      // A week's column is its cell and the gap after it; the last has none.
-      const after = i < weeks - 1 ? gap + share(i + 1) - share(i) : 0;
-      columns.push(`${(cell + after) / ratio}px`);
-    }
-    graph.style.setProperty("--cell", `${cell / ratio}px`);
-    graph.style.setProperty("--gap", `${gap / ratio}px`);
-    graph.style.setProperty("--columns", columns.join(" "));
-  }).observe(grid);
+  // Only one graph is ever on show: the one before it is let go.
+  if (fitted) graphFit.unobserve(fitted.grid);
+  fitted = { grid, graph, weeks };
+  graphFit.observe(grid);
 
   return graph;
 }
@@ -794,7 +819,7 @@ function daySection(pick: DayPick, login: string, onClose: () => void): HTMLElem
         "div",
         { class: "gh-row muted" },
         h("i", { class: "gh-row-icon" }, svg(ICONS.lock, 10, { stroke: 2.2 })),
-        h("span", { class: "gh-row-where", text: `${n} contribution${n === 1 ? "" : "s"} in private repositories` }),
+        h("span", { class: "gh-row-where", text: `${counted(n, "contribution")} in private repositories` }),
       ),
     );
   }
@@ -807,7 +832,7 @@ function daySection(pick: DayPick, login: string, onClose: () => void): HTMLElem
     pick.react = false;
     pick.shown = true;
     section.classList.add("enter");
-    Array.from(section.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+    cascade(section);
   }
   return section;
 }
@@ -847,8 +872,7 @@ function hostOf(url: string): string {
 /** A round tinted icon in a state colour — the pill badge, one size up. */
 function roundIcon(color: string, icon: Node): HTMLElement {
   const el = h("i", { class: "gh-block-icon" }, icon);
-  el.style.setProperty("--c", color);
-  el.style.setProperty("--tint", `${color}26`);
+  wear(el, color);
   return el;
 }
 
@@ -894,7 +918,7 @@ function notGranted(what: string, permission: string): HTMLElement {
   return h(
     "div",
     { class: "gh-block muted" },
-    roundIcon("#6B7079", svg(ICONS.lock, 9, { stroke: 2.2 })),
+    roundIcon(COLOR.grey, svg(ICONS.lock, 9, { stroke: 2.2 })),
     h(
       "div",
       { class: "gh-block-text" },
@@ -927,7 +951,7 @@ function ciBlock(p: GithubProject): HTMLElement {
   const run = p.runs[0];
   if (!run) {
     return block({
-      icon: roundIcon("#6B7079", svg(ICONS.dash, 9, { stroke: 3 })),
+      icon: roundIcon(COLOR.grey, svg(ICONS.dash, 9, { stroke: 3 })),
       title: "No CI here yet",
       sub: line("No GitHub Actions workflow has run in this repository."),
     });
@@ -959,16 +983,16 @@ function ciBlock(p: GithubProject): HTMLElement {
 }
 
 const PULL_STYLE: Record<GithubPull["state"], { color: string; icon: string }> = {
-  open: { color: "#6366F1", icon: ICONS.pullRequest },
-  draft: { color: "#9398A1", icon: ICONS.pullRequest },
-  merged: { color: "#34D399", icon: ICONS.merge },
-  closed: { color: "#6B7079", icon: ICONS.pullRequest },
+  open: { color: COLOR.indigo, icon: ICONS.pullRequest },
+  draft: { color: COLOR.dim, icon: ICONS.pullRequest },
+  merged: { color: COLOR.green, icon: ICONS.merge },
+  closed: { color: COLOR.grey, icon: ICONS.pullRequest },
 };
 
 const REVIEW_COLOR: Record<NonNullable<GithubPull["review"]>, string> = {
-  approved: "#34D399",
-  "changes requested": "#F5A524",
-  "review required": "#9398A1",
+  approved: COLOR.green,
+  "changes requested": COLOR.amber,
+  "review required": COLOR.dim,
 };
 
 function pullBlock(p: GithubProject): HTMLElement {
@@ -976,14 +1000,11 @@ function pullBlock(p: GithubProject): HTMLElement {
   const pr = p.pull;
   if (!pr) {
     return block({
-      icon: roundIcon("#6B7079", svg(ICONS.pullRequest, 10, { stroke: 2 })),
+      icon: roundIcon(COLOR.grey, svg(ICONS.pullRequest, 10, { stroke: 2 })),
       title: "No pull request yet",
     });
   }
   const style = PULL_STYLE[pr.state];
-  const chip = h("span", { class: "gh-chip", text: pr.state });
-  chip.style.setProperty("--c", style.color);
-  chip.style.setProperty("--tint", `${style.color}26`);
   const size = h(
     "span",
     {},
@@ -992,22 +1013,22 @@ function pullBlock(p: GithubProject): HTMLElement {
     h("span", { class: "gh-del", text: `−${pr.deletions}` }),
   );
   const review = pr.review ? h("span", { text: pr.review, style: `color:${REVIEW_COLOR[pr.review]}` }) : null;
-  const files = pr.changedFiles === 1 ? "1 file" : `${pr.changedFiles} files`;
-  const comments = pr.comments === 1 ? "1 comment" : `${pr.comments} comments`;
+  const files = counted(pr.changedFiles, "file");
+  const comments = counted(pr.comments, "comment");
   return block({
     icon: roundIcon(style.color, svg(style.icon, 10, { stroke: 2 })),
     title: `#${pr.number} ${pr.title}`,
-    right: chip,
+    right: chip(pr.state, style.color),
     sub: line(pr.author && `by ${pr.author}`, size, files, review, pr.comments > 0 && comments, ago(pr.at)),
     open: () => openTarget({ kind: "pull", repo: p.fullName, number: pr.number }, `#${pr.number}`, pr.url),
   });
 }
 
 const DEPLOY_STYLE: Record<GithubDeploy["state"], { color: string; say: (env: string) => string }> = {
-  success: { color: "#22C55E", say: (env) => `Live on ${env}` },
-  failure: { color: "#F4505E", say: (env) => `Deploy to ${env} failed` },
-  running: { color: "#F5A524", say: (env) => `Deploying to ${env}…` },
-  inactive: { color: "#6B7079", say: (env) => `Was live on ${env}` },
+  success: { color: COLOR.pass, say: (env) => `Live on ${env}` },
+  failure: { color: COLOR.red, say: (env) => `Deploy to ${env} failed` },
+  running: { color: COLOR.amber, say: (env) => `Deploying to ${env}…` },
+  inactive: { color: COLOR.grey, say: (env) => `Was live on ${env}` },
 };
 
 /** Nothing at all for a repository that never deploys: most don't. */
@@ -1034,7 +1055,7 @@ function languageBar(p: GithubProject): HTMLElement | null {
   const bar = h("div", { class: "gh-lang-bar" });
   const legend = h("div", { class: "gh-lang-legend" });
   for (const lang of p.languages) {
-    const color = lang.color ?? "#4B5563";
+    const color = lang.color ?? COLOR.blank;
     const segment = h("i", { title: lang.name });
     segment.style.flex = `${lang.share} 1 0`;
     segment.style.background = color;
@@ -1049,9 +1070,12 @@ function languageBar(p: GithubProject): HTMLElement | null {
  * What stands in for the sheet while Mochi looks: the island's shimmering
  * text, over three ghosts of the blocks that are coming.
  */
+/** Ghosts of the blocks to come, under the loader's line. */
+const GHOSTS = 3;
+
 function sheetLoader(name: string): HTMLElement {
   const loader = h("div", { class: "gh-loader" }, h("div", { class: "gh-loader-text shimmer", text: `Mochi is looking into ${name}…` }));
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < GHOSTS; i++) {
     const ghost = h("div", { class: "gh-ghost" }, h("i"), h("div", {}, h("b"), h("span")));
     ghost.style.setProperty("--i", String(i));
     loader.append(ghost);
@@ -1063,8 +1087,8 @@ function projectSheet(p: GithubProject): HTMLElement {
   const facts = h("div", { class: "gh-facts" });
   const addFact = (...children: (Node | string)[]) => facts.append(h("span", {}, ...children));
   if (p.private) addFact(svg(ICONS.lock, 9, { stroke: 2.2 }), "Private");
-  addFact(svg(ICONS.star, 9), p.stars === 1 ? "1 star" : `${compact(p.stars)} stars`);
-  if (p.forks > 0) addFact(p.forks === 1 ? "1 fork" : `${compact(p.forks)} forks`);
+  addFact(svg(ICONS.star, 9), `${compact(p.stars)} ${plural(p.stars, "star")}`);
+  if (p.forks > 0) addFact(`${compact(p.forks)} ${plural(p.forks, "fork")}`);
   if (p.createdAt) addFact(`since ${new Date(p.createdAt).getFullYear()}`);
   const homepage = p.homepage;
   if (homepage) {
@@ -1081,8 +1105,7 @@ function projectSheet(p: GithubProject): HTMLElement {
     deployBlock(p),
     languageBar(p),
   );
-  // Each part's place in the cascade when the sheet arrives.
-  Array.from(el.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+  cascade(el);
   return el;
 }
 
@@ -1095,8 +1118,7 @@ function titleRow(title: string, ...chips: (HTMLElement | null)[]): HTMLElement 
 
 function chip(text: string, color: string): HTMLElement {
   const el = h("span", { class: "gh-chip", text });
-  el.style.setProperty("--c", color);
-  el.style.setProperty("--tint", `${color}26`);
+  wear(el, color);
   return el;
 }
 
@@ -1145,12 +1167,12 @@ function splitPath(path: string): { dir: string; base: string } {
 
 /** Mochi's state colours again: new green, gone red, moved indigo, changed amber. */
 const FILE_STATUS: Record<string, { color: string }> = {
-  added: { color: "#34D399" },
-  removed: { color: "#F4505E" },
-  renamed: { color: "#6366F1" },
-  copied: { color: "#6366F1" },
+  added: { color: COLOR.green },
+  removed: { color: COLOR.red },
+  renamed: { color: COLOR.indigo },
+  copied: { color: COLOR.indigo },
 };
-const MODIFIED = { color: "#F5A524" };
+const MODIFIED = { color: COLOR.amber };
 
 /**
  * What happened to a file, in GitHub's own word. "modified" is what nearly
@@ -1192,15 +1214,6 @@ export function newsFacts(news: IntegrationNews): Node[] {
   });
 }
 
-/**
- * From the island's finished or error card: into the panel, straight to what
- * the news is about.
- */
-export function openGithubNews(open: NonNullable<IntegrationNews["open"]>) {
-  enterGithubPanel();
-  if (open.target) openTarget(open.target, open.label ?? "", open.url ?? "");
-}
-
 /** One file touched, under its extension's badge; it opens the file's diff. */
 function fileRow(file: GithubFile, url: string): HTMLElement {
   const { dir, base } = splitPath(file.path);
@@ -1240,13 +1253,13 @@ function runBlock(build: GithubBuild | null, missing: string[], repo: string): H
 // nothing to answer with; the way out to GitHub is in the panel's head.
 
 /** A review asked for your eyes, like a question: Mochi's `question` cyan. */
-const TALK_COLOR = "#22D3EE";
+const TALK_COLOR = COLOR.cyan;
 
 const VERDICT: Record<string, { say: string; color: string; icon: () => SVGSVGElement }> = {
-  approved: { say: "approved", color: "#34D399", icon: () => svg(ICONS.check, 10, { stroke: 2.4 }) },
-  "changes requested": { say: "requested changes", color: "#F5A524", icon: () => svg(ICONS.bang, 10) },
+  approved: { say: "approved", color: COLOR.green, icon: () => svg(ICONS.check, 10, { stroke: 2.4 }) },
+  "changes requested": { say: "requested changes", color: COLOR.amber, icon: () => svg(ICONS.bang, 10) },
   commented: { say: "reviewed", color: TALK_COLOR, icon: () => svg(ICONS.comment, 10, { stroke: 2 }) },
-  dismissed: { say: "review dismissed", color: "#6B7079", icon: () => svg(ICONS.dash, 9, { stroke: 3 }) },
+  dismissed: { say: "review dismissed", color: COLOR.grey, icon: () => svg(ICONS.dash, 9, { stroke: 3 }) },
 };
 
 /** Who, what they did if it has a word, and when. */
@@ -1276,7 +1289,7 @@ function sayRow(entry: Exclude<GithubEntry, { kind: "thread" }>): HTMLElement {
   const icon = verdict
     ? roundIcon(verdict.color, verdict.icon())
     : entry.kind === "description"
-      ? roundIcon("#9398A1", svg(ICONS.pullRequest, 10, { stroke: 2.2 }))
+      ? roundIcon(COLOR.dim, svg(ICONS.pullRequest, 10, { stroke: 2.2 }))
       : roundIcon(TALK_COLOR, svg(ICONS.comment, 10, { stroke: 2 }));
   const did = verdict ?? (entry.kind === "description" ? { say: "opened the pull request" } : undefined);
   return h(
@@ -1315,7 +1328,7 @@ function dedent(code: GithubThread["code"]): GithubThread["code"] {
 
 /** The replies of a thread, one under the other. */
 function threadTalk(thread: GithubThread): HTMLElement {
-  const more = thread.more === 1 ? "1 more reply on GitHub" : `${thread.more} more replies on GitHub`;
+  const more = `${counted(thread.more, "more reply", "more replies")} on GitHub`;
   const last = thread.remarks[thread.remarks.length - 1];
   return h(
     "div",
@@ -1358,7 +1371,7 @@ function threadBlock(c: GithubCommentsDetail, thread: GithubThread): HTMLElement
       "div",
       { class: "gh-thread resolved" },
       head,
-      h("div", { class: "gh-thread-sum", text: `${people.join(", ")} · ${count === 1 ? "1 comment" : `${count} comments`}` }),
+      h("div", { class: "gh-thread-sum", text: `${people.join(", ")} · ${counted(count, "comment")}` }),
     );
   }
   const kind = fileKind(thread.path);
@@ -1383,7 +1396,7 @@ function commentsView(c: GithubCommentsDetail, login: string): HTMLElement {
     titleRow(`#${c.number} ${c.title}`),
     facts(
       c.repo, login,
-      said > 0 && (said === 1 ? "1 comment" : `${said} comments`),
+      said > 0 && counted(said, "comment"),
       threads.length > 0 && `${threads.length} on the code`,
       threads.length > 0 && (open === 0 ? "all resolved" : `${open} to resolve`),
     ),
@@ -1401,8 +1414,8 @@ function commentsView(c: GithubCommentsDetail, login: string): HTMLElement {
 function commentsBlock(p: GithubPullDetail): HTMLElement {
   const total = p.comments + p.threads;
   return block({
-    icon: roundIcon(total > 0 ? TALK_COLOR : "#9398A1", svg(ICONS.comment, 10, { stroke: 2 })),
-    title: total === 0 ? "No comments yet" : total === 1 ? "1 comment" : `${total} comments`,
+    icon: roundIcon(total > 0 ? TALK_COLOR : COLOR.dim, svg(ICONS.comment, 10, { stroke: 2 })),
+    title: total === 0 ? "No comments yet" : counted(total, "comment"),
     sub: total === 0
       ? line("Its description is in here")
       : line(p.comments > 0 && `${p.comments} in the conversation`, p.threads > 0 && `${p.threads} on the code`),
@@ -1417,7 +1430,7 @@ const REVIEW_TITLE: Record<string, string> = {
 };
 
 function reviewBlock(p: GithubPullDetail): HTMLElement {
-  const color = p.review ? REVIEW_COLOR[p.review] : "#6B7079";
+  const color = p.review ? REVIEW_COLOR[p.review] : COLOR.grey;
   const who = p.reviewers.map((r) => `${r.login} ${r.state}`);
   return block({
     icon: roundIcon(color, svg(p.review === "approved" ? ICONS.check : ICONS.pullRequest, 10, { stroke: 2.4 })),
@@ -1457,7 +1470,7 @@ function pullView(p: GithubPullDetail, login: string, screen: DetailScreen): HTM
       : p.state === "closed" && p.closedAt
         ? `closed ${ago(p.closedAt)}`
         : p.createdAt && `opened ${ago(p.createdAt)}`;
-  const commits = p.commits === 1 ? "1 commit" : `${p.commits} commits`;
+  const commits = counted(p.commits, "commit");
   return h(
     "div",
     { class: "gh-sheet" },
@@ -1469,8 +1482,8 @@ function pullView(p: GithubPullDetail, login: string, screen: DetailScreen): HTM
     reviewBlock(p),
     commentsBlock(p),
     block({
-      icon: roundIcon("#9398A1", svg(ICONS.doc, 10)),
-      title: `${p.changedFiles} file${p.changedFiles === 1 ? "" : "s"} changed`,
+      icon: roundIcon(COLOR.dim, svg(ICONS.doc, 10)),
+      title: `${counted(p.changedFiles, "file")} changed`,
       right: plusMinus(p.additions, p.deletions),
       sub: line(commits),
     }),
@@ -1479,10 +1492,10 @@ function pullView(p: GithubPullDetail, login: string, screen: DetailScreen): HTM
 }
 
 const ISSUE_COLOR: Record<GithubIssueDetail["state"], string> = {
-  open: "#F5A524",
-  completed: "#34D399",
-  "not planned": "#6B7079",
-  closed: "#6B7079",
+  open: COLOR.amber,
+  completed: COLOR.green,
+  "not planned": COLOR.grey,
+  closed: COLOR.grey,
 };
 
 function issueView(i: GithubIssueDetail, login: string): HTMLElement {
@@ -1495,7 +1508,7 @@ function issueView(i: GithubIssueDetail, login: string): HTMLElement {
       i.repo, login,
       i.author && `by ${i.author}`,
       when,
-      i.comments > 0 && (i.comments === 1 ? "1 comment" : `${i.comments} comments`),
+      i.comments > 0 && counted(i.comments, "comment"),
       i.assignees.length > 0 && `assigned to ${i.assignees.join(", ")}`,
     ),
     labelChips(i.labels),
@@ -1509,7 +1522,7 @@ function commitsView(c: GithubCommitsDetail, login: string, screen: DetailScreen
   const newest = c.commits[0];
   const title = single && newest
     ? newest.message
-    : `${count} commit${count === 1 ? "" : "s"}${c.branch ? ` on ${c.branch}` : ""}`;
+    : `${counted(count, "commit")}${c.branch ? ` on ${c.branch}` : ""}`;
   const rows = c.commits.map((commit) => {
     // From a list, a commit opens its own sheet; alone, it is already open.
     const open = single
@@ -1522,7 +1535,7 @@ function commitsView(c: GithubCommitsDetail, login: string, screen: DetailScreen
     return h(
       "button",
       { class: "gh-row", onclick: open },
-      h("i", { class: "gh-row-icon", style: "color:#3B9EFF" }, svg(ICONS.commit, 12, { stroke: 2 })),
+      h("i", { class: "gh-row-icon", style: `color:${COLOR.blue}` }, svg(ICONS.commit, 12, { stroke: 2 })),
       h("span", { class: "gh-row-title", text: commit.message }),
       h("span", { class: "gh-row-where" }, h("span", { class: "gh-sha", text: commit.sha }), commit.author ? ` · ${commit.author}` : ""),
       h("span", { class: "int-ago", text: commit.at ? timeAgo(commit.at) : "" }),
@@ -1533,7 +1546,7 @@ function commitsView(c: GithubCommitsDetail, login: string, screen: DetailScreen
   return h(
     "div",
     { class: "gh-sheet" },
-    titleRow(title, single && newest ? chip(newest.sha, "#3B9EFF") : null),
+    titleRow(title, single && newest ? chip(newest.sha, COLOR.blue) : null),
     facts(c.repo, login, newest?.author && `by ${newest.author}`, newest?.at && ago(newest.at)),
     runBlock(c.ci, c.missing, c.repo),
     ...ciJobs(screen),
@@ -1559,7 +1572,7 @@ function releaseView(r: GithubReleaseDetail, login: string): HTMLElement {
     h(
       "div",
       { class: "gh-row" },
-      h("i", { class: "gh-row-icon", style: "color:#22D3EE" }, svg(ICONS.tag, 11, { stroke: 2 })),
+      h("i", { class: "gh-row-icon", style: `color:${COLOR.cyan}` }, svg(ICONS.tag, 11, { stroke: 2 })),
       h("span", { class: "gh-row-title", text: a.name }),
       h("span", { class: "gh-row-where", text: size(a.size) }),
       h("span", { class: "int-ago", text: `${compact(a.downloads)} ↓` }),
@@ -1568,12 +1581,12 @@ function releaseView(r: GithubReleaseDetail, login: string): HTMLElement {
   return h(
     "div",
     { class: "gh-sheet" },
-    titleRow(r.name, chip(r.tag, "#22D3EE"), r.prerelease ? chip("pre-release", "#F5A524") : null),
+    titleRow(r.name, chip(r.tag, COLOR.cyan), r.prerelease ? chip("pre-release", COLOR.amber) : null),
     facts(
       r.repo, login,
       r.author && `by ${r.author}`,
       r.publishedAt && `published ${ago(r.publishedAt)}`,
-      r.downloads > 0 && `${compact(r.downloads)} download${r.downloads === 1 ? "" : "s"}`,
+      r.downloads > 0 && `${compact(r.downloads)} ${plural(r.downloads, "download")}`,
     ),
     ...(assets.length ? [heading("Files"), ...assets] : []),
     description(r.body),
@@ -1663,7 +1676,7 @@ function bar(t: GithubTimed, whole: Span | null, now: number, job = false): HTML
 
 /** A job's Mochi: his state, and the colour of his body. */
 function crewLook(t: GithubTimed): { state: BotStateName; color: string } {
-  if (WAITING.has(t.outcome)) return { state: "sleeping", color: "#94A2B8" };
+  if (WAITING.has(t.outcome)) return { state: "sleeping", color: COLOR.asleep };
   switch (t.state) {
     case "running":
       return { state: "working", color: BUILD_STYLE.running.color };
@@ -1768,7 +1781,7 @@ function runView(r: GithubRunDetail, login: string, screen: DetailScreen): HTMLE
     block({
       icon: roundIcon(style.color, svg(ICONS.timer, 11)),
       title: tookTitle(r, now),
-      right: count === 1 ? "1 job" : `${count} jobs`,
+      right: counted(count, "job"),
       sub: r.jobs.length ? line(...tally(r.jobs)) : undefined,
     }),
     heading("Jobs"),
@@ -1801,7 +1814,7 @@ function jobView(job: GithubJob, run: GithubRunDetail): HTMLElement {
     block({
       icon: roundIcon(style.color, svg(ICONS.timer, 11)),
       title: tookTitle(job, now),
-      right: job.steps.length === 1 ? "1 step" : `${job.steps.length} steps`,
+      right: counted(job.steps.length, "step"),
       sub: broke ? line(`broke at “${broke.name}”`) : job.steps.length ? line(...tally(job.steps)) : undefined,
     }),
     heading("Steps"),
@@ -1883,13 +1896,11 @@ interface ScreenLook {
   mark?: () => HTMLElement;
 }
 
-const NEUTRAL = "#9398A1";
-
 function screenLook(screen: Screen): ScreenLook {
   if (screen.type === "project") {
     return {
       label: "Project",
-      color: screen.data?.languages[0]?.color ?? NEUTRAL,
+      color: screen.data?.languages[0]?.color ?? COLOR.dim,
       icon: () => svg(ICONS.stack, 10),
     };
   }
@@ -1904,7 +1915,7 @@ function screenLook(screen: Screen): ScreenLook {
   }
   if (screen.type === "job") {
     const state = jobOf(screen)?.job.state;
-    return { label: "Job", color: state ? BUILD_STYLE[state].color : NEUTRAL, icon: () => svg(ICONS.timer, 11) };
+    return { label: "Job", color: state ? BUILD_STYLE[state].color : COLOR.dim, icon: () => svg(ICONS.timer, 11) };
   }
   const d = screen.data;
   switch (screen.target.kind) {
@@ -1914,30 +1925,30 @@ function screenLook(screen: Screen): ScreenLook {
       const state = d?.kind === "pull" ? d.state : null;
       return {
         label: "Pull request",
-        color: state ? PULL_STYLE[state].color : NEUTRAL,
+        color: state ? PULL_STYLE[state].color : COLOR.dim,
         icon: () => svg(state === "merged" ? ICONS.merge : ICONS.pullRequest, 10, { stroke: 2.2 }),
       };
     }
     case "issue":
       return {
         label: "Issue",
-        color: d?.kind === "issue" ? ISSUE_COLOR[d.state] : NEUTRAL,
+        color: d?.kind === "issue" ? ISSUE_COLOR[d.state] : COLOR.dim,
         icon: () => svg(ICONS.issue, 10, { stroke: 2.2 }),
       };
     case "commits":
       return {
         label: screen.target.count === 1 ? "Commit" : "Commits",
-        color: "#3B9EFF",
+        color: COLOR.blue,
         icon: () => svg(ICONS.commit, 10, { stroke: 2.2 }),
       };
     case "release":
-      return { label: "Release", color: "#22D3EE", icon: () => svg(ICONS.tag, 10, { stroke: 2.2 }) };
+      return { label: "Release", color: COLOR.cyan, icon: () => svg(ICONS.tag, 10, { stroke: 2.2 }) };
     case "project":
-      return { label: "Project", color: NEUTRAL, icon: () => svg(ICONS.stack, 10) };
+      return { label: "Project", color: COLOR.dim, icon: () => svg(ICONS.stack, 10) };
     case "run":
       return {
         label: "Run",
-        color: d?.kind === "run" ? BUILD_STYLE[d.state].color : NEUTRAL,
+        color: d?.kind === "run" ? BUILD_STYLE[d.state].color : COLOR.dim,
         icon: () => svg(ICONS.timer, 11),
       };
     case "comments":
@@ -1983,6 +1994,36 @@ function detailWhere(screen: DetailScreen, login: string): string {
 
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
 
+/** A line of a patch: the start of a hunk, or a line of code with its number on each side. */
+type PatchLine =
+  | { hunk: string }
+  | { sign: "+" | "-" | ""; text: string; old: number | null; new: number | null };
+
+/** Reads the unified diff GitHub sends, numbering its lines as it goes. */
+function* readPatch(patch: string): Generator<PatchLine> {
+  let oldLine = 0;
+  let newLine = 0;
+  for (const raw of patch.split("\n")) {
+    const hunk = HUNK.exec(raw);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      yield { hunk: hunk[3] ?? "" };
+      continue;
+    }
+    const first = raw.charAt(0);
+    // "\ No newline at end of file": true of the file, nothing to read.
+    if (first === "\\" || raw === "") continue;
+    const sign = first === "+" || first === "-" ? first : "";
+    yield {
+      sign,
+      text: raw.slice(1),
+      old: sign === "+" ? null : oldLine++,
+      new: sign === "-" ? null : newLine++,
+    };
+  }
+}
+
 /**
  * Which row of a patch a thread sits on — counting only the rows that are
  * lines of code — or null when the patch doesn't reach that line. A thread on
@@ -1990,24 +2031,10 @@ const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
  */
 function threadRow(patch: string, thread: GithubThread): number | null {
   if (thread.line == null || thread.outdated) return null;
-  let oldLine = 0;
-  let newLine = 0;
   let row = 0;
-  for (const raw of patch.split("\n")) {
-    const hunk = HUNK.exec(raw);
-    if (hunk) {
-      oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
-      continue;
-    }
-    const sign = raw.charAt(0);
-    if (sign === "\\" || raw === "") continue;
-    const here = thread.side === "left"
-      ? sign !== "+" && oldLine === thread.line
-      : sign !== "-" && newLine === thread.line;
-    if (here) return row;
-    if (sign !== "+") oldLine++;
-    if (sign !== "-") newLine++;
+  for (const line of readPatch(patch)) {
+    if ("hunk" in line) continue;
+    if ((thread.side === "left" ? line.old : line.new) === thread.line) return row;
     row++;
   }
   return null;
@@ -2025,43 +2052,26 @@ function diffView(file: GithubFile, url: string, thread?: GithubThread): HTMLEle
   const kind = fileKind(file.path);
   const diff = h("div", { class: "gh-diff" });
   const noted = thread ? threadRow(file.patch, thread) : null;
-  let oldLine = 0;
-  let newLine = 0;
   let row = 0;
   let first = true;
-  for (const raw of file.patch.split("\n")) {
-    const hunk = HUNK.exec(raw);
-    if (hunk) {
-      oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
+  for (const line of readPatch(file.patch)) {
+    if ("hunk" in line) {
       // Where lines were skipped: a quiet break, with the function GitHub
       // says the next lines sit in. The very first needs one only for that.
-      const where = hunk[3] ?? "";
-      if (!first || where) {
+      if (!first || line.hunk) {
         diff.append(
-          h("div", { class: "gh-diff-line hunk" }, h("span", { class: "n", text: "⋯" }), h("span", { class: "s" }), h("span", { class: "t", text: where })),
+          h("div", { class: "gh-diff-line hunk" }, h("span", { class: "n", text: "⋯" }), h("span", { class: "s" }), h("span", { class: "t", text: line.hunk })),
         );
       }
       first = false;
       continue;
     }
-    const sign = raw.charAt(0);
-    // "\ No newline at end of file": true of the file, nothing to read.
-    if (sign === "\\" || raw === "") continue;
-    let number: number;
-    if (sign === "+") {
-      number = newLine++;
-    } else if (sign === "-") {
-      number = oldLine++;
-    } else {
-      number = newLine++;
-      oldLine++;
-    }
-    const line = diffLine(number, sign === "+" || sign === "-" ? sign : "", raw.slice(1), kind);
-    diff.append(line);
+    // A line that is gone keeps its old number; the others have their new one.
+    const el = diffLine(line.new ?? line.old, line.sign, line.text, kind);
+    diff.append(el);
     // The line a thread is about, and the thread under it, as on GitHub.
     if (thread && row === noted) {
-      line.classList.add("noted");
+      el.classList.add("noted");
       diff.append(h("div", { class: "gh-diff-note" }, threadTalk(thread)));
     }
     row++;
@@ -2100,9 +2110,9 @@ export function buildGithub(actions: ViewActions): ViewHost {
       onclick: () => {
         const s = top();
         const target = !s
-          ? (githubData()?.profileUrl ?? "https://github.com")
+          ? (githubData()?.profileUrl ?? GITHUB_HOME)
           : s.type === "project"
-            ? (s.data?.url ?? `https://github.com/${s.fullName}`)
+            ? (s.data?.url ?? `${GITHUB_HOME}/${s.fullName}`)
             : s.type === "detail"
               ? (s.data && s.data.kind !== "locked" ? s.data.url : s.url)
               : s.type === "job"
@@ -2176,7 +2186,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       badge.append(look.mark ? look.mark() : roundIcon(look.color, look.icon()));
       main.style.setProperty("--accent", look.color);
     } else {
-      badge.append(dot(GITHUB_RED, 7));
+      badge.append(dot(COLOR.red, 7));
       main.style.setProperty("--accent", "rgba(0,0,0,0)");
     }
   }
@@ -2196,7 +2206,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     const info = State.integrations[ID];
     const news = info?.news;
     if (!info || !news) return;
-    const color = news.success ? "#34D399" : GITHUB_RED;
+    const color = news.success ? COLOR.green : COLOR.red;
     const open = news.open;
     const line = h(
       "button",
@@ -2242,6 +2252,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
   /** Letters a name gets in the column before it is cut. */
   const STEP_LETTERS = 11;
+  /** Lines the way down has room for; deeper than that, its middle folds. */
+  const TRAIL_ROOM = 4;
 
   /**
    * "package-lock.json" → "packa….json": cut in its middle, a file keeps the
@@ -2292,7 +2304,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       trail.append(
         step(TABS.activity.label, TABS.activity.icon(), tab === "activity", null, () => goTab("activity")),
         step(TABS.projects.label, TABS.projects.icon(), tab === "projects", null, () => goTab("projects"),
-          failing ? dot(GITHUB_RED, 5) : undefined),
+          failing ? dot(COLOR.red, 5) : undefined),
       );
       return;
     }
@@ -2315,9 +2327,15 @@ export function buildGithub(actions: ViewActions): ViewHost {
         return el;
       }),
     ];
+    if (levels.length <= TRAIL_ROOM) {
+      trail.append(...levels);
+      return;
+    }
+    // The start, a mark for what is folded, and as many of the last as fit.
+    const kept = TRAIL_ROOM - 2;
     const folded = step("", svg(ICONS.ellipsis, 12), false, null, null);
-    folded.title = `${levels.length - 3} more levels`;
-    trail.append(...(levels.length > 4 ? [levels[0], folded, ...levels.slice(-2)] : levels));
+    folded.title = counted(levels.length - 1 - kept, "more level");
+    trail.append(levels[0], folded, ...levels.slice(-kept));
   }
 
   /** The bottom fade says "there's more": it goes once the end is on screen. */
@@ -2405,7 +2423,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
   function arrive(content: HTMLElement, screen: Pending<unknown>, emote: BotEmoteName | null) {
     if (!screen.react) return;
     screen.react = false;
-    Array.from(content.children).forEach((child, i) => (child as HTMLElement).style.setProperty("--i", String(i)));
+    cascade(content);
     content.classList.add("enter");
     if (emote) actions.emote(emote);
   }
@@ -2432,7 +2450,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       const found = jobOf(screen);
       who.textContent = found?.job.name ?? "Job";
       sub.textContent = kind(found?.run.workflow ?? "");
-      if (screen.run.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.run.error }));
+      if (screen.run.error) status.append(dot(COLOR.red, 5), h("span", { text: screen.run.error }));
       if (found) list.append(jobView(found.job, found.run));
       else list.append(h("div", { class: "int-empty", text: "This job is gone from the run." }));
     } else if (screen.type === "diff") {
@@ -2447,7 +2465,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     } else if (screen.type === "project") {
       who.textContent = repoName(screen.fullName, login);
       sub.textContent = kind(screen.data?.languages[0]?.name ?? "");
-      if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
+      if (screen.error) status.append(dot(COLOR.red, 5), h("span", { text: screen.error }));
       if (screen.data) {
         const content = projectSheet(screen.data);
         arrive(content, screen, mood(screen.data));
@@ -2458,7 +2476,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     } else {
       who.textContent = detailHead(screen);
       sub.textContent = kind(detailWhere(screen, login));
-      if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
+      if (screen.error) status.append(dot(COLOR.red, 5), h("span", { text: screen.error }));
       if (screen.data) {
         const content = detailView(screen.data, login, screen);
         arrive(content, screen, detailMood(screen.data));
@@ -2558,11 +2576,11 @@ export function buildGithub(actions: ViewActions): ViewHost {
       clear(status);
       if (!configured) {
         status.append(
-          dot(GITHUB_RED, 5),
+          dot(COLOR.red, 5),
           h("span", { text: "No token yet" }),
           h("button", {
             class: "link-btn",
-            style: "color:#8e939c",
+            style: "color:var(--dim-2)",
             text: "Settings…",
             onclick: () => actions.openSettingsWindow(),
           }),
@@ -2571,7 +2589,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
         // What's below is the last good answer: say why, and how old it is.
         const when = d ? timeAgo(d.fetchedAt) : "";
         const age = when && when !== "just now" ? ` · data from ${when} ago` : "";
-        status.append(dot(GITHUB_RED, 5), h("span", { text: `${error}${age}` }));
+        status.append(dot(COLOR.red, 5), h("span", { text: `${error}${age}` }));
       } else if (!d) {
         status.append(h("span", { text: "Loading…" }));
       }

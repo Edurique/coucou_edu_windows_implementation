@@ -2,7 +2,7 @@
 // pollers: a genuinely new item flips the pill to finished/error, badges it when
 // the pill isn't focused, plays a sound, and clears itself after 60 s.
 
-import { onEvent, Bridge, type IntegrationUpdate } from "../core/bridge";
+import { onEvent, Bridge, type GithubData, type IntegrationUpdate } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import { sawRunEnd } from "../views/github";
@@ -21,6 +21,8 @@ const KEY_FOR: Record<string, string> = {
 
 const clearTimers = new Map<string, number>();
 
+const GITHUB = "integration_github";
+
 /**
  * Integrations whose news opens the island, the way a Claude Code session's
  * result does: their Mochi steps to the front and the island unfolds on the
@@ -28,7 +30,7 @@ const clearTimers = new Map<string, number>();
  * Mochis a badge on one is easy to miss — and the folded pill has no room
  * for words: the island hides in a MacBook's notch, its middle is the notch.
  */
-const SPEAKS_UP = new Set(["integration_github"]);
+const SPEAKS_UP = new Set([GITHUB]);
 /** The pill each of them took the front from, to hand it back. */
 const borrowedFrom = new Map<string, string>();
 /** States that are waiting for the user: nothing takes the front from those. */
@@ -79,8 +81,8 @@ function handle(island: Island, update: IntegrationUpdate) {
 
   // A run going on one of the projects: GitHub's Mochi is at work, like a
   // session's, until it ends — in news, or quietly.
-  if (update.id === "integration_github" && hasData) {
-    const repos = (update.data as { repos?: { build?: { state?: string } | null }[] }).repos ?? [];
+  if (update.id === GITHUB && hasData) {
+    const repos = (update.data as Partial<GithubData>).repos ?? [];
     const going = repos.some((r) => r.build?.state === "running");
     const task = State.tasks.find((t) => t.id === update.id);
     if (task && going && task.state === "idle") task.state = "working";

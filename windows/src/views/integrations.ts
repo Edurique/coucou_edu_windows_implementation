@@ -6,6 +6,7 @@
 
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
+import { COLOR } from "./palette";
 import { State, type AgentTask } from "../core/state";
 import { Bridge, type GithubActivityKind, type GithubData, type GithubTarget } from "../core/bridge";
 
@@ -221,16 +222,16 @@ export function githubData(): GithubData | null {
  * blue like `working`, an open issue amber like `approval`.
  */
 export const ACTIVITY_STYLE: Record<GithubActivityKind | "review", { icon: string; color: string }> = {
-  push: { icon: ICONS.commit, color: "#3B9EFF" },
-  pr_opened: { icon: ICONS.pullRequest, color: "#6366F1" },
-  pr_merged: { icon: ICONS.merge, color: "#34D399" },
-  pr_closed: { icon: ICONS.pullRequest, color: "#6B7079" },
-  issue_opened: { icon: ICONS.issue, color: "#F5A524" },
-  issue_closed: { icon: ICONS.issue, color: "#6B7079" },
-  release: { icon: ICONS.tag, color: "#22D3EE" },
-  create: { icon: ICONS.add, color: "#9398A1" },
+  push: { icon: ICONS.commit, color: COLOR.blue },
+  pr_opened: { icon: ICONS.pullRequest, color: COLOR.indigo },
+  pr_merged: { icon: ICONS.merge, color: COLOR.green },
+  pr_closed: { icon: ICONS.pullRequest, color: COLOR.grey },
+  issue_opened: { icon: ICONS.issue, color: COLOR.amber },
+  issue_closed: { icon: ICONS.issue, color: COLOR.grey },
+  release: { icon: ICONS.tag, color: COLOR.cyan },
+  create: { icon: ICONS.add, color: COLOR.dim },
   // A review asked for your eyes, like a question: Mochi's `question` cyan.
-  review: { icon: ICONS.pullRequest, color: "#22D3EE" },
+  review: { icon: ICONS.pullRequest, color: COLOR.cyan },
 };
 
 /** "edu/coucou" → "coucou" for your own repositories, the full name otherwise. */
@@ -241,6 +242,11 @@ export function repoName(repo: string, login: string): string {
 
 /** 1284 → "1.3k", as the macOS card writes star counts. */
 export const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** Days of the year's graph the card shows beside its figure: the last week. */
+const CARD_DAYS = 7;
+/** Lines of activity the card carries; it shows as many as its height allows. */
+const CARD_LINES = 4;
 
 /** What the panel is asked to open on: a line of activity's sheet, or nothing — its lists. */
 export interface GithubOpening {
@@ -273,8 +279,8 @@ function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
   const week = c
     ? h(
         "span",
-        { class: "int-week", title: "The last 7 days" },
-        ...c.levels.slice(-7).map((level) => h("i", { style: `background:${GITHUB_LEVELS[level] ?? GITHUB_LEVELS[0]}` })),
+        { class: "int-week", title: `The last ${CARD_DAYS} days` },
+        ...c.levels.slice(-CARD_DAYS).map((level) => h("i", { style: `background:${GITHUB_LEVELS[level] ?? GITHUB_LEVELS[0]}` })),
       )
     : null;
   // Without the year (the token may not read it), the stars are the figure.
@@ -287,7 +293,7 @@ function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
   );
 
   const rows = h("div", { class: "int-rows tight" });
-  for (const a of d.activity.slice(0, 4)) {
+  for (const a of d.activity.slice(0, CARD_LINES)) {
     const style = ACTIVITY_STYLE[a.kind];
     const where = activityWhere(a, d.login);
     rows.append(
@@ -315,9 +321,9 @@ function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
     ? h("span", { class: "int-total", title: "Stars across your repositories" },
         h("i", { class: "int-star" }, svg(ICONS.star, 9)), h("span", { text: compact(d.totalStars) }))
     : undefined;
-  const card = h("div", { class: "int-card" }, header("#F4505E", "GitHub", `@${d.login}`, stars));
+  const card = h("div", { class: "int-card" }, header(COLOR.red, "GitHub", `@${d.login}`, stars));
   // What's shown is the last good answer; say why it isn't fresher.
-  if (error) card.append(h("div", { class: "int-status" }, dot("#F4505E", 5), h("span", { text: error })));
+  if (error) card.append(h("div", { class: "int-status" }, dot(COLOR.red, 5), h("span", { text: error })));
   card.append(figure, rows);
   return card;
 }
