@@ -439,6 +439,28 @@ pub async fn poll(app: AppHandle) {
     refresh(app).await;
 }
 
+/// Development builds only: a way to see the pill's news without breaking a
+/// build for it. Writing "fail" or "merge" to coucou-github-demo in the temp
+/// folder sends that news once, through the same event as the real thing.
+#[cfg(debug_assertions)]
+pub fn watch_demo(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let trigger = std::env::temp_dir().join("coucou-github-demo");
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let Ok(what) = std::fs::read_to_string(&trigger) else { continue };
+            let _ = std::fs::remove_file(&trigger);
+            let event = match what.trim() {
+                "fail" => IntegrationEvent { success: false, label: "CI failed on coucou".into(), detail: Some("main".into()) },
+                "merge" => IntegrationEvent { success: true, label: "#12 merged".into(), detail: Some("GitHub panel for the Windows island".into()) },
+                _ => continue,
+            };
+            // No data: the island keeps what it shows and only takes the news.
+            emit(&app, IntegrationUpdate { id: ID, data: json!({}), error: None, event: Some(event) });
+        }
+    });
+}
+
 /// A pull request of yours that went in.
 #[derive(Clone, Debug, PartialEq)]
 struct Merged {

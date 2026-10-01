@@ -72,6 +72,8 @@ pub fn start(app: AppHandle) {
     // Every two minutes rather than five: it is also what tells the pill that a
     // build broke, and "a while ago" is not news.
     spawn(app.clone(), "integration_github", 7, 120, crate::github::poll);
+    #[cfg(debug_assertions)]
+    crate::github::watch_demo(app.clone());
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
     spawn(app, "integration_notion", 9, 300, poll_notion);
 }
