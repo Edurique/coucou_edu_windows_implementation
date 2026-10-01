@@ -225,9 +225,10 @@ function mediaKey(icon: string, title: string, action: "toggle" | "next" | "prev
 }
 
 /**
- * What Spotify is playing, as Windows knows it: the song, who plays it, and
- * the player's keys. The cover is on Mochi himself, who turns into it (see
- * Island.wearCover). A paused song is still the song.
+ * What Spotify is playing, as Windows knows it: the cover, the song, who
+ * plays it, and the player's keys. The cover stands where Mochi does on every
+ * other card, and takes the room: he has nothing to say here, and steps out
+ * (see Island.updateBotTargets). A paused song is still the song.
  */
 function spotifyCard(): HTMLElement {
   const now = get(SPOTIFY);
@@ -238,6 +239,14 @@ function spotifyCard(): HTMLElement {
   const title = song || (open ? "Nothing playing" : "Spotify is not playing");
   const by = song ? artist : open ? "Pick a song in Spotify" : "Play something in the Spotify app";
 
+  // The cover only ever comes from the Rust side as a picture's data: URL.
+  const cover = h("div", { class: "media-cover" });
+  if (typeof now.cover === "string" && now.cover.startsWith("data:image/")) {
+    cover.append(h("img", { src: now.cover, alt: "" }));
+  } else {
+    cover.append(svg(ICONS.play, 22));
+  }
+
   const keys = h(
     "div",
     { class: "media-keys" },
@@ -247,7 +256,8 @@ function spotifyCard(): HTMLElement {
   );
   return h(
     "div",
-    { class: "int-card" },
+    { class: "int-card media-card" },
+    cover,
     header("#1DB954", "Spotify", playing ? "Now playing" : song ? "Paused" : "Music"),
     h("div", { class: song ? "media-title" : "media-title quiet", text: title, title }),
     h("div", { class: "media-artist", text: by, title: typeof now.album === "string" && now.album ? `${by} — ${now.album}` : by }),

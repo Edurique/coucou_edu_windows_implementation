@@ -245,8 +245,9 @@ Rust side.
 A pill that needs no key and no account. Switch it on in **Settings… →
 Integrations**, like the others — four pills at most show next to Mochi.
 
-Its card shows the song and who plays it, with previous, play/pause and next —
-and Mochi turns into the cover of what plays, keeping his shape and his eyes. It asks Windows, which already knows what every player plays — it is
+Its card shows the cover of what plays, the song and who plays it, with
+previous, play/pause and next. The cover stands where Mochi does on the other
+cards: he steps out of this one. It asks Windows, which already knows what every player plays — it is
 what the volume flyout shows: nothing is asked of Spotify, and nothing touches
 the network. The buttons go to Spotify's own session, never to another player.
 
