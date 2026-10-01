@@ -2221,11 +2221,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       "button",
       {
         class: "gh-notice",
-        onclick: () => {
-          info.news = null;
-          if (open?.target) openTarget(open.target, open.label ?? "", open.url ?? "");
-          else touch();
-        },
+        onclick: () => actions.followNews(),
       },
       h("i", {}, svg(news.success ? ICONS.merge : ICONS.xmark, 11, news.success ? { stroke: 2.2 } : {})),
       h("b", { text: open?.title ?? news.label }),

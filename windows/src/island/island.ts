@@ -18,6 +18,7 @@ import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { githubData } from "../views/integrations";
+import { dismissNews, followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 
@@ -193,6 +194,11 @@ export class Island {
         if (this.viewState === state) return;
         this.viewState = state;
         State.notify();
+      },
+      followNews: () => followNews(this),
+      dismissNews: () => {
+        dismissNews();
+        this.collapse();
       },
     };
 
@@ -579,7 +585,8 @@ export class Island {
       }
       if (this.isBotHit(e.clientX, e.clientY)) {
         this.cancelBotHover();
-        this.engine.slap();
+        // A Mochi with news to tell takes you to it; any other gets his slap.
+        if (!followNews(this)) this.engine.slap();
       }
     });
 

@@ -288,11 +288,7 @@ function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
   const news = State.integrations.integration_github?.news?.open;
   const figure = h(
     "button",
-    {
-      class: "int-balance int-figure",
-      title: news?.title ?? "Open the GitHub panel",
-      onclick: () => onPanel(State.integrations.integration_github?.news?.open),
-    },
+    { class: "int-balance int-figure", title: news?.title ?? "Open the GitHub panel", onclick: () => onPanel() },
     h("span", { text: c ? c.total.toLocaleString("en-US") : compact(d.totalStars) }),
     h("i", { text: c ? "contributions" : "stars" }),
     week,

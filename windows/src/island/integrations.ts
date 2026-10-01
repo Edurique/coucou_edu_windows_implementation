@@ -5,7 +5,7 @@
 import { onEvent, Bridge, type GithubData, type IntegrationUpdate } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
-import { sawRunEnd } from "../views/github";
+import { enterGithubPanel, sawRunEnd } from "../views/github";
 import type { Island } from "./island";
 
 /** Which Credential Manager key backs each pill. */
@@ -20,6 +20,10 @@ const KEY_FOR: Record<string, string> = {
 };
 
 const clearTimers = new Map<string, number>();
+/** As in the Swift pollers: a pill's finished or error look clears itself after this. */
+const SETTLE_MS = 60_000;
+/** News that speaks up is news for less long: it was put before the user's eyes. */
+const NEWS_MS = 45_000;
 
 const GITHUB = "integration_github";
 
@@ -41,6 +45,57 @@ function giveBack(id: string) {
   const previous = borrowedFrom.get(id);
   borrowedFrom.delete(id);
   if (previous && State.focusId === id) State.setFocus(previous);
+}
+
+/**
+ * A pill's news is over — it got old, or it was seen, and news that was seen
+ * is not news any more: the pill goes back to rest. Unless the user is being
+ * taken to what it was about (`stay`), the front goes back to whoever had it.
+ */
+function settle(id: string, stay = false) {
+  const timer = clearTimers.get(id);
+  if (timer != null) window.clearTimeout(timer);
+  clearTimers.delete(id);
+  const info = State.integrations[id];
+  if (info) info.news = null;
+  if (stay) borrowedFrom.delete(id);
+  else giveBack(id);
+  const task = State.tasks.find((t) => t.id === id);
+  if (task && (task.state === "finished" || task.state === "error")) {
+    task.state = "idle";
+    task.steps = [];
+    task.stepIndex = 0;
+    task.pillBadge = null;
+  }
+  State.notify();
+}
+
+/** The pill whose news the user is looking at: the one at the front, else GitHub's. */
+function newsId(): string | null {
+  const telling = (id: string | null) => id != null && SPEAKS_UP.has(id) && State.integrations[id]?.news != null;
+  return telling(State.focusId) ? State.focusId : telling(GITHUB) ? GITHUB : null;
+}
+
+/**
+ * Straight to what the news is about — from its card, from the panel's line,
+ * or from a click on Mochi while he has some to tell. False when there was
+ * none to follow.
+ */
+export function followNews(island: Island): boolean {
+  const id = newsId();
+  const news = id ? State.integrations[id]?.news : null;
+  if (!id || !news) return false;
+  Sound.play("blip");
+  enterGithubPanel(news.open);
+  settle(id, true);
+  island.setView("github");
+  return true;
+}
+
+/** The news was read and needs nothing more: OK on its card. */
+export function dismissNews() {
+  const id = newsId();
+  if (id) settle(id);
 }
 
 export function registerIntegrationHandlers(island: Island) {
@@ -125,22 +180,7 @@ function handle(island: Island, update: IntegrationUpdate) {
       if (existing != null) window.clearTimeout(existing);
       clearTimers.set(
         update.id,
-        window.setTimeout(() => {
-          clearTimers.delete(update.id);
-          const info = State.integrations[update.id];
-          if (info) info.news = null;
-          giveBack(update.id);
-          const t = State.tasks.find((x) => x.id === update.id);
-          if (!t || (t.state !== "finished" && t.state !== "error")) {
-            State.notify();
-            return;
-          }
-          t.state = "idle";
-          t.steps = [];
-          t.stepIndex = 0;
-          t.pillBadge = null;
-          State.notify();
-        }, 60_000),
+        window.setTimeout(() => settle(update.id), SPEAKS_UP.has(update.id) ? NEWS_MS : SETTLE_MS),
       );
     }
   }

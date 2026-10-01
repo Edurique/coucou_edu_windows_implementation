@@ -42,6 +42,13 @@ export interface ViewActions {
    * as the view asks, unless Mochi's own state says more; null gives it back.
    */
   look(state: BotStateName | null): void;
+  /**
+   * Into the GitHub panel, on what the news at hand is about. Seen, it is not
+   * news any more: the pill goes back to rest. False when there was none.
+   */
+  followNews(): boolean;
+  /** The news at hand was read and needs nothing more: the island folds. */
+  dismissNews(): void;
 }
 
 export interface ViewHost {
@@ -173,7 +180,12 @@ function buildOverview(actions: ViewActions): ViewHost {
       State.notify();
     },
     openSettings: () => actions.openSettingsWindow(),
-    openPanel: (open) => toGithubPanel(actions, open),
+    // The card's figure asks for the panel as a whole: while the pill has
+    // news, that leads to what the news is about.
+    openPanel: (open) => {
+      if (!open && actions.followNews()) return;
+      toGithubPanel(actions, open);
+    },
   };
 
   return {
@@ -376,8 +388,8 @@ function frontNews(): IntegrationNews | null {
  */
 function newsActions(actions: ViewActions): HTMLElement {
   return h("div", { class: "actions" },
-    btn("Open", "primary", () => toGithubPanel(actions, frontNews()?.open)),
-    btn("OK", "secondary", () => actions.collapse()),
+    btn("Open", "primary", () => actions.followNews()),
+    btn("OK", "secondary", () => actions.dismissNews()),
   );
 }
 

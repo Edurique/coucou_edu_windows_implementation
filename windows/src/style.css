@@ -1900,11 +1900,12 @@ button.gh-step:hover {
   margin-right: 5px;
 }
 
-/* On a result card the facts stand half-way between the title and the
-   buttons, 10 px from each: on the stack's own 5 px gap they read as stuck
-   to the buttons, which are taller than a line. */
+/* On a result card the facts belong to the title: they sit right under it, on
+   the stack's own gap, so the two read as one piece. The room goes between
+   them and the buttons, which are taller than a line and would otherwise
+   read as stuck to the facts. */
 .news-facts {
-  margin: 5px 0;
+  margin-bottom: 5px;
 }
 
 /* In the panel's notice they ride on one line beside the title, a size down. */
