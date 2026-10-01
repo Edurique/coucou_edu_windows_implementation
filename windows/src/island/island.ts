@@ -96,6 +96,11 @@ export class Island {
   private collapsed = false;
   private collapseTimer: number | null = null;
   private wasInIsland = false;
+
+  /** True while the mouse is on the island: whoever opened it for a moment leaves it open. */
+  get hovered(): boolean {
+    return this.wasInIsland;
+  }
   /** Last shape handed to Rust for the click-through test. */
   private pushedRect = { x: -1, y: -1, w: -1, h: -1 };
   private homeCollapseAt: number | null = null;

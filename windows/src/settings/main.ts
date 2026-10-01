@@ -424,6 +424,8 @@ interface IntegrationDef {
   setup?: (present: Record<string, boolean>) => IntegrationSetup;
   /** For one that needs nothing: what it reads, in a line. */
   note?: string;
+  /** A choice of its own, kept with the settings: a switch and what it does. */
+  option?: { setting: "announceSongs"; label: string };
 }
 
 interface IntegrationSetup {
@@ -452,7 +454,8 @@ const INTEGRATIONS: IntegrationDef[] = [
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
   { id: "integration_spotify", name: "Spotify", color: "#1DB954", fields: [],
-    note: "No key: asks Windows what the Spotify desktop app is playing. Nothing is asked of Spotify." },
+    note: "No key: asks Windows what the Spotify desktop app is playing. Nothing is asked of Spotify.",
+    option: { setting: "announceSongs", label: "Show each new song: the island unfolds for a moment when the song changes" } },
 ];
 
 const MAX_ACTIVE = 4;
@@ -494,6 +497,18 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
     if (setup) rows.append(setup.status);
     if (def.note) rows.append(h("span", { class: "hint", style: "padding-top:5px", text: def.note }));
+    if (def.option) {
+      const { setting, label } = def.option;
+      rows.append(
+        h("div", { class: "row" },
+          toggle(settings[setting], (on) => {
+            settings[setting] = on;
+            void save();
+          }),
+          h("span", { style: "font-size:12.5px", text: label }),
+        ),
+      );
+    }
     for (const field of def.fields) {
       const input = h("input", {
         type: field.secret ? "password" : "text",

@@ -276,6 +276,8 @@ export interface Settings {
   model: string;
   /** GitHub projects ("owner/name") whose news the pill keeps to itself. */
   githubMuted: string[];
+  /** The island unfolds for a moment on each new song Spotify plays. */
+  announceSongs: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -291,6 +293,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hooksInstalled: false,
   model: "claude-opus-5",
   githubMuted: [],
+  announceSongs: true,
 };
 
 type Listener = () => void;

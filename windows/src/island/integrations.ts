@@ -4,8 +4,9 @@
 
 import { onEvent, Bridge, type GithubData, type IntegrationUpdate } from "../core/bridge";
 import { Sound } from "../core/sound";
-import { State } from "../core/state";
+import { CLAUDE_ID, State } from "../core/state";
 import { enterGithubPanel, sawRunEnd } from "../views/github";
+import { nowPlaying } from "../views/integrations";
 import type { Island } from "./island";
 
 /** Which Credential Manager key backs each pill. */
@@ -46,6 +47,44 @@ const SPEAKS_UP = new Set([GITHUB]);
 const borrowedFrom = new Map<string, string>();
 /** States that are waiting for the user: nothing takes the front from those. */
 const WAITING = new Set(["approval", "question"]);
+
+const SPOTIFY = "integration_spotify";
+/** How long the island stays unfolded on a song that just started. */
+const ANNOUNCE_MS = 4_500;
+let announceTimer: number | null = null;
+
+/**
+ * A new song: the island unfolds on Spotify's card for a moment — the cover,
+ * the song, who plays it — and folds back, the front going back to whoever
+ * had it. No sound: there is music playing. Only while the island is away or
+ * folded, and never over something that waits for the user: open, it is
+ * showing what the user is reading.
+ */
+function announceSong(island: Island) {
+  const front = State.focusTask;
+  if (State.mode === "expanded" || State.isPinned || (front && WAITING.has(front.state))) return;
+  if (State.focusId !== SPOTIFY && State.focusId && !borrowedFrom.has(SPOTIFY)) borrowedFrom.set(SPOTIFY, State.focusId);
+  if (State.focusId !== SPOTIFY) State.setFocus(SPOTIFY);
+  island.alert("overview");
+
+  if (announceTimer != null) window.clearTimeout(announceTimer);
+  announceTimer = window.setTimeout(() => {
+    announceTimer = null;
+    // Somebody took it from there — the mouse is on it, or it shows something else: it is theirs.
+    const untouched = State.mode === "expanded" && State.view === "overview" && State.focusId === SPOTIFY && !island.hovered;
+    if (!untouched) {
+      borrowedFrom.delete(SPOTIFY);
+      return;
+    }
+    island.collapse();
+    giveBack(SPOTIFY);
+    // A session that asked for something meanwhile only got a badge: its card is due.
+    if (State.focusId === CLAUDE_ID && (State.pendingQuestion || State.pendingApproval)) {
+      State.isPinned = true;
+      island.alert(State.pendingQuestion ? "question" : "approval");
+    }
+  }, ANNOUNCE_MS);
+}
 
 /** Hands the front of the pill back, unless the user moved it since. */
 function giveBack(id: string) {
@@ -101,7 +140,7 @@ export function followNews(island: Island): boolean {
 }
 
 export function registerIntegrationHandlers(island: Island) {
-  void onEvent<IntegrationUpdate>("integration", (update) => handle(island, update));
+  void onEvent<IntegrationUpdate>("integration", (update) => handleIntegration(island, update));
   void refreshConfigured();
 }
 
@@ -127,10 +166,13 @@ export async function refreshConfigured() {
   State.notify();
 }
 
-function handle(island: Island, update: IntegrationUpdate) {
+/** Exported for the dev preview, which plays an integration's updates without the Rust side. */
+export function handleIntegration(island: Island, update: IntegrationUpdate) {
   if (State.paused) return;
 
   const previous = State.integrations[update.id];
+  // What Spotify was playing before this update, to tell a new song from the same one going on.
+  const before = update.id === SPOTIFY && previous?.loaded ? nowPlaying() : null;
   // A failed poll normally carries no data and keeps what was there. GitHub's
   // carries its last good snapshot, so the panel can go on showing it next to
   // the reason it isn't fresh.
@@ -151,6 +193,12 @@ function handle(island: Island, update: IntegrationUpdate) {
     const task = State.tasks.find((t) => t.id === update.id);
     if (task && going && task.state === "idle") task.state = "working";
     else if (task && !going && task.state === "working") task.state = "idle";
+  }
+
+  if (before && State.settings.announceSongs) {
+    const now = nowPlaying();
+    const changed = now.title !== before.title || now.artist !== before.artist;
+    if (now.playing && now.title && changed) announceSong(island);
   }
 
   const event = update.event;
