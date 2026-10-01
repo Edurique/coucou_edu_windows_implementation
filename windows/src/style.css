@@ -3687,9 +3687,24 @@ button.gh-block:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 5px 12px 0 108px;
+  margin: 0 12px 0 108px;
   min-width: 0;
-  height: 16px;
+  flex: 0 0 16px;
+}
+
+/* The session's card fills its height, with the same air under its last line
+   as above its first: the look at what the step did takes what is left. */
+.card-body.sess-card {
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 0;
+}
+
+.sess-card > .who {
+  flex: 0 0 auto;
 }
 
 .now-line > i {
@@ -3723,8 +3738,9 @@ button.gh-block:hover {
 }
 
 .now-box {
-  margin: 5px 12px 0 108px;
-  height: 54px;
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0 12px 0 108px;
   padding: 3px 0;
   border-radius: 8px;
   background: var(--card-flat);
