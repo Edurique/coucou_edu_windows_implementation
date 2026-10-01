@@ -22,8 +22,12 @@ const KEY_FOR: Record<string, string> = {
 const clearTimers = new Map<string, number>();
 /** As in the Swift pollers: a pill's finished or error look clears itself after this. */
 const SETTLE_MS = 60_000;
-/** News that speaks up is news for less long: it was put before the user's eyes. */
-const NEWS_MS = 45_000;
+/**
+ * News that speaks up stays longer: it is what tells of a build that broke,
+ * and someone away from the screen for a minute must still find it there.
+ * Opening it ends it sooner.
+ */
+const NEWS_MS = 5 * 60_000;
 
 const GITHUB = "integration_github";
 
