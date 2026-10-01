@@ -5,7 +5,7 @@
 import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { CLAUDE_ID, State, TURN_DONE, turnSteps, type AgentTask, type ClaudeSession, type SessionStep } from "../core/state";
-import { VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
+import { CARD_AIR_MIN, VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
@@ -210,6 +210,34 @@ function stack(padLeft: number, padRight: number, ...children: Node[]): HTMLElem
   const el = h("div", { class: "stack" }, ...children);
   el.style.padding = `4px ${padRight}px 4px ${padLeft}px`;
   return el;
+}
+
+/**
+ * Keeps a card whose lines vary from filling up to its edges: measures what
+ * its stack holds and asks the island for the height that leaves the least
+ * air a card keeps. A card with room to spare is left as tall as it always was.
+ */
+function airy(lines: HTMLElement, onResize: () => void): { fit(): void; readonly height: number | undefined } {
+  let height: number | undefined;
+  const fit = () => {
+    const parts = [...lines.children].map((child) => (child as HTMLElement).offsetHeight).filter((h) => h > 0);
+    const gap = parseFloat(getComputedStyle(lines).rowGap) || 0;
+    const content = parts.reduce((sum, part) => sum + part, 0) + gap * Math.max(0, parts.length - 1);
+    // Not on screen yet: nothing to measure, the layout's own height stands.
+    const next = parts.length > 0 ? fittedHeight(content, CARD_AIR_MIN) : undefined;
+    if (next === height) return;
+    height = next;
+    onResize();
+  };
+  // Measured again when the card's width changes: while the island is still
+  // opening it is narrow, its lines wrap, and it looks taller than it is.
+  new ResizeObserver(fit).observe(lines);
+  return {
+    fit,
+    get height() {
+      return height;
+    },
+  };
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
@@ -498,7 +526,7 @@ function buildEmpty(actions: ViewActions): ViewHost {
 
 // ── Approval ──────────────────────────────────────────────────────────────────
 
-function buildApproval(actions: ViewActions): ViewHost {
+function buildApproval(actions: ViewActions, onResize: () => void): ViewHost {
   const who = h("div");
   const code = h("div", { class: "code" });
   // For an edit: the diff it would make, between what is asked and the answer.
@@ -506,10 +534,15 @@ function buildApproval(actions: ViewActions): ViewHost {
   const row = h("div", { class: "actions" });
   const lines = stack(116, 16, who, code, proposed, row);
   const el = h("div", { class: "view" }, card("amber", lines));
+  const air = airy(lines, onResize);
   let rowKey = "";
   let proposedKey = "";
   return {
     el,
+    // With a diff the island is as tall as the window allows, and the diff takes what is left.
+    get height() {
+      return State.pendingApproval?.proposal ? undefined : air.height;
+    },
     sync() {
       const approval = State.pendingApproval;
       const proposal = approval?.proposal ?? null;
@@ -553,13 +586,15 @@ function buildApproval(actions: ViewActions): ViewHost {
       // Two buttons, built once. Rebuilding them between a mouse-down and a
       // mouse-up would swallow the click, and there is nothing left to vary:
       // "Always" is gone until the remembered-rules list exists to back it.
-      if (rowKey === "built") return;
-      rowKey = "built";
-      clear(row);
-      row.append(
-        btn("Deny", "secondary", () => actions.decide("deny"), "N"),
-        btn("Allow", "primary", () => actions.decide("allow"), "Y"),
-      );
+      if (rowKey !== "built") {
+        rowKey = "built";
+        clear(row);
+        row.append(
+          btn("Deny", "secondary", () => actions.decide("deny"), "N"),
+          btn("Allow", "primary", () => actions.decide("allow"), "Y"),
+        );
+      }
+      air.fit();
     },
   };
 }
@@ -820,19 +855,27 @@ function tellNews(news: IntegrationNews, who: HTMLElement, title: HTMLElement, f
   facts.append(...newsFacts(news));
 }
 
-function buildError(actions: ViewActions): ViewHost {
+function buildError(actions: ViewActions, onResize: () => void): ViewHost {
   const who = h("div");
   const title = h("div", { class: "title", text: "Workflow stopped." });
   const detail = h("div", { class: "detail" });
+  // Where what stopped runs: n8n, the Claude app, a terminal — the pill's own way out.
+  const openLabel = h("span");
   const row = h("div", { class: "actions" },
     btn("Retry", "primary", () => actions.setView(State.defaultView())),
-    btn("Open in n8n", "secondary", () => actions.openUrl("")),
+    h("button", { class: "btn secondary", onclick: () => actions.openTarget() }, openLabel),
   );
   const facts = h("div", { class: "nfs news-facts" });
   const newsRow = newsActions(actions);
-  const el = h("div", { class: "view" }, card("red", stack(116, 16, who, title, detail, facts, row, newsRow)));
+  const lines = stack(116, 16, who, title, detail, facts, row, newsRow);
+  const el = h("div", { class: "view" }, card("red", lines));
+  const air = airy(lines, onResize);
   return {
     el,
+    // A card that tells an integration's news has its own height (NEWS_LINE).
+    get height() {
+      return frontNews() ? undefined : air.height;
+    },
     sync() {
       const task = State.focusTask;
       const news = frontNews();
@@ -850,13 +893,16 @@ function buildError(actions: ViewActions): ViewHost {
       who.append(task?.id === CLAUDE_ID ? sessionWho("Claude Code") : agentWho(task, task?.source === "n8n" ? "n8n" : "stopped"));
       title.textContent = task?.source === "n8n" ? "Workflow stopped." : "Session stopped on an error.";
       detail.textContent = task?.steps.at(-1) ?? "No detail available.";
+      openLabel.textContent =
+        task?.source === "n8n" ? "Open in n8n" : task?.id === CLAUDE_ID && State.session.client === "desktop" ? "Open Claude" : "Open terminal";
+      air.fit();
     },
   };
 }
 
 // ── Finished ──────────────────────────────────────────────────────────────────
 
-function buildFinished(actions: ViewActions): ViewHost {
+function buildFinished(actions: ViewActions, onResize: () => void): ViewHost {
   const who = h("div");
   const title = h("div", { class: "title" });
   // Built once, like every button of a card: only its words follow the session.
@@ -874,9 +920,15 @@ function buildFinished(actions: ViewActions): ViewHost {
   );
   const facts = h("div", { class: "nfs news-facts" });
   const newsRow = newsActions(actions);
-  const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, facts, row, newsRow)));
+  const lines = stack(116, 16, who, title, facts, row, newsRow);
+  const el = h("div", { class: "view" }, card("green", lines));
+  const air = airy(lines, onResize);
   return {
     el,
+    // A card that tells an integration's news has its own height (NEWS_LINE).
+    get height() {
+      return frontNews() ? undefined : air.height;
+    },
     sync() {
       const news = frontNews();
       row.style.display = news ? "none" : "";
@@ -903,6 +955,7 @@ function buildFinished(actions: ViewActions): ViewHost {
       openLabel.textContent = State.session.client === "desktop" ? "Open Claude" : "Open terminal";
       changesBtn.style.display = files > 0 ? "" : "none";
       changesLabel.textContent = files === 1 ? "1 file changed" : `${files} files changed`;
+      air.fit();
     },
   };
 }
@@ -1017,10 +1070,10 @@ export function buildViews(
   const map = new Map<IslandViewName, ViewHost>();
   map.set("overview", buildOverview(actions, onChatHeightChange));
   map.set("empty", buildEmpty(actions));
-  map.set("approval", buildApproval(actions));
+  map.set("approval", buildApproval(actions, onChatHeightChange));
   map.set("question", buildQuestion(actions, onChatHeightChange));
-  map.set("error", buildError(actions));
-  map.set("finished", buildFinished(actions));
+  map.set("error", buildError(actions, onChatHeightChange));
+  map.set("finished", buildFinished(actions, onChatHeightChange));
   map.set("confused", buildConfused());
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));
