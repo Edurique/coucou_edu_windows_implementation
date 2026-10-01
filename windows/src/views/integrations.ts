@@ -4,7 +4,7 @@
 // Cal.com is the one simplification: macOS shows a three-level calendar
 // (month → day → booking); here it is the list of upcoming bookings.
 
-import { h, svg, clear, dot } from "./dom";
+import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { COLOR } from "./palette";
 import { State, type AgentTask } from "../core/state";
@@ -205,90 +205,141 @@ function resendCard(): HTMLElement {
 // ── Spotify ───────────────────────────────────────────────────────────────────
 
 const SPOTIFY = "integration_spotify";
-/** After a key is pressed, how long the app takes to say so in its window's title. */
+/** After a key is pressed, how long the app takes to tell Windows what it did. */
 const KEY_SETTLES_MS = 700;
-
 /** How fast a title too long for its line runs across it, in px per second, and how long it rests at each end. */
 const RUN_PX_PER_S = 28;
 const RUN_REST_S = 1.6;
 
-/**
- * A line that runs from side to side when its words do not fit: to its end,
- * a rest, back to its start, a rest — so a long title is read whole. A line
- * that fits stays still. Measured once it is on screen.
- */
-function runningLine(cls: string, text: string): HTMLElement {
-  const run = h("span", { class: "media-run", text });
-  const line = h("div", { class: cls, title: text }, run);
-  requestAnimationFrame(() => {
-    const over = run.offsetWidth - line.clientWidth;
-    if (over <= 0) return;
-    line.classList.add("runs");
-    line.style.setProperty("--run", `${-over}px`);
-    line.style.setProperty("--run-time", `${(over / RUN_PX_PER_S + RUN_REST_S * 2).toFixed(2)}s`);
-  });
-  return line;
+/** What the card shows of Spotify: what Windows says, as plain values. */
+interface Playing {
+  open: boolean;
+  playing: boolean;
+  title: string;
+  artist: string;
+  album: string;
+  /** The cover as a `data:` URL of a picture, or null. */
+  cover: string | null;
 }
 
-/** One of the player's keys, asked of Spotify, then a look at what it did. */
-function mediaKey(icon: string, title: string, action: "toggle" | "next" | "previous"): HTMLElement {
-  return h(
-    "button",
-    {
-      class: action === "toggle" ? "media-key main" : "media-key",
-      title,
-      onclick: () => {
-        void Bridge.mediaKey(action);
-        window.setTimeout(() => void Bridge.refreshIntegration(SPOTIFY), KEY_SETTLES_MS);
-      },
-    },
-    svg(icon, 11),
-  );
-}
-
-/**
- * What Spotify is playing, as Windows knows it: the cover, the song, who
- * plays it, and the player's keys. The cover stands where Mochi does on every
- * other card, and takes the room: he has nothing to say here, and steps out
- * (see Island.updateBotTargets). A paused song is still the song.
- */
-function spotifyCard(): HTMLElement {
+/** What Spotify is playing, as the Rust side last said it. */
+export function nowPlaying(): Playing {
   const now = get(SPOTIFY);
-  const open = now.open === true;
-  const playing = now.playing === true;
-  const song = typeof now.title === "string" ? now.title : "";
-  const artist = typeof now.artist === "string" ? now.artist : "";
-  // What the song is from. Windows knows the album; the playlist it is played
-  // from is not something a player tells the system.
-  const album = song && typeof now.album === "string" ? now.album : "";
-  const title = song || (open ? "Nothing playing" : "Spotify is not playing");
-  const by = song ? artist : open ? "Pick a song in Spotify" : "Play something in the Spotify app";
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const cover = text(now.cover);
+  return {
+    open: now.open === true,
+    playing: now.playing === true,
+    title: text(now.title),
+    artist: text(now.artist),
+    album: text(now.album),
+    // Only ever a picture: nothing else is put in an image's place.
+    cover: cover.startsWith("data:image/") ? cover : null,
+  };
+}
 
-  // The cover only ever comes from the Rust side as a picture's data: URL.
-  const cover = h("div", { class: "media-cover" });
-  if (typeof now.cover === "string" && now.cover.startsWith("data:image/")) {
-    cover.append(h("img", { src: now.cover, alt: "" }));
-  } else {
-    cover.append(svg(ICONS.play, 22));
+/** What a card is drawn from, for a pill whose data is too big to compare whole: a cover is tens of kilobytes. */
+export function integrationKey(id: string): string {
+  if (id !== SPOTIFY) return JSON.stringify(State.integrations[id]?.data ?? {});
+  const now = nowPlaying();
+  return [now.open, now.playing, now.title, now.artist, now.album, now.cover?.length ?? 0].join("|");
+}
+
+/**
+ * Spotify's card: the cover's place, the song, who plays it, the album it is
+ * from, and the player's keys. The cover stands where Mochi does on every
+ * other card — he has nothing to say here, and steps out — and is drawn by
+ * the island itself (island/cover.ts), which carries it there from the folded
+ * island. A paused song is still the song.
+ *
+ * Built once and changed where it stands: a song that starts brings its words
+ * in, play turns into pause, and nothing else moves — a card built again at
+ * every change would play every entrance again each time.
+ */
+function buildSpotifyCard(): { el: HTMLElement; sync(): void } {
+  const slot = h("div", { class: "media-cover" }, svg(ICONS.play, 22));
+  const kind = h("span");
+  // Three bars that dance while something plays, and rest when it does not.
+  const bars = h("i", { class: "media-bars" }, h("i"), h("i"), h("i"));
+  const head = h("div", { class: "int-head" }, dot("#1DB954", 7), h("b", { text: "Spotify" }), kind, bars);
+  const run = h("span", { class: "media-run" });
+  const title = h("div", { class: "media-title" }, run);
+  const artist = h("div", { class: "media-artist" });
+  const album = h("div", { class: "media-album" });
+
+  const key = (icon: string, label: string, action: "toggle" | "next" | "previous") =>
+    h(
+      "button",
+      {
+        class: action === "toggle" ? "media-key main" : "media-key",
+        title: label,
+        onclick: () => {
+          void Bridge.mediaKey(action);
+          window.setTimeout(() => void Bridge.refreshIntegration(SPOTIFY), KEY_SETTLES_MS);
+        },
+      },
+      svg(icon, 11),
+    );
+  const toggle = key(ICONS.play, "Play", "toggle");
+  const keys = h("div", { class: "media-keys" }, key(ICONS.previous, "Previous", "previous"), toggle, key(ICONS.next, "Next", "next"));
+  const el = h("div", { class: "int-card media-card" }, slot, head, title, artist, album, keys);
+
+  /** A title too long for its line runs from side to side; one that fits stays still. Measured once it is on screen. */
+  function fitTitle() {
+    title.classList.remove("runs");
+    requestAnimationFrame(() => {
+      const over = run.offsetWidth - title.clientWidth;
+      if (over <= 0) return;
+      title.classList.add("runs");
+      title.style.setProperty("--run", `${-over}px`);
+      title.style.setProperty("--run-time", `${(over / RUN_PX_PER_S + RUN_REST_S * 2).toFixed(2)}s`);
+    });
   }
 
-  const keys = h(
-    "div",
-    { class: "media-keys" },
-    mediaKey(ICONS.previous, "Previous", "previous"),
-    mediaKey(playing ? ICONS.pause : ICONS.play, playing ? "Pause" : "Play", "toggle"),
-    mediaKey(ICONS.next, "Next", "next"),
-  );
-  return h(
-    "div",
-    { class: "int-card media-card" },
-    cover,
-    header("#1DB954", "Spotify", playing ? "Now playing" : song ? "Paused" : "Music"),
-    runningLine(song ? "media-title" : "media-title quiet", title),
-    h("div", { class: "media-artist", text: by, title: by }),
-    album ? h("div", { class: "media-album", text: album, title: album }) : null,
-    open ? keys : null,
-  );
+  let shown = { song: "\u0000", by: "", from: "", playing: null as boolean | null, open: null as boolean | null, cover: null as boolean | null };
+
+  return {
+    el,
+    sync() {
+      const now = nowPlaying();
+      const song = now.title || (now.open ? "Nothing playing" : "Spotify is not playing");
+      const by = now.title ? now.artist : now.open ? "Pick a song in Spotify" : "Play something in the Spotify app";
+      const from = now.title ? now.album : "";
+
+      // The song's words come in together when the song changes.
+      if (song !== shown.song || by !== shown.by || from !== shown.from) {
+        run.textContent = song;
+        title.title = song;
+        title.classList.toggle("quiet", !now.title);
+        artist.textContent = by;
+        artist.title = by;
+        album.textContent = from;
+        album.title = from;
+        album.style.display = from ? "" : "none";
+        for (const line of [title, artist, album]) replay(line, "now-in");
+        fitTitle();
+      }
+      if (now.playing !== shown.playing) {
+        kind.textContent = now.playing ? "Now playing" : now.title ? "Paused" : "Music";
+        bars.classList.toggle("on", now.playing);
+        toggle.title = now.playing ? "Pause" : "Play";
+        toggle.replaceChildren(svg(now.playing ? ICONS.pause : ICONS.play, 11));
+        if (shown.playing != null) replay(toggle, "pressed");
+      }
+      if (now.open !== shown.open) keys.style.display = now.open ? "" : "none";
+      // With a cover the island's own picture lies over this place; without, its mark shows.
+      if ((now.cover != null) !== shown.cover) slot.classList.toggle("empty", now.cover == null);
+      shown = { song, by, from, playing: now.playing, open: now.open, cover: now.cover != null };
+    },
+  };
+}
+
+let spotify: ReturnType<typeof buildSpotifyCard> | null = null;
+
+function spotifyCard(): HTMLElement {
+  spotify ??= buildSpotifyCard();
+  spotify.sync();
+  return spotify.el;
 }
 
 // ── GitHub ────────────────────────────────────────────────────────────────────

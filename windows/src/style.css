@@ -4028,8 +4028,9 @@ button.gh-block:hover {
   color: var(--dim-5);
 }
 
-/* The Spotify card: the cover where Mochi stands on the other cards, as big
-   as the card allows, then the song, who plays it, and the player's keys. */
+/* The Spotify card: the cover's place where Mochi stands on the other cards,
+   as big as the card allows, then the song, who plays it, and the player's
+   keys. The cover itself is the island's (#island-cover), laid over its place. */
 .media-card {
   position: relative;
   height: 100%;
@@ -4041,20 +4042,94 @@ button.gh-block:hover {
   top: 11px;
   bottom: 11px;
   aspect-ratio: 1;
-  border-radius: 12px;
-  overflow: hidden;
+  border-radius: 13px;
   display: grid;
   place-items: center;
   background: var(--gh-plate);
-  color: var(--dim-3);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  color: transparent;
+  transition: color 0.3s ease-out;
 }
 
-.media-cover img {
+/* No cover to lay over it: its own mark shows. */
+.media-cover.empty {
+  color: var(--dim-3);
+}
+
+/* The cover of what plays, the island's own: in the folded island and over
+   its place on the card, carried from one to the other (island/cover.ts). */
+#island-cover {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--card-flat);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.28s ease-out;
+}
+
+#island-cover.on {
+  opacity: 1;
+}
+
+/* A new song's cover comes in over the one before, from a little larger. */
+#island-cover img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  animation: rise-in 0.32s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+  animation: cover-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes cover-in {
+  from {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+}
+
+/* Three bars beside "Now playing": they dance while a song plays, and rest. */
+.media-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 9px;
+  margin-left: 1px;
+}
+
+.media-bars > i {
+  width: 2px;
+  height: 3px;
+  border-radius: 1px;
+  background: #1db954;
+  transform-origin: bottom;
+  transition: height 0.3s ease-out, opacity 0.3s ease-out;
+  opacity: 0.45;
+}
+
+.media-bars.on > i {
+  height: 9px;
+  opacity: 1;
+  animation: media-bar 0.9s ease-in-out infinite alternate;
+}
+
+.media-bars.on > i:nth-child(2) {
+  animation-duration: 0.7s;
+  animation-delay: -0.3s;
+}
+
+.media-bars.on > i:nth-child(3) {
+  animation-duration: 1.1s;
+  animation-delay: -0.6s;
+}
+
+@keyframes media-bar {
+  from {
+    transform: scaleY(0.3);
+  }
+  to {
+    transform: scaleY(1);
+  }
 }
 
 .media-title {
@@ -4134,6 +4209,19 @@ button.gh-block:hover {
 
 .media-key:hover {
   background: rgba(255, 255, 255, 0.14);
+}
+
+/* Under the finger a key gives; play turning into pause pops. */
+.media-key {
+  transition: background 0.12s ease-out, transform 0.12s cubic-bezier(0.3, 1.2, 0.4, 1);
+}
+
+.media-key:active {
+  transform: scale(0.88);
+}
+
+.media-key.pressed svg {
+  animation: pop-in 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
 }
 
 .media-key.main {
