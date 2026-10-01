@@ -4064,11 +4064,13 @@ button.gh-block:hover {
   opacity: 0;
   background: var(--card-flat);
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
-  transition: opacity 0.28s ease-out;
+  /* Gone at once: what it stood on is already leaving. */
+  transition: opacity 0.1s ease-out;
 }
 
 #island-cover.on {
   opacity: 1;
+  transition: opacity 0.28s ease-out;
 }
 
 /* A new song's cover comes in over the one before, from a little larger. */

@@ -51,6 +51,8 @@ const WAITING = new Set(["approval", "question"]);
 const SPOTIFY = "integration_spotify";
 /** How long the island stays unfolded on a song that just started. */
 const ANNOUNCE_MS = 4_500;
+/** How long the island takes to fold: the front is handed back once it has. */
+const FOLD_MS = 450;
 let announceTimer: number | null = null;
 
 /**
@@ -80,12 +82,18 @@ function announceSong(island: Island) {
       return;
     }
     island.collapse();
-    giveBack(SPOTIFY);
-    // A session that asked for something meanwhile only got a badge: its card is due.
-    if (State.focusId === CLAUDE_ID && (State.pendingQuestion || State.pendingApproval)) {
-      State.isPinned = true;
-      island.alert(State.pendingQuestion ? "question" : "approval");
-    }
+    // The cover folds away with the island, into the place it has there;
+    // only then does the pill that had the front take it back. Handed back at
+    // once, the cover would vanish from the middle of an island still folding.
+    announceTimer = window.setTimeout(() => {
+      announceTimer = null;
+      giveBack(SPOTIFY);
+      // A session that asked for something meanwhile only got a badge: its card is due.
+      if (State.focusId === CLAUDE_ID && (State.pendingQuestion || State.pendingApproval)) {
+        State.isPinned = true;
+        island.alert(State.pendingQuestion ? "question" : "approval");
+      }
+    }, FOLD_MS);
   }, ANNOUNCE_MS);
 }
 

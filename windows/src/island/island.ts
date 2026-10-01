@@ -282,6 +282,9 @@ export class Island {
       this.greetingCanvas,
       this.uploadCanvas.el,
       this.contentEl,
+      // Inside the island's shape, unlike Mochi: a cover as large as a card
+      // must fold away with the island, not hang under it while it shrinks.
+      this.cover.el,
     );
     this.islandEl = h(
       "div",
@@ -289,7 +292,6 @@ export class Island {
       this.clipEl,
       this.botGlow,
       this.botCanvas,
-      this.cover.el,
       this.miniGrid,
       this.countdown,
     );
