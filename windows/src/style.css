@@ -1697,6 +1697,64 @@ button.gh-step:hover {
   padding: 7px 12px 0;
 }
 
+/* News that came in while the panel was open — a build that broke, a pull
+   request that went in: a line under the head, in the news's colour, that
+   opens what it is about. It leaves with the pill's badge. */
+.gh-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-width: 0;
+  width: calc(100% - 12px);
+  margin: 6px 6px 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+  color: var(--ink);
+  font: 500 11px var(--font);
+  text-align: left;
+  cursor: default;
+  animation: gh-rise 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+.gh-notice:hover {
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+}
+
+.gh-notice > i {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--c);
+}
+
+.gh-notice > b {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.gh-notice > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dim);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gh-notice > em {
+  flex: 0 0 auto;
+  color: var(--c);
+  font-style: normal;
+}
+
+.gh-notice:empty {
+  display: none;
+}
+
 .gh-status:empty {
   display: none;
 }
@@ -2208,10 +2266,6 @@ button.gh-step:hover {
   white-space: nowrap;
 }
 
-.gh-status {
-  font: 700 9.5px var(--mono);
-  font-style: normal;
-}
 
 /* ── GitHub panel: a file's code ────────────────────────────────────────── */
 

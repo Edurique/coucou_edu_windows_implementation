@@ -42,6 +42,10 @@ pub struct IntegrationEvent {
     pub success: bool,
     pub label: String,
     pub detail: Option<String>,
+    /// What the island can open for it, when the integration has a screen of
+    /// its own for the thing the event is about (GitHub: a run, a pull request).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open: Option<Value>,
 }
 
 pub(crate) fn emit(app: &AppHandle, update: IntegrationUpdate) {
@@ -256,7 +260,7 @@ async fn poll_stripe(app: AppHandle) {
                 let cents = payments[0].get("amount").and_then(Value::as_i64).unwrap_or(0);
                 format!("{:.2}", cents as f64 / 100.0)
             });
-        Some(IntegrationEvent { success: true, label, detail: None })
+        Some(IntegrationEvent { success: true, label, detail: None, open: None })
     } else {
         None
     };
@@ -330,6 +334,7 @@ async fn poll_vercel(app: AppHandle) {
             success,
             label: latest.get("projectName")?.as_str()?.to_string(),
             detail: None,
+            open: None,
         })
     });
 
@@ -637,7 +642,7 @@ async fn poll_n8n(app: AppHandle) {
         id: "integration_n8n",
         data: json!({ "workflow": name, "status": status }),
         error: None,
-        event: Some(IntegrationEvent { success, label: name, detail }),
+        event: Some(IntegrationEvent { success, label: name, detail, open: None }),
     });
 }
 

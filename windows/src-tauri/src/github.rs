@@ -451,8 +451,8 @@ pub fn watch_demo(app: AppHandle) {
             let Ok(what) = std::fs::read_to_string(&trigger) else { continue };
             let _ = std::fs::remove_file(&trigger);
             let event = match what.trim() {
-                "fail" => IntegrationEvent { success: false, label: "CI failed on coucou".into(), detail: Some("main".into()) },
-                "merge" => IntegrationEvent { success: true, label: "#12 merged".into(), detail: Some("GitHub panel for the Windows island".into()) },
+                "fail" => IntegrationEvent { success: false, label: "CI failed on coucou".into(), detail: Some("main".into()), open: None },
+                "merge" => IntegrationEvent { success: true, label: "#12 merged".into(), detail: Some("GitHub panel for the Windows island".into()), open: None },
                 _ => continue,
             };
             // No data: the island keeps what it shows and only takes the news.
@@ -466,8 +466,10 @@ pub fn watch_demo(app: AppHandle) {
 struct Merged {
     /// "owner/name#12".
     key: String,
+    repo: String,
     number: u64,
     title: String,
+    url: String,
 }
 
 fn parse_merged(viewer: &Value) -> Vec<Merged> {
@@ -484,6 +486,8 @@ fn parse_merged(viewer: &Value) -> Vec<Merged> {
                         key: format!("{repo}#{number}"),
                         number,
                         title: text(n.get("title")).unwrap_or_default(),
+                        url: text(n.get("url")).unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}")),
+                        repo,
                     })
                 })
                 .collect()
@@ -505,6 +509,7 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
             success: false,
             label: format!("{} failed on {}", build.workflow, repo.name),
             detail: build.branch.clone(),
+            open: Some(json!({ "target": Target::Run { repo: repo.full_name.clone(), id: build.id }, "label": build.workflow, "url": build.url })),
         })
     });
     broke.or_else(|| {
@@ -514,6 +519,11 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
             success: true,
             label: format!("#{} merged", pull.number),
             detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
+            open: Some(json!({
+                "target": Target::Pull { repo: pull.repo.clone(), number: pull.number },
+                "label": format!("#{}", pull.number),
+                "url": pull.url,
+            })),
         })
     })
 }
@@ -580,7 +590,7 @@ const PROFILE_QUERY: &str = "query { viewer { login name url \
     repositoriesContributedTo(first: 25, includeUserRepositories: true, \
     orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } \
     merged: pullRequests(states: MERGED, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) { \
-    nodes { number title repository { nameWithOwner } } } } } \
+    nodes { number title url repository { nameWithOwner } } } } } \
     fragment Project on Repository { name nameWithOwner url isPrivate isArchived pushedAt \
     stargazerCount primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } }";
 

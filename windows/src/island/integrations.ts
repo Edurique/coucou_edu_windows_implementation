@@ -53,6 +53,7 @@ function handle(island: Island, update: IntegrationUpdate) {
     error: update.error,
     loaded: hasData || (previous?.loaded ?? false),
     configured: previous?.configured ?? true,
+    news: update.event ?? previous?.news ?? null,
   };
 
   const event = update.event;
@@ -82,6 +83,8 @@ function handle(island: Island, update: IntegrationUpdate) {
           t.steps = [];
           t.stepIndex = 0;
           t.pillBadge = null;
+          const info = State.integrations[update.id];
+          if (info) info.news = null;
           State.notify();
         }, 60_000),
       );

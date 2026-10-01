@@ -427,11 +427,20 @@ export interface GithubAccount {
   checks: { label: string; ok: boolean; note: string | null }[];
 }
 
+/** Something that just happened in an integration: the pill's badge and sound. */
+export interface IntegrationNews {
+  success: boolean;
+  label: string;
+  detail: string | null;
+  /** What the island can open for it (GitHub: the run, the pull request). */
+  open?: { target: GithubTarget; label: string; url: string };
+}
+
 export interface IntegrationUpdate {
   id: string;
   data: Record<string, unknown>;
   error: string | null;
-  event: { success: boolean; label: string; detail: string | null } | null;
+  event: IntegrationNews | null;
 }
 
 export type ChatContext =

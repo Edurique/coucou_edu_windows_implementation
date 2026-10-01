@@ -264,6 +264,13 @@ State.integrations.integration_github = {
   loaded: true,
   configured: true,
 };
+// `news=fail` or `news=merge`: what the panel shows when the pill's news comes
+// in while it is open.
+if (params.has("news")) {
+  State.integrations.integration_github.news = params.get("news") === "merge"
+    ? { success: true, label: "#12 merged", detail: "GitHub panel for the Windows island", open: { target: pullTarget("mochi/coucou", 12), label: "#12", url: "https://github.com" } }
+    : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com" } };
+}
 State.setFocus("integration_github");
 // Pinned, so the island doesn't fold away while it's being looked at.
 State.isPinned = true;

@@ -1659,7 +1659,9 @@ export function buildGithub(actions: ViewActions): ViewHost {
   );
   const status = h("div", { class: "gh-status" });
   const list = h("div", { class: "gh-list" });
-  const main = h("div", { class: "gh-main" }, head, status, list);
+  // News that came in with the panel open; see drawNotice.
+  const notice = h("div", { class: "gh-notice-slot" });
+  const main = h("div", { class: "gh-main" }, head, notice, status, list);
 
   // Mochi's column: Mochi himself (drawn by the island), whose GitHub this
   // is, then the tabs — or, deeper, the way down.
@@ -1686,6 +1688,38 @@ export function buildGithub(actions: ViewActions): ViewHost {
     }
   }
   dress(null);
+
+  /**
+   * With the panel open the pill is out of sight, and Mochi turning red says
+   * that something happened, not what. The news gets a line of its own under
+   * the head: what happened, and a click away, the run or the pull request it
+   * is about. It leaves when the pill's badge does, or once it is opened.
+   */
+  function drawNotice() {
+    clear(notice);
+    const info = State.integrations[ID];
+    const news = info?.news;
+    if (!info || !news) return;
+    const color = news.success ? "#34D399" : GITHUB_RED;
+    const open = news.open;
+    const line = h(
+      "button",
+      {
+        class: "gh-notice",
+        onclick: () => {
+          info.news = null;
+          if (open) openTarget(open.target, open.label, open.url);
+          else touch();
+        },
+      },
+      h("i", {}, svg(news.success ? ICONS.merge : ICONS.xmark, 11, news.success ? { stroke: 2.2 } : {})),
+      h("b", { text: news.label }),
+      h("span", { text: news.detail ?? "" }),
+      h("em", { text: open ? "Open" : "Dismiss" }),
+    );
+    line.style.setProperty("--c", color);
+    notice.append(line);
+  }
 
   function goTab(name: Tab) {
     if (tab === name) return;
@@ -1979,13 +2013,16 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.
-      const next = [configured, error, d?.fetchedAt, d?.login, tab, stamp].join("~");
+      const news = info?.news;
+      const next = [configured, error, d?.fetchedAt, d?.login, tab, stamp, news?.label, news?.detail].join("~");
       if (next === key) return;
       key = next;
 
       // Taken now: whatever draws next is what the action was about.
       const done = motion;
       motion = null;
+
+      drawNotice();
 
       // Under Mochi, as under a Claude Code session's: who, then through what.
       account.textContent = d && configured ? d.login : "GitHub";
