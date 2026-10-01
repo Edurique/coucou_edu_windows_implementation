@@ -2524,10 +2524,6 @@ export function buildGithub(actions: ViewActions): ViewHost {
   return {
     el,
     sync() {
-      // The island folded or away with the panel still its view: nothing in
-      // it may go on moving (see .gh-view.away).
-      el.classList.toggle("away", State.mode !== "expanded");
-
       const info = State.integrations[ID];
       const d = githubData();
       const configured = info?.configured !== false;

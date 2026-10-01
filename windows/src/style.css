@@ -192,6 +192,14 @@ body {
   transition: opacity 0.2s ease-in-out;
 }
 
+/* Keep it light: 0 % CPU when the island is hidden. Folded or hidden, the
+   views are invisible but still in the page, and an animation with no end — a
+   shimmering line, a pulsing dot, a turning ring — would go on being computed
+   for nobody. They all stop, and pick up when the island unfolds. */
+#content.away * {
+  animation-play-state: paused !important;
+}
+
 #header {
   height: 34px;
   flex: 0 0 34px;
@@ -1444,14 +1452,11 @@ input[type="range"]::-webkit-slider-thumb {
   --code-gone: #b86f78;      /* the words of a line removed */
 }
 
-/* Keep it light: 0 % CPU when the island is hidden. The panel stays in the
-   page while it is not shown — another view up, the island folded, the island
-   away — and it holds animations with no end: a running build's ring, a live
-   job's bar, today's square. Left alone they would go on being computed for
-   nobody. Whatever moves in the panel stops when it leaves the screen, and
-   picks up when it is back. */
-.gh-view:not(.on) *,
-.gh-view.away * {
+/* The panel stays in the page while another view is up, and it holds
+   animations with no end: a running build's ring, a live job's bar, today's
+   square. They stop while it is not the view on show, and pick up when it is
+   back. (Folded or hidden, #content.away stops them with everything else.) */
+.gh-view:not(.on) * {
   animation-play-state: paused !important;
 }
 
