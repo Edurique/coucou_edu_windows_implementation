@@ -44,7 +44,8 @@ pub enum Target {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Detail {
-    Pull(PullDetail),
+    /// Boxed: a pull request's sheet is twice the size of any other.
+    Pull(Box<PullDetail>),
     Issue(IssueDetail),
     Commits(CommitsDetail),
     Release(ReleaseDetail),
@@ -352,7 +353,7 @@ async fn pull(gh: &Gh, repo: &str, number: u64) -> Result<Detail, GhError> {
     if let Some(sha) = text(node.get("headRefOid")) {
         detail.ci = ci_for(gh, repo, &sha, &mut detail.missing).await?;
     }
-    Ok(Detail::Pull(detail))
+    Ok(Detail::Pull(Box::new(detail)))
 }
 
 /// A GraphQL query refused as a whole reads as "no data", which the callers
