@@ -1901,7 +1901,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
   }
 
   const card = h("div", { class: "card gh-card" }, side, h("div", { class: "gh-col" }, notice, main));
-  const el = h("div", { class: "view" }, card);
+  const el = h("div", { class: "view gh-view" }, card);
 
   /** Says which kind of screen is up: the tab's badge, and its colour on the tab. */
   function dress(look: ScreenLook | null) {
@@ -2232,6 +2232,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
   return {
     el,
     sync() {
+      // The island folded or away with the panel still its view: nothing in
+      // it may go on moving (see .gh-view.away).
+      el.classList.toggle("away", State.mode !== "expanded");
+
       const info = State.integrations[ID];
       const d = githubData();
       const configured = info?.configured !== false;

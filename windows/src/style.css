@@ -1396,6 +1396,17 @@ input[type="range"]::-webkit-slider-thumb {
 
 /* ── GitHub panel (github view) ─────────────────────────────────────────── */
 
+/* Keep it light: 0 % CPU when the island is hidden. The panel stays in the
+   page while it is not shown — another view up, the island folded, the island
+   away — and it holds animations with no end: a running build's ring, a live
+   job's bar, today's square. Left alone they would go on being computed for
+   nobody. Whatever moves in the panel stops when it leaves the screen, and
+   picks up when it is back. */
+.gh-view:not(.on) *,
+.gh-view.away * {
+  animation-play-state: paused !important;
+}
+
 /* Laid out like a Claude Code session's view: Mochi's column on the left —
    Mochi at full size, whose GitHub this is, and the way down to the screen on
    show — and the screen itself in a darker panel on the right, headed like an
