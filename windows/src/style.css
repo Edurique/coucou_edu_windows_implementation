@@ -1497,6 +1497,49 @@ button.gh-step:hover {
   margin-left: -3px;
 }
 
+/* Deeper, the column is no longer a choice between two tabs but the way down
+   to the screen on show, and has to read as one: the levels above are a notch
+   brighter than an unlit tab (each is a way back), a rail ties every mark to
+   the one above it, and the screen on show sits on a plate of its own. */
+.gh-trail.deep .gh-step {
+  color: var(--dim);
+}
+
+.gh-trail.deep button.gh-step:hover {
+  color: var(--ink);
+}
+
+.gh-trail.deep .gh-step > i {
+  position: relative;
+  height: 12px;
+}
+
+.gh-trail.deep .gh-step > i svg {
+  width: 12px;
+  height: 12px;
+}
+
+.gh-trail.deep .gh-step + .gh-step > i::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 2px);
+  width: 1px;
+  height: 6.5px;
+  margin-left: -0.5px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* The plate reaches into the column's margins, so the words stay lined up
+   with the ones above. */
+.gh-trail.deep .gh-step.on {
+  color: var(--ink);
+  margin: 0 -4px 0 -7px;
+  padding: 0 4px 0 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
 /* The panel wears the colour of the screen on it. Registering --wash as a
    colour lets it glide from one screen's colour to the next instead of
    switching; unregistered, a custom property can't be interpolated. */

@@ -1677,53 +1677,83 @@ export function buildGithub(actions: ViewActions): ViewHost {
     projects: { label: "Projects", icon: () => svg(ICONS.stack, 11) },
   };
 
-  /** A screen's name in the column: short, it's only a way back. */
-  function stepLabel(s: Screen, login: string): string {
+  /** Letters a name gets in the column before it is cut. */
+  const STEP_LETTERS = 11;
+
+  /**
+   * "package-lock.json" → "packa….json": cut in its middle, a file keeps the
+   * end that tells it from its neighbours.
+   */
+  function squeeze(name: string): string {
+    if (name.length <= STEP_LETTERS) return name;
+    const dot = name.lastIndexOf(".");
+    const tail = dot > 0 && name.length - dot <= 6 ? name.slice(dot) : name.slice(-3);
+    return `${name.slice(0, Math.max(1, STEP_LETTERS - tail.length - 1))}…${tail}`;
+  }
+
+  /**
+   * A screen's name in the column — short, the panel's head says the rest —
+   * and its whole name, for the tooltip.
+   */
+  function stepLabel(s: Screen): { short: string; whole: string } {
     switch (s.type) {
       case "project":
-        return repoName(s.fullName, login);
-      case "detail":
-        return detailHead(s);
+        // The owner goes: a level of the way down has no room for it.
+        return { short: s.fullName.split("/")[1] ?? s.fullName, whole: s.fullName };
+      case "detail": {
+        const name = detailHead(s);
+        return { short: name, whole: `${name} · ${s.target.repo}` };
+      }
       case "diff":
-        return splitPath(s.file.path).base;
-      case "job":
-        return jobOf(s)?.job.name ?? "Job";
+        return { short: squeeze(splitPath(s.file.path).base), whole: s.file.path };
+      case "job": {
+        const name = jobOf(s)?.job.name ?? "Job";
+        return { short: name, whole: name };
+      }
     }
   }
 
   /**
-   * The lists: both tabs, the open one lit. Deeper: the way down from the tab
-   * it started on, the screen on show lit in its colour, every level above it
-   * a click away. Past four levels the middle folds into "…".
+   * The lists: both tabs, the open one lit. Deeper, the column becomes the way
+   * down, drawn as one: ‹ and the tab it started from, then each level on a
+   * rail, the screen on show last, lit in its colour on a plate of its own.
+   * Every level above it is a click back. Past four levels the middle folds.
    */
   function drawTrail(d: GithubData | null) {
     clear(trail);
+    trail.classList.toggle("deep", d != null && stack.length > 0);
     if (!d) return;
-    const failing = d.repos.some((r) => r.build?.state === "failure");
-    const tabStep = (name: Tab, on: boolean, go: () => void) =>
-      step(TABS[name].label, TABS[name].icon(), on, null, go, name === "projects" && failing ? dot(GITHUB_RED, 5) : undefined);
     if (stack.length === 0) {
+      // A broken build is worth a glance even from the other tab.
+      const failing = d.repos.some((r) => r.build?.state === "failure");
       trail.append(
-        tabStep("activity", tab === "activity", () => goTab("activity")),
-        tabStep("projects", tab === "projects", () => goTab("projects")),
+        step(TABS.activity.label, TABS.activity.icon(), tab === "activity", null, () => goTab("activity")),
+        step(TABS.projects.label, TABS.projects.icon(), tab === "projects", null, () => goTab("projects"),
+          failing ? dot(GITHUB_RED, 5) : undefined),
       );
       return;
     }
+    const root = step(TABS[tab].label, svg(ICONS.chevronLeft, 11, { stroke: 2.4 }), false, null, () => {
+      actions.blip();
+      popTo(0);
+    });
+    root.title = `Back to ${TABS[tab].label}`;
     const levels = [
-      tabStep(tab, false, () => {
-        actions.blip();
-        popTo(0);
-      }),
+      root,
       ...stack.map((s, i) => {
         const look = screenLook(s);
         const last = i === stack.length - 1;
-        return step(stepLabel(s, d.login), look.icon(), last, look.color, last ? null : () => {
+        const { short, whole } = stepLabel(s);
+        const el = step(short, look.icon(), last, look.color, last ? null : () => {
           actions.blip();
           popTo(i + 1);
         });
+        el.title = last ? whole : `Back to ${whole}`;
+        return el;
       }),
     ];
-    const folded = step("…", h("span"), false, null, null);
+    const folded = step("", svg(ICONS.ellipsis, 12), false, null, null);
+    folded.title = `${levels.length - 3} more levels`;
     trail.append(...(levels.length > 4 ? [levels[0], folded, ...levels.slice(-2)] : levels));
   }
 
