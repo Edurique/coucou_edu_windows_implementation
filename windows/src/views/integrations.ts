@@ -338,8 +338,10 @@ let announced: number | null = null;
  * breathes behind the cover.
  */
 export function announceOnCard(ms: number) {
-  // No card yet: Spotify's pill never had the front, so there is nothing to light.
-  if (!spotify) return;
+  // The card may never have been shown: it is built for the pill, to be lit as it comes in.
+  const task = State.tasks.find((t) => t.id === SPOTIFY_ID);
+  if (!task) return;
+  spotify ??= buildSpotifyCard(task.color);
   const { el } = spotify;
   el.style.setProperty("--announce", `${ms}ms`);
   replay(el, "announce");
