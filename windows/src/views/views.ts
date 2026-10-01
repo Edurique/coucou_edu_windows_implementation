@@ -5,7 +5,7 @@
 import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { CLAUDE_ID, State, TURN_DONE, turnSteps, type AgentTask, type ClaudeSession, type SessionStep } from "../core/state";
-import { VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
+import { fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
@@ -67,8 +67,6 @@ export interface ViewActions {
   pickSession(id: string): void;
 }
 
-/** With several sessions, the overview has a row of tabs under the session's card: this much taller. */
-const SESSION_TABS_ROOM = 24;
 /** Lines of a step's preview the overview has room for. */
 const NOW_LINES = 3;
 
@@ -221,10 +219,17 @@ export function buildHeader(actions: ViewActions): ViewHost {
     actions.setView(v);
   }
 
+  // With several Claude Code sessions open: a tab for each of the ones behind
+  // the session on show, in the middle of the bar — where they can be reached
+  // from any view, and out of the cards' way.
+  const sessions = h("div", { class: "sess-tabs" });
+  const syncSessions = sessionTabs(sessions, (id) => actions.pickSession(id));
+
   const el = h(
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
+    sessions,
     h("div", { class: "header-actions" }, gearBtn, soundBtn),
   );
 
@@ -241,6 +246,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
       gearBtn.append(svg(v === "settings" ? ICONS.gearFill : ICONS.gear, 14));
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
+      syncSessions();
       el.style.opacity = v === "confused" ? "0" : "1";
     },
   };
@@ -248,16 +254,12 @@ export function buildHeader(actions: ViewActions): ViewHost {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
+function buildOverview(actions: ViewActions): ViewHost {
   const who = h("div", { class: "who" });
   // What the session is doing: the step, and under it a look at what it did.
   const nowLine = h("div", { class: "now-line" });
   const nowBox = h("div", { class: "now-box" });
-  // With several sessions open: a tab for each of the others.
-  const tabs = h("div", { class: "sess-tabs" });
-  const syncTabs = sessionTabs(tabs, (id) => actions.pickSession(id));
-  const sessionBody = h("div", { class: "card-body" }, who, nowLine, nowBox, tabs);
-  let tabbed = false;
+  const sessionBody = h("div", { class: "card-body" }, who, nowLine, nowBox);
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
     "button",
@@ -348,9 +350,6 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
 
   return {
     el,
-    get height() {
-      return tabbed ? VIEW_LAYOUTS.overview.height + SESSION_TABS_ROOM : undefined;
-    },
     sync() {
       const task = State.focusTask;
       if (task?.id !== lastFocus) {
@@ -404,12 +403,6 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
       }
 
       jump.style.display = detailOpen ? "none" : "";
-
-      const nowTabbed = syncTabs() > 0 && mode === "session";
-      if (nowTabbed !== tabbed) {
-        tabbed = nowTabbed;
-        onResize();
-      }
 
       left.classList.toggle("opens", mode === "session");
       left.title = mode === "session" ? "Open the session" : "";
@@ -494,7 +487,8 @@ function buildApproval(actions: ViewActions): ViewHost {
   // For an edit: the diff it would make, between what is asked and the answer.
   const proposed = h("div", { class: "proposed gh-code" });
   const row = h("div", { class: "actions" });
-  const el = h("div", { class: "view" }, card("amber", stack(116, 16, who, code, proposed, row)));
+  const lines = stack(116, 16, who, code, proposed, row);
+  const el = h("div", { class: "view" }, card("amber", lines));
   let rowKey = "";
   let proposedKey = "";
   return {
@@ -515,6 +509,9 @@ function buildApproval(actions: ViewActions): ViewHost {
       // What that edit would do, line by line, before it is allowed. Drawn once
       // per request: a list redrawn under the mouse would lose its scroll.
       proposed.style.display = proposal ? "" : "none";
+      // A diff takes all the room it is given: the card keeps the air a
+      // card has above its first line and under its buttons.
+      lines.classList.toggle("airy", proposal != null);
       const nextProposed = proposal ? (approval?.requestId ?? "") : "";
       if (nextProposed !== proposedKey) {
         proposedKey = nextProposed;
@@ -1001,7 +998,7 @@ export function buildViews(
   onChatHeightChange: () => void,
 ): Map<IslandViewName, ViewHost> {
   const map = new Map<IslandViewName, ViewHost>();
-  map.set("overview", buildOverview(actions, onChatHeightChange));
+  map.set("overview", buildOverview(actions));
   map.set("empty", buildEmpty(actions));
   map.set("approval", buildApproval(actions));
   map.set("question", buildQuestion(actions, onChatHeightChange));
