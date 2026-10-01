@@ -1625,16 +1625,14 @@ button.gh-step:hover {
   flex: 0 0 auto;
 }
 
-/* A changed file's dot, after its name, and its lines added and removed
-   beside the tab. */
-.gh-tab-flag,
+/* Beside the tab: what happened to a file, and its lines added and removed. */
 .gh-head-aside {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
-.gh-tab-flag:empty,
 .gh-head-aside:empty {
   display: none;
 }
@@ -2242,12 +2240,6 @@ button.gh-step:hover {
   color: #15171a;
 }
 
-/* The same for the dot that flags a changed file, which belongs at the
-   middle of the lower-case letters like a bullet. */
-.gh-file > .dot,
-.gh-tab-flag > .dot {
-  translate: 0 1.5px;
-}
 
 /* In the column, a mark among marks: a size down. */
 .gh-step .gh-ext {
@@ -2264,12 +2256,27 @@ button.gh-step:hover {
   justify-items: start;
 }
 
-/* Lines added and removed sit at the row's right edge, each in a column of
-   its own: down the list they read like figures in a table, instead of
-   trailing wherever each path happens to end. */
-.gh-file .gh-pm {
+/* What happened to the file, in a word: grey for "modified", its colour for
+   the rest (see statusWord). */
+.gh-file-status {
+  flex: 0 0 auto;
+  font: 500 10px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+}
+
+/* That word, then the lines added and removed, sit at the row's right edge,
+   each in a column of its own: down the list they read like a table, instead
+   of trailing wherever each path happens to end. */
+.gh-file .gh-file-status {
   margin-left: auto;
   padding-left: 8px;
+  min-width: 52px;
+  text-align: right;
+}
+
+.gh-file .gh-pm {
+  padding-left: 4px;
 }
 
 .gh-file .gh-pm > span {

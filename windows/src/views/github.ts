@@ -1050,11 +1050,16 @@ const FILE_STATUS: Record<string, { color: string }> = {
 };
 const MODIFIED = { color: "#F5A524" };
 
-/** A dot in the status's colour, as an editor flags a changed file. */
-function statusDot(file: GithubFile): HTMLElement {
-  const flag = dot((FILE_STATUS[file.status ?? ""] ?? MODIFIED).color, 5);
-  flag.title = file.status ?? "modified";
-  return flag;
+/**
+ * What happened to a file, in GitHub's own word. "modified" is what nearly
+ * every file of a change is, so it stays grey; a file added, removed or moved
+ * is the news, and wears its colour.
+ */
+function statusWord(file: GithubFile): HTMLElement {
+  const word = h("span", { class: "gh-file-status", text: file.status ?? "modified" });
+  const known = FILE_STATUS[file.status ?? ""];
+  if (known) word.style.color = known.color;
+  return word;
 }
 
 /** One file touched, under its extension's badge; it opens the file's diff. */
@@ -1065,8 +1070,8 @@ function fileRow(file: GithubFile, url: string): HTMLElement {
     { class: "gh-row gh-file", onclick: () => openDiff(file, url) },
     h("i", { class: "gh-row-icon" }, extBadge(file.path)),
     h("span", { class: "gh-row-title", text: base }),
-    statusDot(file),
     h("span", { class: "gh-row-where", text: dir }),
+    statusWord(file),
     plusMinus(file.additions, file.deletions),
   );
 }
@@ -1452,8 +1457,6 @@ interface ScreenLook {
   icon: () => SVGSVGElement;
   /** A mark of its own in place of the tinted round icon: a file's extension badge. */
   mark?: () => HTMLElement;
-  /** A dot after the name, as an editor flags a changed file. */
-  flag?: { color: string; title: string };
 }
 
 const NEUTRAL = "#9398A1";
@@ -1473,7 +1476,6 @@ function screenLook(screen: Screen): ScreenLook {
       color: status.color,
       icon: () => svg(ICONS.doc, 10),
       mark: () => extBadge(screen.file.path),
-      flag: { color: status.color, title: screen.file.status ?? "modified" },
     };
   }
   if (screen.type === "job") {
@@ -1644,16 +1646,15 @@ export function buildGithub(actions: ViewActions): ViewHost {
   );
   // GitHub's red dot on the lists; the screen's own badge over them.
   const badge = h("span", { class: "gh-head-badge" });
-  // A changed file's dot, after its name; and what rides next to the tab (a
-  // file's lines added and removed).
-  const flag = h("span", { class: "gh-tab-flag" });
+  // What rides next to the tab: what happened to a file, and its lines added
+  // and removed.
   const aside = h("span", { class: "gh-head-aside" });
   // Like an editor's tab: what is open on the left, where it sits on the right.
   // No ‹ here: the column's trail steps back, the island's house goes home.
   const head = h(
     "div",
     { class: "gh-head" },
-    h("div", { class: "gh-tab" }, badge, who, flag), aside, h("div", { class: "grow" }), sub, refreshBtn, openBtn,
+    h("div", { class: "gh-tab" }, badge, who), aside, h("div", { class: "grow" }), sub, refreshBtn, openBtn,
   );
   const status = h("div", { class: "gh-status" });
   const list = h("div", { class: "gh-list" });
@@ -1672,16 +1673,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
   /** Says which kind of screen is up: the tab's badge and the panel's light. */
   function dress(look: ScreenLook | null) {
     clear(badge);
-    clear(flag);
     clear(aside);
     sub.classList.remove("path");
     if (look) {
       badge.append(look.mark ? look.mark() : roundIcon(look.color, look.icon()));
-      if (look.flag) {
-        const mark = dot(look.flag.color, 6);
-        mark.title = look.flag.title;
-        flag.append(mark);
-      }
       main.style.setProperty("--wash", `${look.color}73`);
     } else {
       badge.append(dot(GITHUB_RED, 7));
@@ -1910,7 +1905,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       who.textContent = splitPath(screen.file.path).base;
       sub.textContent = screen.file.path;
       sub.classList.add("path");
-      aside.append(plusMinus(screen.file.additions, screen.file.deletions));
+      aside.append(statusWord(screen.file), plusMinus(screen.file.additions, screen.file.deletions));
       list.classList.add("code");
       list.append(diffView(screen.file, screen.url));
     } else if (screen.type === "project") {
