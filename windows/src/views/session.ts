@@ -483,10 +483,10 @@ export function buildSession(actions: ViewActions): ViewHost {
       list.style.display = live ? "none" : "";
       if (!live) stopTyping();
 
-      // The head: on the journal, the file Claude was at last, as an editor's tab.
-      const filed = live ? [...session.steps].reverse().find((s) => (s.kind === "edit" || s.kind === "read") && s.target) : null;
-      const path = live ? (filed?.target ?? null) : (picked?.path ?? null);
-      const nextHead = [session.id, screen.kind, path, filed?.kind, files.length, picked?.edits.length].join("~");
+      // The head: the journal is the journal, whatever file Claude is at; a
+      // file opened from the changes has its name on the tab, as in an editor.
+      const path = picked?.path ?? null;
+      const nextHead = [session.id, screen.kind, path, files.length, picked?.edits.length].join("~");
       if (nextHead !== headKey) {
         headKey = nextHead;
         clear(badge);
@@ -506,12 +506,10 @@ export function buildSession(actions: ViewActions): ViewHost {
           badge.append(dot(task?.color ?? COLOR.idle, 7));
         }
         if (picked) aside.append(statusWord(picked), plusMinus(picked.additions, picked.deletions));
-        else if (filed) aside.append(h("span", { class: "gh-file-status", text: filed.kind === "read" ? "read" : "edited" }));
         else if (!live && files.length > 0) {
           aside.append(plusMinus(files.reduce((n, f) => n + f.additions, 0), files.reduce((n, f) => n + f.deletions, 0)));
         }
-        const accent = picked ? (picked.created ? COLOR.green : COLOR.amber) : filed?.kind === "edit" ? COLOR.amber : "rgba(0,0,0,0)";
-        main.style.setProperty("--accent", accent);
+        main.style.setProperty("--accent", picked ? (picked.created ? COLOR.green : COLOR.amber) : "rgba(0,0,0,0)");
       }
 
       if (live) {
