@@ -1447,9 +1447,10 @@ function jobOf(s: JobScreen): { job: GithubJob; run: GithubRunDetail } | null {
 
 /**
  * What kind of screen this is, said three ways at once so it can't be
- * mistaken for another: an icon, a word, and a colour — for the head's badge
- * and for the card's glow, the island's way of colouring a whole view
- * (amber for a permission, red for an error).
+ * mistaken for another: an icon, a word, and a colour — for the tab's badge,
+ * the rule under the tab, and the screen's mark in the column's trail. The
+ * colours are the island's own (amber for something waiting, red for an
+ * error).
  */
 interface ScreenLook {
   label: string;
@@ -1670,17 +1671,17 @@ export function buildGithub(actions: ViewActions): ViewHost {
   const card = h("div", { class: "card gh-card" }, side, main);
   const el = h("div", { class: "view" }, card);
 
-  /** Says which kind of screen is up: the tab's badge and the panel's light. */
+  /** Says which kind of screen is up: the tab's badge, and its colour on the tab. */
   function dress(look: ScreenLook | null) {
     clear(badge);
     clear(aside);
     sub.classList.remove("path");
     if (look) {
       badge.append(look.mark ? look.mark() : roundIcon(look.color, look.icon()));
-      main.style.setProperty("--wash", `${look.color}73`);
+      main.style.setProperty("--accent", look.color);
     } else {
       badge.append(dot(GITHUB_RED, 7));
-      main.style.setProperty("--wash", "rgba(0,0,0,0)");
+      main.style.setProperty("--accent", "rgba(0,0,0,0)");
     }
   }
   dress(null);

@@ -1540,10 +1540,14 @@ button.gh-step:hover {
   background: rgba(255, 255, 255, 0.07);
 }
 
-/* The panel wears the colour of the screen on it. Registering --wash as a
-   colour lets it glide from one screen's colour to the next instead of
-   switching; unregistered, a custom property can't be interpolated. */
-@property --wash {
+/* The panel wears the colour of the screen on it — on its tab, as an editor
+   marks the tab that is open: a rule under it, a breath of the colour in it,
+   and the head's line taking the colour along. Sharp marks on a sharp panel;
+   a glow behind the head said the same thing, but as a smudge. Registering
+   --accent as a colour lets it glide from one screen's colour to the next
+   instead of switching; unregistered, a custom property can't be
+   interpolated. Transparent on the lists, where nothing is open. */
+@property --accent {
   syntax: "<color>";
   inherits: true;
   initial-value: rgba(0, 0, 0, 0);
@@ -1560,22 +1564,7 @@ button.gh-step:hover {
   background: var(--card-flat);
   border: 1px solid rgba(255, 255, 255, 0.05);
   overflow: hidden;
-  transition: --wash 0.45s ease-out;
-}
-
-/* A light hanging from the top, behind the head that names the screen — the
-   floor belongs to the list's fade (.gh-list.more), and a row fading into a
-   glow reads as neither. Sized in px so it reaches the head and no further. */
-.gh-main::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(400px 130px at 50% -54px, var(--wash) 0%, rgba(0, 0, 0, 0) 72%);
-  pointer-events: none;
-}
-
-.gh-main > * {
-  position: relative;
+  transition: --accent 0.35s ease-out;
 }
 
 .gh-head {
@@ -1586,7 +1575,7 @@ button.gh-step:hover {
   flex: 0 0 auto;
   height: 25px;
   padding: 0 4px 0 7px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 38%, rgba(255, 255, 255, 0.05));
 }
 
 /* What is open, as an editor names its file: a tab standing on the head's
@@ -1601,7 +1590,10 @@ button.gh-step:hover {
   height: 22px;
   padding: 0 10px 0 6px;
   border-radius: 7px 7px 0 0;
-  background: rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(color-mix(in srgb, var(--accent) 13%, transparent) 0 0),
+    rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .gh-head .gh-icon {
