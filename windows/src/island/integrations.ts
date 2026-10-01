@@ -5,6 +5,7 @@
 import { onEvent, Bridge, type IntegrationUpdate } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
+import { sawRunEnd } from "../views/github";
 import type { Island } from "./island";
 
 /** Which Credential Manager key backs each pill. */
@@ -108,7 +109,10 @@ function handle(island: Island, update: IntegrationUpdate) {
       if (State.focusId !== update.id) {
         task.pillBadge = event.success ? "finished" : "error";
       }
-      Sound.play(event.success ? "finish" : "error");
+      // A run the panel was showing when it ended has been played there already.
+      const about = event.open?.target;
+      const heard = about?.kind === "run" && sawRunEnd(about.id);
+      if (!heard) Sound.play(event.success ? "finish" : "error");
       // Same as the Swift pollers: show the compact island so the badge is seen,
       // but never steal the screen for a successful deploy. News that speaks up
       // unfolds the island on its card instead; it folds back on its own.

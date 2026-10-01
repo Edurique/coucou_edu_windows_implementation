@@ -6,7 +6,7 @@ import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
 import { State, type AgentTask } from "../core/state";
-import { washRGBA, type BotEmoteName, type IslandViewName, type Wash } from "../core/layout";
+import { washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
@@ -36,10 +36,12 @@ export interface ViewActions {
    */
   tintMochi(color: string | null): void;
   /**
-   * The view is showing something at work (a run going): Mochi takes his
-   * working look for as long as it lasts, unless his own state says more.
+   * The view is showing something Mochi should wear the state of — a run
+   * going (working), a run that just ended before your eyes (finished, error),
+   * with the entrance the engine plays for that state. It holds for as long
+   * as the view asks, unless Mochi's own state says more; null gives it back.
    */
-  work(on: boolean): void;
+  look(state: BotStateName | null): void;
 }
 
 export interface ViewHost {

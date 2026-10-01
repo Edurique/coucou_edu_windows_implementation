@@ -15,7 +15,9 @@ import {
   type GithubProject, type GithubPull, type GithubPullDetail, type GithubReleaseDetail, type GithubRepo,
   type GithubRunDetail, type GithubTarget, type GithubTimed, type IntegrationNews,
 } from "../core/bridge";
-import type { BotEmoteName } from "../core/layout";
+import type { BotEmoteName, BotStateName } from "../core/layout";
+import { hexToRGB, type BotEngine } from "../mochi/engine";
+import { createFreeBot, pruneMiniBots } from "../mochi/minibots";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
 import type { ViewActions, ViewHost } from "./views";
@@ -253,9 +255,23 @@ function runOf(s: Screen | null): GithubRunDetail | null {
 
 /**
  * A run that was going when last seen and has just ended, while on screen:
- * the view makes a moment of it (Mochi, the ring, a sound), once.
+ * the view makes a moment of it (Mochi, a sound), once.
  */
 let justEnded: "success" | "failure" | "neutral" | null = null;
+
+/** The runs seen ending on screen: the panel has already played those. */
+const sawEnd = new Set<number>();
+
+/**
+ * True for a run the panel showed ending. Its news arrives a few seconds
+ * later from the tick; the island need not play its sound a second time.
+ */
+export function sawRunEnd(id: number): boolean {
+  return sawEnd.has(id);
+}
+
+/** How long Mochi wears a run's ending before he is himself again. */
+const END_LOOK_MS = 3200;
 
 /** What a screen fetches — a job fetches through its run; a diff has nothing to fetch. */
 function fetched(s: Screen): ProjectScreen | DetailScreen | null {
@@ -283,13 +299,21 @@ function liveRun(): DetailScreen | null {
   return going ? screen : null;
 }
 
+/**
+ * Somebody is looking at the panel, and Coucou is not paused: the only time a
+ * run is asked about again on its own. Pausing Coucou means no network at all.
+ */
+function watching(): boolean {
+  return State.mode === "expanded" && State.view === "github" && !State.paused;
+}
+
 function armLive() {
   if (liveTimer != null || !liveRun()) return;
-  if (State.mode !== "expanded" || State.view !== "github") return;
+  if (!watching()) return;
   liveTimer = window.setTimeout(async () => {
     liveTimer = null;
     const screen = liveRun();
-    if (!screen || screen.loading || State.mode !== "expanded" || State.view !== "github") return;
+    if (!screen || screen.loading || !watching()) return;
     try {
       screen.data = await Bridge.githubDetail(screen.target, true);
       screen.error = null;
@@ -299,7 +323,10 @@ function armLive() {
     }
     // It was going a moment ago; if it no longer is, it has just ended.
     const run = runOf(screen);
-    if (!liveRun() && run && run.state !== "running" && showing(screen)) justEnded = run.state;
+    if (!liveRun() && run && run.state !== "running" && showing(screen)) {
+      justEnded = run.state;
+      sawEnd.add(run.id);
+    }
     // Redraws, which arms the next round while the run still goes.
     if (showing(screen)) touch();
   }, LIVE_MS);
@@ -1213,7 +1240,11 @@ function ciJobs(screen: DetailScreen): HTMLElement[] {
     const broke = job.steps.find((s) => s.state === "failure");
     const going = job.steps.find((s) => s.state === "running" && !WAITING.has(s.outcome));
     const where = broke ? `at “${broke.name}”` : going ? going.name : job.runner;
-    return timedRow(job, job.name, where, whole, now, () => openRun(run.repo, run.id, run.workflow, run.url));
+    return timedRow(
+      job, job.name, where, whole, now,
+      () => openRun(run.repo, run.id, run.workflow, run.url),
+      crewMember(run.id, job),
+    );
   });
 }
 
@@ -1408,20 +1439,81 @@ function bar(t: GithubTimed, whole: Span | null, now: number): HTMLElement {
   return track;
 }
 
-/** A job or a step: its mark, its name, how long it took, and its bar under them. */
+// ── A run's crew ──────────────────────────────────────────────────────────────
+//
+// Each job of a run is a mini Mochi — the island's own way of showing something
+// at work beside the big one. He sleeps while his job waits for a runner, works
+// while it runs, and the engine plays the rest as for any Mochi: a roll and
+// sparks the moment it passes, a shake the moment it breaks.
+
+/** A job's Mochi: his state, and the colour of his body. */
+function crewLook(t: GithubTimed): { state: BotStateName; color: string } {
+  if (WAITING.has(t.outcome)) return { state: "sleeping", color: "#94A2B8" };
+  switch (t.state) {
+    case "running":
+      return { state: "working", color: BUILD_STYLE.running.color };
+    case "success":
+      return { state: "finished", color: BUILD_STYLE.success.color };
+    case "failure":
+      return { state: "error", color: BUILD_STYLE.failure.color };
+    case "neutral":
+      return { state: "idle", color: BUILD_STYLE.neutral.color };
+  }
+}
+
+/** The body of a job's Mochi, in px: a row's line of text, and a little more. */
+const CREW_SIZE = 17;
+/** At that size a mini's eyes are too big to tell his expressions apart. */
+const CREW_EYES = 0.72;
+
+/**
+ * The Mochis on show, by run and job. Kept from one draw to the next: a job
+ * that passes between two refreshes is then a change its Mochi plays, not a
+ * new Mochi that was always green.
+ */
+const crew = new Map<string, { el: HTMLElement; engine: BotEngine }>();
+
+function crewMember(runId: number, job: GithubJob): HTMLElement {
+  const key = `${runId}:${job.id}`;
+  const look = crewLook(job);
+  let member = crew.get(key);
+  if (!member) {
+    member = createFreeBot(look.color, look.state, CREW_SIZE, CREW_EYES);
+    crew.set(key, member);
+  } else {
+    member.engine.bodyColor = hexToRGB(look.color);
+    member.engine.setState(look.state);
+  }
+  return member.el;
+}
+
+/** Lets go of the Mochis whose row has left the screen. */
+function dismissCrew() {
+  for (const [key, member] of crew) {
+    if (!member.el.isConnected) crew.delete(key);
+  }
+  pruneMiniBots();
+}
+
+/**
+ * A job or a step: its mark, its name, how long it took, and its bar under
+ * them. A job comes with its Mochi (`mark`) in place of the plain mark.
+ */
 function timedRow(
-  t: GithubTimed, name: string, where: string | null, whole: Span | null, now: number, open?: () => void,
+  t: GithubTimed, name: string, where: string | null, whole: Span | null, now: number,
+  open?: () => void, mark?: HTMLElement,
 ): HTMLElement {
   const parts = [
-    h("i", { class: "gh-row-icon", style: `color:${BUILD_STYLE[t.state].color}` }, timedMark(t)),
+    mark
+      ? h("i", { class: "gh-row-icon" }, mark)
+      : h("i", { class: "gh-row-icon", style: `color:${BUILD_STYLE[t.state].color}` }, timedMark(t)),
     h("span", { class: "gh-row-title", text: name }),
     where ? h("span", { class: "gh-row-where", text: where }) : null,
     h("span", { class: "int-ago gh-took", text: took(t, now) }),
     bar(t, whole, now),
   ];
-  return open
-    ? h("button", { class: "gh-row gh-timed", onclick: open }, ...parts)
-    : h("div", { class: "gh-row gh-timed" }, ...parts);
+  const cls = mark ? "gh-row gh-timed gh-crew" : "gh-row gh-timed";
+  return open ? h("button", { class: cls, onclick: open }, ...parts) : h("div", { class: cls }, ...parts);
 }
 
 /** "3 passed · 1 failed". */
@@ -1468,7 +1560,11 @@ function runView(r: GithubRunDetail, login: string, screen: DetailScreen): HTMLE
     ...r.jobs.map((job) => {
       // A failed job says where it broke; the others, what they ran on.
       const broke = job.steps.find((s) => s.state === "failure");
-      return timedRow(job, job.name, broke ? `at “${broke.name}”` : job.runner, whole, now, () => openJob(screen, job));
+      return timedRow(
+        job, job.name, broke ? `at “${broke.name}”` : job.runner, whole, now,
+        () => openJob(screen, job),
+        crewMember(r.id, job),
+      );
     }),
     r.moreJobs > 0 ? h("div", { class: "int-empty", text: `and ${r.moreJobs} more on GitHub` }) : null,
     r.jobs.length === 0
@@ -1778,38 +1874,30 @@ export function buildGithub(actions: ViewActions): ViewHost {
   const account = h("b", { text: "GitHub" });
   const accountSub = h("span", { text: "GitHub" });
   const trail = h("div", { class: "gh-trail" });
-  // Around Mochi while a run is on screen: how far along it is. See drawOrbit.
-  const orbit = h("div", { class: "gh-orbit" });
-  const side = h("div", { class: "gh-side" }, orbit, h("div", { class: "gh-side-who" }, account, accountSub), trail);
+  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, account, accountSub), trail);
 
   /**
-   * A run on screen draws a ring around Mochi: as much of it as there are
-   * jobs done, with a light running round it while the run goes; whole, in
-   * the run's colour, once it has ended. Mochi works while it goes — the
-   * island's own working look — and when it ends before your eyes he says
-   * what he makes of it, with the island's sound for it.
+   * A run on screen: the big Mochi works while it goes, with his crew — the
+   * island's own working look. When it ends before your eyes he plays that
+   * ending the way the island plays a session's: the finished roll and its
+   * sparks, or the error shake, with the island's sound for it. A few seconds,
+   * then he is himself again.
    */
-  function drawOrbit() {
-    const run = stack.length > 0 ? runOf(top()) : null;
-    orbit.classList.toggle("on", run != null);
-    actions.work(run?.state === "running");
-    if (run) {
-      const going = run.state === "running";
-      const done = run.jobs.filter((j) => j.state !== "running").length;
-      const progress = going ? Math.max(0.04, done / Math.max(1, run.jobs.length + run.moreJobs)) : 1;
-      orbit.classList.toggle("live", going);
-      orbit.style.setProperty("--p", String(progress));
-      orbit.style.setProperty("--c", BUILD_STYLE[run.state].color);
-    }
+  let ending: { state: BotStateName; until: number } | null = null;
+
+  function wearRun() {
     if (justEnded) {
       const how = justEnded;
       justEnded = null;
-      orbit.classList.remove("ended");
-      void orbit.offsetWidth;
-      orbit.classList.add("ended");
-      actions.emote(how === "success" ? "proud" : how === "failure" ? "surprised" : "happy");
-      if (how !== "neutral") Sound.play(how === "success" ? "finish" : "error");
+      if (how !== "neutral") {
+        ending = { state: how === "success" ? "finished" : "error", until: performance.now() + END_LOOK_MS };
+        window.setTimeout(() => State.notify(), END_LOOK_MS + 50);
+        Sound.play(how === "success" ? "finish" : "error");
+      }
     }
+    if (ending && performance.now() > ending.until) ending = null;
+    const run = stack.length > 0 ? runOf(top()) : null;
+    actions.look(ending?.state ?? (run?.state === "running" ? "working" : null));
   }
 
   const card = h("div", { class: "card gh-card" }, side, h("div", { class: "gh-col" }, notice, main));
@@ -2155,7 +2243,9 @@ export function buildGithub(actions: ViewActions): ViewHost {
       // A diff is part of the sheet under it: nothing of its own to refresh.
       refreshBtn.style.display = configured && s?.type !== "diff" ? "" : "none";
       armLive();
-      drawOrbit();
+      wearRun();
+      // Once this draw is done: the Mochis whose rows it dropped can go.
+      queueMicrotask(dismissCrew);
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.

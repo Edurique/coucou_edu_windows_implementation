@@ -7,7 +7,7 @@ import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
   islandSize,
-  type IslandMode, type IslandViewName,
+  type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
@@ -67,8 +67,8 @@ export class Island {
    * graph). His body only: the glow stays his own.
    */
   private tintRequest: RGB | null = null;
-  /** A view asked for the working look (see ViewActions.work). */
-  private viewWorking = false;
+  /** A state a view asked Mochi to wear (see ViewActions.look). */
+  private viewState: BotStateName | null = null;
   /** The colour Mochi's body is drawn in, eased towards what it should be. */
   private bodyRGB: RGB | null = null;
 
@@ -184,9 +184,9 @@ export class Island {
         this.tintRequest = color ? hexToRGB(color) : null;
         this.ensureRunning();
       },
-      work: (on) => {
-        if (this.viewWorking === on) return;
-        this.viewWorking = on;
+      look: (state) => {
+        if (this.viewState === state) return;
+        this.viewState = state;
         State.notify();
       },
     };
@@ -284,7 +284,7 @@ export class Island {
     State.mode = mode;
     // Whatever asked for a tint is no longer under the mouse.
     this.tintRequest = null;
-    this.viewWorking = false;
+    this.viewState = null;
     if (mode === "expanded") Sound.play("open");
     if (prev === "expanded") {
       Sound.play("close");
@@ -326,7 +326,7 @@ export class Island {
   setView(view: IslandViewName) {
     this.stopSequenceIfLeaving(view);
     this.tintRequest = null;
-    this.viewWorking = false;
+    this.viewState = null;
     if (State.mode !== "expanded") {
       this.fsm.forceHome();
       State.view = view;
@@ -750,7 +750,10 @@ export class Island {
       ? settling
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
-        greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling;
+        greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling ||
+        // A view showing something live keeps its Mochis moving: a run's crew
+        // would otherwise freeze the moment the big one came to rest.
+        this.viewState != null;
 
     if (busy) {
       requestAnimationFrame(this.frame);
@@ -924,9 +927,11 @@ export class Island {
     }
 
     syncMiniBotStates(State.tasks);
-    // A view's working look only fills in for a Mochi with nothing to say.
+    // A view's look fills in for a Mochi with nothing of his own to say: idle,
+    // or only "working" — which the view, closer to what it shows, knows better.
     const state = State.effectiveState;
-    this.engine.setState(this.viewWorking && state === "idle" ? "working" : state);
+    const quiet = state === "idle" || state === "working";
+    this.engine.setState(this.viewState && quiet ? this.viewState : state);
   }
 
   /** Applies settings coming from Rust at boot. */

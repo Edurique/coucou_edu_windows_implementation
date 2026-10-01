@@ -5,7 +5,8 @@
 import "../src/style.css";
 import {
   Bridge, type GithubActivity, type GithubBuild, type GithubData, type GithubDay, type GithubDetail,
-  type GithubFile, type GithubJob, type GithubProject, type GithubRepo, type GithubRunDetail, type GithubStep, type GithubTarget,
+  type GithubFile, type GithubJob, type GithubProject, type GithubPullDetail, type GithubRepo, type GithubRunDetail,
+  type GithubStep, type GithubTarget,
 } from "../src/core/bridge";
 import { State } from "../src/core/state";
 import { Island } from "../src/island/island";
@@ -104,6 +105,61 @@ const runDetail: GithubRunDetail = {
   startedAt: t(0), endedAt: live ? null : t(212), jobs, moreJobs: 0,
 };
 
+// `running=play`: a run that goes on while you watch, over some fifty seconds
+// from the moment the page opened — lint passes, then test (or breaks, with
+// `fail`), then build, then deploy wakes up and ships. Every answer is the
+// run as it would stand at that moment, so the panel's own refresh sees it
+// move: what its jobs' Mochis and the big one do can be watched to the end.
+const played = params.get("running") === "play";
+const opened = Date.now();
+
+function playedRun(): GithubRunDetail {
+  const elapsed = (Date.now() - opened) / 1000;
+  const at = (s: number) => new Date(opened + s * 1000).toISOString();
+  const breaks = params.has("fail");
+  // from / to: seconds from the opening; a step's number is where in its job it ends.
+  const plans: { id: number; name: string; runner: string; from: number; to: number; ends: "passed" | "failed" | "skipped"; steps: [string, number][] }[] = [
+    { id: 1, name: "lint", runner: "ubuntu-latest", from: -16, to: 14, ends: "passed", steps: [["Set up job", 0.1], ["Checkout", 0.2], ["npm ci", 0.7], ["Type-check", 1]] },
+    { id: 2, name: "build (windows)", runner: "windows-latest", from: -15, to: 34, ends: "passed", steps: [["Set up job", 0.1], ["Set up Rust", 0.3], ["cargo build --release", 0.95], ["Save cache", 1]] },
+    { id: 3, name: "test", runner: "ubuntu-latest", from: -15, to: 24, ends: breaks ? "failed" : "passed", steps: [["Set up job", 0.1], ["Set up Rust", 0.4], ["cargo test", 1]] },
+    { id: 4, name: "deploy", runner: "ubuntu-latest", from: 34, to: 46, ends: breaks ? "skipped" : "passed", steps: [["Set up job", 0.2], ["Upload", 1]] },
+  ];
+  const jobs: GithubJob[] = plans.map((p) => {
+    const waiting = elapsed < p.from;
+    const skipped = p.ends === "skipped" && !waiting;
+    const done = elapsed >= p.to;
+    const length = p.to - p.from;
+    let before = 0;
+    const steps: GithubStep[] = waiting || skipped ? [] : p.steps.map(([name, end], i) => {
+      const from = p.from + before * length;
+      const to = p.from + end * length;
+      before = end;
+      const broke = p.ends === "failed" && done && i === p.steps.length - 1;
+      const over = elapsed >= to;
+      return {
+        number: i + 1, name,
+        state: broke ? "failure" : over ? "success" : "running",
+        outcome: broke ? "failed" : over ? "passed" : elapsed >= from ? "running" : "queued",
+        startedAt: elapsed >= from ? at(from) : null, endedAt: over ? at(to) : null,
+      };
+    });
+    return {
+      id: p.id, name: p.name, url: "https://github.com", runner: p.runner, steps,
+      state: skipped ? "neutral" : !done ? "running" : p.ends === "failed" ? "failure" : "success",
+      outcome: skipped ? "skipped" : waiting ? "queued" : !done ? "running" : p.ends,
+      startedAt: waiting || skipped ? null : at(p.from), endedAt: done && !skipped ? at(p.to) : null,
+    };
+  });
+  const over = jobs.every((j) => j.state !== "running");
+  const broke = jobs.some((j) => j.state === "failure");
+  return {
+    ...runDetail, jobs,
+    state: !over ? "running" : broke ? "failure" : "success",
+    outcome: !over ? "running" : broke ? "failed" : "passed",
+    startedAt: at(-16), endedAt: over ? at(breaks ? 34 : 46) : null,
+  };
+}
+
 const details: Record<GithubTarget["kind"], GithubDetail> = {
   run: runDetail,
   pull: {
@@ -141,7 +197,12 @@ const details: Record<GithubTarget["kind"], GithubDetail> = {
 };
 Bridge.githubDetail = async (target) => {
   await new Promise((r) => setTimeout(r, 700));
-  return params.has("locked") ? { kind: "locked", permission: "Contents" } : details[target.kind];
+  if (params.has("locked")) return { kind: "locked", permission: "Contents" };
+  if (played && target.kind === "run") return playedRun();
+  if (played && target.kind === "pull") {
+    return { ...(details.pull as GithubPullDetail), ci: ci(playedRun().state) };
+  }
+  return details[target.kind];
 };
 
 const repo = (
@@ -300,4 +361,14 @@ if (params.get("tab") === "projects") {
       requestAnimationFrame(() => document.querySelector<HTMLElement>(".gh-list .gh-row:nth-child(2)")?.click());
     }
   });
+}
+
+// `pr`: straight to the project's pull request, once its sheet is up.
+if (params.has("pr")) {
+  const waitForSheet = window.setInterval(() => {
+    const pull = document.querySelectorAll<HTMLElement>(".gh-sheet .gh-block")[1];
+    if (!pull) return;
+    window.clearInterval(waitForSheet);
+    pull.click();
+  }, 200);
 }
