@@ -27,6 +27,90 @@ export interface ApprovalInfo {
   sessionId: string;
   tool: string;
   command: string;
+  /** For an edit: what it would do to its file, to read before allowing it. */
+  proposal: FileProposal | null;
+}
+
+/** An edit that has not happened yet, as the diff it would make. */
+export interface FileProposal {
+  path: string;
+  patch: string;
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+  /** The file does not exist yet. */
+  created: boolean;
+}
+
+/** One thing Claude asks with its question tool, as the tool words it. */
+export interface Question {
+  question: string;
+  /** A word or two saying what the question is about. */
+  header: string | null;
+  options: { label: string; description: string | null }[];
+  multiSelect: boolean;
+}
+
+/** A question Claude is waiting on — up to four at once, answered together. */
+export interface QuestionInfo {
+  requestId: string;
+  sessionId: string;
+  questions: Question[];
+}
+
+/** The app a Claude Code session runs in. */
+export type ClaudeClient = "desktop" | "vscode" | "terminal";
+
+/** What the Claude pill is called while it follows a session from that app. */
+export const CLIENT_NAMES: Record<ClaudeClient, string> = {
+  desktop: "Claude",
+  vscode: "VS Code",
+  terminal: "Terminal",
+};
+/** Until a session has spoken, the pill keeps the name it always had. */
+export const CLIENT_UNKNOWN = "VS Code";
+
+/** One edit Claude made to a file: its unified diff, as coucou-hook built it. */
+export interface FileEdit {
+  patch: string;
+  additions: number;
+  deletions: number;
+  /** The diff was longer than the relay forwards. */
+  truncated: boolean;
+  at: number;
+}
+
+/** A file Claude touched in a session, with every edit it made to it, oldest first. */
+export interface ChangedFile {
+  /** Relative to the session's folder when it is inside it, with forward slashes. */
+  path: string;
+  /** Written new in this session. */
+  created: boolean;
+  additions: number;
+  deletions: number;
+  edits: FileEdit[];
+  at: number;
+}
+
+/** One tool of the turn under way, by its own name: going, done, or failed. */
+export interface SessionStep {
+  tool: string;
+  state: "running" | "done" | "failed";
+}
+
+/** The Claude Code session the island is following: the last one heard from. */
+export interface ClaudeSession {
+  id: string;
+  client: ClaudeClient | null;
+  /** The conversation's title, when Claude Code has given it one. */
+  title: string | null;
+  /** The tools of the turn under way, oldest first; "Done" closes a turn. */
+  steps: SessionStep[];
+  /** What the user asked last, and what Claude said to end its turn. */
+  asked: string | null;
+  answer: string | null;
+  /** When that answer came. */
+  answeredAt: number;
 }
 
 export interface ChatMessage {
@@ -56,6 +140,9 @@ const task = (
 ): AgentTask => ({
   id, name, color, state: "idle", stepIndex: 0, steps: [], source, isIntegration: true,
 });
+
+/** The pill that follows Claude Code sessions. */
+export const CLAUDE_ID = "integration_claude";
 
 /** AgentTask.integrationAgents — same ids, names and colours as macOS. */
 export const INTEGRATION_AGENTS: AgentTask[] = [
@@ -140,6 +227,13 @@ class AppState {
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
   pendingApproval: ApprovalInfo | null = null;
+  pendingQuestion: QuestionInfo | null = null;
+
+  session: ClaudeSession = {
+    id: "", client: null, title: null, steps: [], asked: null, answer: null, answeredAt: 0,
+  };
+  /** What each session changed, by session id — the few last sessions only. */
+  changes = new Map<string, ChangedFile[]>();
 
   integrations: Record<string, IntegrationInfo> = {};
 
@@ -165,6 +259,16 @@ class AppState {
 
   get effectiveState(): BotStateName {
     return this.stateOverride ?? this.focusTask?.state ?? "idle";
+  }
+
+  /** The Claude pill's name: the app of the session it follows. */
+  get clientName(): string {
+    return this.session.client ? CLIENT_NAMES[this.session.client] : CLIENT_UNKNOWN;
+  }
+
+  /** The files the session being followed has changed, the last touched first. */
+  get sessionFiles(): ChangedFile[] {
+    return this.changes.get(this.session.id) ?? [];
   }
 
   get otherTasks(): AgentTask[] {

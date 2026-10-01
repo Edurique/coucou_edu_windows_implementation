@@ -22,7 +22,8 @@ export type IslandViewName =
   | "note"
   | "settings"
   | "greeting"
-  | "github";
+  | "github"
+  | "session";
 
 export type BotStateName =
   | "idle"
@@ -71,7 +72,9 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   overview: { height: 160, botX: 68, botY: null, botDiameter: 58, agentMode: "pills" },
   empty: { height: 160, botX: 70, botY: null, botDiameter: 62, agentMode: "none" },
   approval: { height: 160, botX: 62, botY: null, botDiameter: 56, agentMode: "column" },
-  question: { height: 160, botX: 62, botY: null, botDiameter: 56, agentMode: "column" },
+  // 196 as docs/SPEC.md has it: a question, its options, and a line for what
+  // the option under the mouse means.
+  question: { height: 196, botX: 62, botY: null, botDiameter: 56, agentMode: "column" },
   error: { height: 160, botX: 62, botY: null, botDiameter: 58, agentMode: "column" },
   finished: { height: 160, botX: 62, botY: null, botDiameter: 58, agentMode: "column" },
   confused: { height: 160, botX: 76, botY: null, botDiameter: 66, agentMode: "column" },
@@ -92,6 +95,9 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   // upper part of his own column (its middle is x 67), the screen in a panel
   // on the right. As tall as the window allows (PANEL_H), like that view.
   github: { height: PANEL_H, botX: 67, botY: 108, botDiameter: 71, agentMode: "none" },
+  // What a Claude Code session did, in the same panel: the files it changed,
+  // each one's diff, and a line to tell Claude something.
+  session: { height: PANEL_H, botX: 67, botY: 108, botDiameter: 71, agentMode: "none" },
 };
 
 // The upload views above are only the fallback geometry. Once a file is actually
@@ -111,11 +117,32 @@ export function chatPromptHeight(messageCount: number): number {
  */
 export const NEWS_LINE = 28;
 
+/**
+ * An approval card that shows what the edit would do holds a diff between the
+ * request and its buttons: the island is that much taller for it.
+ */
+export const PROPOSAL_ROOM = 132;
+
+/**
+ * A view whose content varies — a question has two options or four, a line
+ * each or a row of buttons — says how tall the island should be for it: what
+ * it holds, plus the island around it (its bar, the card's own margins),
+ * between a card's usual height and the window's.
+ */
+const VIEW_CHROME = 96;
+const VIEW_MIN = 160;
+
+export function fittedHeight(content: number): number {
+  return Math.min(PANEL_H, Math.max(VIEW_MIN, Math.ceil(content) + VIEW_CHROME));
+}
+
 export function islandSize(
   mode: IslandMode,
   view: IslandViewName,
   chatCount = 0,
   news = false,
+  proposal = false,
+  fitted: number | null = null,
 ): { w: number; h: number } {
   switch (mode) {
     case "hidden":
@@ -125,9 +152,10 @@ export function islandSize(
     case "compact":
       return { w: COMPACT_W, h: NOTCH_H };
     case "expanded": {
-      const h = view === "prompt" ? chatPromptHeight(chatCount) : VIEW_LAYOUTS[view].height;
+      const h = fitted ?? (view === "prompt" ? chatPromptHeight(chatCount) : VIEW_LAYOUTS[view].height);
       const grown = news && (view === "finished" || view === "error") ? NEWS_LINE : 0;
-      return { w: EXPANDED_W, h: h + grown };
+      const room = proposal && view === "approval" ? PROPOSAL_ROOM : 0;
+      return { w: EXPANDED_W, h: h + grown + room };
     }
   }
 }

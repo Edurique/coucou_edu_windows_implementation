@@ -10,7 +10,7 @@ import {
   type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { State } from "../core/state";
+import { CLAUDE_ID, State } from "../core/state";
 import { BotEngine, hexToRGB, type RGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
@@ -18,6 +18,7 @@ import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { githubData } from "../views/integrations";
+import { enterSessionPanel } from "../views/session";
 import { followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
@@ -127,11 +128,13 @@ export class Island {
       setFocus: (id) => {
         State.setFocus(id);
         Sound.play("blip");
+        // A request that came in while another pill had the front only left a
+        // badge: bringing Claude's pill forward is asking for its card.
+        if (id !== CLAUDE_ID) return;
+        if (State.pendingQuestion) this.setView("question");
+        else if (State.pendingApproval) this.setView("approval");
       },
-      openTerminal: () => {
-        const cwd = State.focusTask?.sessionCwd ?? null;
-        void Bridge.openInVSCode(cwd);
-      },
+      openTerminal: () => this.openClient(),
       // The ↗ button — same targets as openAgentTarget() on macOS.
       openTarget: () => {
         const task = State.focusTask;
@@ -144,7 +147,7 @@ export class Island {
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
         };
-        if (task.id === "integration_claude") void Bridge.openInVSCode(task.sessionCwd ?? null);
+        if (task.id === CLAUDE_ID) this.openClient();
         else if (task.id === "integration_n8n") void Bridge.openN8n();
         else if (task.id === "integration_github" && githubData()) void Bridge.openUrl(githubData()!.profileUrl);
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
@@ -158,12 +161,34 @@ export class Island {
         if (!req) return;
         Sound.play(d === "deny" ? "blip" : "approve");
         void Bridge.approvalDecision(req.requestId, d);
-        State.pendingApproval = null;
-        State.isPinned = false;
-        this.fsm.pinned = false;
-        State.updateTask("integration_claude", "working");
-        State.setPillBadge("integration_claude", null);
-        this.setView(State.defaultView());
+        this.settleRequest();
+      },
+      answer: (answers) => {
+        const req = State.pendingQuestion;
+        if (!req) return;
+        Sound.play("approve");
+        void Bridge.approvalAnswer(req.requestId, answers);
+        this.settleRequest();
+      },
+      skipQuestion: () => {
+        const req = State.pendingQuestion;
+        if (!req) return;
+        Sound.play("blip");
+        void Bridge.approvalDecision(req.requestId, "skip");
+        this.settleRequest();
+      },
+      passQuestion: () => {
+        const req = State.pendingQuestion;
+        if (!req) return;
+        Sound.play("blip");
+        // Declined, not denied: Claude Code asks it in its own window at once.
+        void Bridge.approvalDecline(req.requestId);
+        this.settleRequest();
+      },
+      keyboard: (on) => void Bridge.focusWindow(on),
+      openSession: (changes) => {
+        enterSessionPanel(changes === true);
+        this.setView("session");
       },
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
@@ -348,6 +373,23 @@ export class Island {
     State.notify();
   }
 
+  /** The request on the card got its answer: back to the session at work. */
+  private settleRequest() {
+    State.pendingApproval = null;
+    State.pendingQuestion = null;
+    State.isPinned = false;
+    this.fsm.pinned = false;
+    State.updateTask(CLAUDE_ID, "working");
+    State.setPillBadge(CLAUDE_ID, null);
+    this.setView(State.defaultView());
+  }
+
+  /** Where the session runs: the Claude app brought forward, or its folder in VS Code. */
+  private openClient() {
+    if (State.session.client === "desktop") void Bridge.openClaudeApp();
+    else void Bridge.openInVSCode(State.tasks.find((t) => t.id === CLAUDE_ID)?.sessionCwd ?? null);
+  }
+
   collapse() {
     State.isPinned = false;
     this.fsm.pinned = false;
@@ -485,7 +527,10 @@ export class Island {
 
   private targetSize(): { w: number; h: number; r: number } {
     const news = State.focusId != null && State.integrations[State.focusId]?.news != null;
-    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length, news);
+    const proposal = State.pendingApproval?.proposal != null;
+    // A view that knows how tall its content is has the last word.
+    const fitted = this.views?.get(State.view)?.height ?? null;
+    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length, news, proposal, fitted);
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
     return { w, h, r };
   }
@@ -765,6 +810,9 @@ export class Island {
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
         greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling ||
+        // A view half-way through a motion of its own — the ticker scrolling a
+        // step — would be left there, two rows on one line.
+        this.views.get(State.view)?.animating === true ||
         // A view showing something live keeps its Mochis moving: a run's crew
         // would otherwise freeze the moment the big one came to rest.
         this.viewState != null;

@@ -38,7 +38,9 @@ function makeRow(): Row {
   const shimmer = h("span", { class: "tick-text shimmer" });
   const dim = h("span", {
     class: "tick-text",
-    style: "position:absolute;left:0;right:0;color:#6b7079",
+    // Pinned to the top: left to its place in the flow, it dropped to a second
+    // line behind a long step — onto the row below.
+    style: "position:absolute;inset:0;color:#6b7079",
   });
   const el = h(
     "div",

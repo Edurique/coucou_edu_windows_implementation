@@ -187,3 +187,72 @@ export function highlight(line: string, kind: FileKind): Node[] {
   plain(line.length);
   return out;
 }
+
+// ── A diff ────────────────────────────────────────────────────────────────────
+//
+// The pieces a diff is drawn with, wherever it comes from: GitHub's, or what
+// Claude Code just did to a file.
+
+const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
+
+/** A line of a patch: the start of a hunk, or a line of code with its number on each side. */
+export type PatchLine =
+  | { hunk: string }
+  | { sign: "+" | "-" | ""; text: string; old: number | null; new: number | null };
+
+/** Reads the unified diff GitHub sends, numbering its lines as it goes. */
+export function* readPatch(patch: string): Generator<PatchLine> {
+  let oldLine = 0;
+  let newLine = 0;
+  for (const raw of patch.split("\n")) {
+    const hunk = HUNK.exec(raw);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      yield { hunk: hunk[3] ?? "" };
+      continue;
+    }
+    const first = raw.charAt(0);
+    // "\ No newline at end of file": true of the file, nothing to read.
+    if (first === "\\" || raw === "") continue;
+    const sign = first === "+" || first === "-" ? first : "";
+    yield {
+      sign,
+      text: raw.slice(1),
+      old: sign === "+" ? null : oldLine++,
+      new: sign === "-" ? null : newLine++,
+    };
+  }
+}
+
+/** A line of a diff: its number, its sign, its code in an editor's colours. */
+export function diffLine(number: number | null, sign: string, text: string, kind: FileKind): HTMLElement {
+  const change = sign === "+" ? "add" : sign === "-" ? "del" : "ctx";
+  return h(
+    "div",
+    { class: `gh-diff-line ${change}` },
+    h("span", { class: "n", text: number == null ? "" : String(number) }),
+    h("span", { class: "s", text: change === "ctx" ? "" : sign }),
+    // A line that is gone is only struck through — its words, not the
+    // indentation before them; the others are coloured.
+    change === "del"
+      ? h("span", { class: "t" }, text.slice(0, text.length - text.trimStart().length), h("span", { class: "gone", text: text.trimStart() }))
+      : h("span", { class: "t" }, ...highlight(text, kind)),
+  );
+}
+
+export function plusMinus(additions: number, deletions: number): HTMLElement {
+  return h(
+    "span",
+    { class: "gh-pm" },
+    h("span", { class: "gh-add", text: `+${additions}` }),
+    " ",
+    h("span", { class: "gh-del", text: `−${deletions}` }),
+  );
+}
+
+/** "windows/src/views/" and "github.ts". */
+export function splitPath(path: string): { dir: string; base: string } {
+  const i = path.lastIndexOf("/");
+  return i < 0 ? { dir: "", base: path } : { dir: path.slice(0, i + 1), base: path.slice(i + 1) };
+}
