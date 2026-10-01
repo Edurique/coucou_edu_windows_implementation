@@ -134,6 +134,19 @@ fn open_url(url: String) {
         .spawn();
 }
 
+/// The address the Claude desktop app answers to, through the scheme it registers.
+const CLAUDE_APP_URL: &str = "claude://";
+
+/// Brings the Claude desktop app forward. The address is fixed here: nothing
+/// the interface sends is run.
+#[tauri::command]
+fn open_claude_app() {
+    let _ = Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", CLAUDE_APP_URL])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+}
+
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
 /// and falls back to Explorer otherwise.
 #[tauri::command]
@@ -238,6 +251,12 @@ fn approval_ack(app: AppHandle, request_id: String) {
 #[tauri::command]
 fn approval_decline(app: AppHandle, request_id: String) {
     pipe::decline(&app, &request_id);
+}
+
+/// The island answered a question Claude asked with its question tool.
+#[tauri::command]
+fn approval_answer(app: AppHandle, request_id: String, answers: serde_json::Map<String, serde_json::Value>) {
+    pipe::answer_question(&app, &request_id, &answers);
 }
 
 // ── Chat, files and secrets ───────────────────────────────────────────────────
@@ -434,6 +453,7 @@ pub fn run() {
             reposition,
             open_url,
             open_in_vscode,
+            open_claude_app,
             quit_app,
             hooks_status,
             hooks_preview,
@@ -441,6 +461,7 @@ pub fn run() {
             approval_decision,
             approval_ack,
             approval_decline,
+            approval_answer,
             log_line,
             chat_send,
             chat_reset,
