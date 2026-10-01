@@ -36,6 +36,8 @@ export interface HookPayload {
   prompt?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
+  coucou_agent?: string;
   /** CLAUDE_CODE_ENTRYPOINT and TERM_PROGRAM, added by coucou-hook. */
   entrypoint?: string;
   term_program?: string;
@@ -59,9 +61,13 @@ export interface HookPayload {
 const MAX_SESSIONS = 4;
 /** Files kept for a session, and edits kept for a file. */
 const MAX_FILES = 40;
-const MAX_EDITS = 30;
-/** Lines kept of a session's journal: past that the oldest go. */
-const MAX_STEPS = 120;
+const MAX_EDITS = 12;
+/**
+ * Lines kept of a session's journal. It empties as it fills: past that, the
+ * oldest line goes for each new one, so a session that runs all day costs no
+ * more than one that just started.
+ */
+const MAX_STEPS = 80;
 /** Lines kept of what a session did; past that the older half goes. */
 const MAX_LINES = 200;
 /** Such a line is this long at most. */
@@ -313,6 +319,23 @@ function answeredElsewhere(session: ClaudeSession, payload: HookPayload): boolea
   return payload.tool_name === (session.question ? QUESTION_TOOL : session.approval?.tool);
 }
 
+/** Same rule as HookServer.validateAgent on macOS. "claude" is reserved. */
+function validateAgent(raw: string | undefined): string | null {
+  if (!raw || raw.length > 24 || raw === "claude") return null;
+  if (!/^[a-z0-9-]+$/.test(raw)) return null;
+  return raw;
+}
+
+const FALLBACK_COLORS = ["#22C55E", "#EAB308", "#60A5FA", "#E879F9"];
+
+function agentColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (Math.imul(31, h) + name.charCodeAt(i)) | 0;
+  }
+  return FALLBACK_COLORS[Math.abs(h) % FALLBACK_COLORS.length];
+}
+
 const PROJECT_ALIASES: Record<string, string> = {
   "notch-buddy": "Notch Buddy",
   notchbuddy: "Notch Buddy",
@@ -396,8 +419,115 @@ export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
 }
 
+/**
+ * An event from a third-party agent (docs/AGENTS.md): it has a pill of its
+ * own, "agent_<name>", created on its first event and gone when it is done.
+ * None of what follows a Claude Code session — its journal, its questions —
+ * applies to it: the pill wears the agent's state and its last steps.
+ */
+function handleAgent(island: Island, payload: HookPayload, agent: string) {
+  const agentId = `agent_${agent}`;
+  const name = payload.hook_event_name ?? "";
+  const focused = State.focusId === agentId;
+  const ensurePill = () => State.upsertExternalAgent(agentId, agent, agentColor(agent));
+  const reveal = () => {
+    if (State.mode === "hidden") island.reveal();
+  };
+  const alert = (view: IslandViewName) => (State.mode === "expanded" ? island.setView(view) : island.alert(view));
+
+  switch (name) {
+    case "SessionStart":
+      ensurePill();
+      reveal();
+      Sound.play("work");
+      break;
+
+    case "UserPromptSubmit": {
+      ensurePill();
+      State.updateTask(agentId, "thinking");
+      const asked = payload.prompt ?? payload.message;
+      if (asked) State.appendStep(agentId, asked.slice(0, LINE_CHARS));
+      reveal();
+      break;
+    }
+
+    case "PreToolUse":
+      ensurePill();
+      State.updateTask(agentId, "working");
+      State.appendStep(agentId, stepLabel(payload.tool_name ?? "Tool", payload.tool_input ?? {}));
+      reveal();
+      break;
+
+    case "PostToolUse":
+      State.updateTask(agentId, "working");
+      break;
+
+    case "PostToolUseFailure":
+      State.updateTask(agentId, "working");
+      State.appendStep(agentId, "⚠ failed");
+      break;
+
+    case "Notification": {
+      const message = payload.message ?? "";
+      const lower = message.toLowerCase();
+      if (lower.includes("rate limit") || lower.includes("limite d")) {
+        State.updateTask(agentId, "ratelimit");
+        Sound.play("rate");
+      } else if (message.endsWith("?")) {
+        State.updateTask(agentId, "question");
+        State.appendStep(agentId, message);
+      }
+      break;
+    }
+
+    case "Stop":
+      State.updateTask(agentId, "finished");
+      if (payload.message) State.appendStep(agentId, payload.message.slice(0, LINE_CHARS));
+      Sound.play("finish");
+      if (focused) alert("finished");
+      else State.setPillBadge(agentId, "finished");
+      window.setTimeout(() => State.removeTask(agentId), FINISHED_MS);
+      break;
+
+    case "StopFailure":
+      State.updateTask(agentId, "error");
+      Sound.play("error");
+      if (focused) alert("error");
+      else State.setPillBadge(agentId, "error");
+      break;
+
+    case "SessionEnd":
+      State.removeTask(agentId);
+      break;
+
+    case "SubagentStart":
+      State.appendStep(agentId, "+ subagent");
+      break;
+
+    case "SubagentStop":
+      State.appendStep(agentId, "• subagent done");
+      break;
+
+    case "PermissionRequest":
+      // External agents do not get an approval card — showing one would look like
+      // a Claude Code request. Decline immediately so the agent re-asks in its
+      // terminal. Approval support for other agents will come with Codex support.
+      if (payload.request_id) void Bridge.approvalDecline(payload.request_id);
+      break;
+
+    default:
+      break;
+  }
+  State.notify();
+}
+
 /** Exported for the dev preview, which plays a session without Claude Code. */
 export function handleHook(island: Island, payload: HookPayload) {
+  // Route to the right pill. Valid coucou_agent → dynamic "agent_<name>" pill.
+  // "claude" is reserved; absent or invalid → Claude Code, as before.
+  const agent = validateAgent(payload.coucou_agent);
+  if (agent && !State.paused) return handleAgent(island, payload, agent);
+
   // Paused, or a session nobody is sitting in front of: the island does not look.
   if (State.paused || isAutomated(payload)) {
     // Silence here used to cost Claude Code nearly two minutes: the relay waited

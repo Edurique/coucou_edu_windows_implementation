@@ -145,8 +145,9 @@ Everything comes from the hooks Claude Code already sends — nothing is asked o
 Anthropic, and nothing leaves your machine. Of what a tool gives back, the relay
 forwards a few lines and no more: the diff of an edit, the first lines of a file
 that was read, the last lines a command printed, the names a search found, the
-answers to a question. A session's journal is kept in memory, its last 120
-lines, and is gone with the session. Two
+answers to a question. A session's journal is kept in memory and empties as it
+fills — its last 80 lines, the oldest going for each new one — and is gone with
+the session. Two
 things are read from disk by the relay, and only then: the file an edit asks permission for (to show its diff —
 it is never written), and the end of the session's transcript at the start and
 end of a turn (for the conversation's title and Claude's last message). That

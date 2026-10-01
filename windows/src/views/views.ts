@@ -818,7 +818,9 @@ function buildError(actions: ViewActions): ViewHost {
         tellNews(news, who, title, facts);
         return;
       }
-      who.append(task?.source === "n8n" ? agentWho(task, "n8n") : sessionWho("Claude Code"));
+      // A Claude Code session is named by its conversation; n8n and a
+      // third-party agent's pill by their own name.
+      who.append(task?.id === CLAUDE_ID ? sessionWho("Claude Code") : agentWho(task, task?.source === "n8n" ? "n8n" : "stopped"));
       title.textContent = task?.source === "n8n" ? "Workflow stopped." : "Session stopped on an error.";
       detail.textContent = task?.steps.at(-1) ?? "No detail available.";
     },
@@ -858,16 +860,19 @@ function buildFinished(actions: ViewActions): ViewHost {
         tellNews(news, who, title, facts);
         return;
       }
-      who.append(sessionWho("finished"));
+      // A third-party agent's pill has no session behind it: its name, its last step, and OK.
+      const claude = State.focusTask?.id === CLAUDE_ID;
+      who.append(claude ? sessionWho("finished") : agentWho(State.focusTask, "finished"));
       // What Claude said to end its turn, its first line; its last step otherwise.
-      const answer = firstWords(State.session.answer);
+      const answer = claude ? firstWords(State.session.answer) : null;
       title.textContent = answer ?? State.focusTask?.steps.at(-1) ?? "Session finished";
       // An answer is a sentence, not a step: smaller, and two lines at most.
       title.classList.toggle("said", answer != null);
       readBtn.style.display = answer ? "" : "none";
       openBtn.className = answer ? "btn secondary" : "btn primary";
       // Where the session runs, and what it left behind: the way to its diffs.
-      const files = State.sessionFiles.length;
+      const files = claude ? State.sessionFiles.length : 0;
+      openBtn.style.display = claude ? "" : "none";
       openLabel.textContent = State.session.client === "desktop" ? "Open Claude" : "Open terminal";
       changesBtn.style.display = files > 0 ? "" : "none";
       changesLabel.textContent = files === 1 ? "1 file changed" : `${files} files changed`;
