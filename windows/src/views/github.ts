@@ -1659,9 +1659,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
   );
   const status = h("div", { class: "gh-status" });
   const list = h("div", { class: "gh-list" });
-  // News that came in with the panel open; see drawNotice.
+  // News that came in with the panel open; see drawNotice. It sits above the
+  // card, in the island's own bar, not in what is being read.
   const notice = h("div", { class: "gh-notice-slot" });
-  const main = h("div", { class: "gh-main" }, head, notice, status, list);
+  const main = h("div", { class: "gh-main" }, head, status, list);
 
   // Mochi's column: Mochi himself (drawn by the island), whose GitHub this
   // is, then the tabs — or, deeper, the way down.
@@ -1671,7 +1672,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
   const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, account, accountSub), trail);
 
   const card = h("div", { class: "card gh-card" }, side, main);
-  const el = h("div", { class: "view" }, card);
+  const el = h("div", { class: "view" }, card, notice);
 
   /** Says which kind of screen is up: the tab's badge, and its colour on the tab. */
   function dress(look: ScreenLook | null) {
@@ -1691,9 +1692,10 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
   /**
    * With the panel open the pill is out of sight, and Mochi turning red says
-   * that something happened, not what. The news gets a line of its own under
-   * the head: what happened, and a click away, the run or the pull request it
-   * is about. It leaves when the pill's badge does, or once it is opened.
+   * that something happened, not what. The news gets a line of its own above
+   * the card, in the free middle of the island's bar — apart from what is
+   * being read: what happened, and a click away, the run or the pull request
+   * it is about. It leaves when the pill's badge does, or once it is opened.
    */
   function drawNotice() {
     clear(notice);

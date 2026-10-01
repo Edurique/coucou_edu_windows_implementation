@@ -20,6 +20,24 @@ const KEY_FOR: Record<string, string> = {
 
 const clearTimers = new Map<string, number>();
 
+/**
+ * Integrations whose news takes the pill for itself: their Mochi steps to the
+ * front and the pill says the news in words. Among four mini Mochis a badge on
+ * one is easy to miss, and "a build broke" is worth more than a dot.
+ */
+const SPEAKS_UP = new Set(["integration_github"]);
+/** The pill each of them took the front from, to hand it back. */
+const borrowedFrom = new Map<string, string>();
+/** States that are waiting for the user: nothing takes the front from those. */
+const WAITING = new Set(["approval", "question"]);
+
+/** Hands the front of the pill back, unless the user moved it since. */
+function giveBack(id: string) {
+  const previous = borrowedFrom.get(id);
+  borrowedFrom.delete(id);
+  if (previous && State.focusId === id) State.setFocus(previous);
+}
+
 export function registerIntegrationHandlers(island: Island) {
   void onEvent<IntegrationUpdate>("integration", (update) => handle(island, update));
   void refreshConfigured();
@@ -63,6 +81,16 @@ function handle(island: Island, update: IntegrationUpdate) {
       task.state = event.success ? "finished" : "error";
       task.steps = event.detail ? [event.label, event.detail] : [event.label];
       task.stepIndex = task.steps.length - 1;
+      // Only while the island is away or folded: open, it is showing something
+      // the user is reading, and the news has its own place there.
+      const front = State.focusTask;
+      if (
+        SPEAKS_UP.has(update.id) && State.mode !== "expanded" && State.focusId !== update.id &&
+        State.focusId && !(front && WAITING.has(front.state))
+      ) {
+        if (!borrowedFrom.has(update.id)) borrowedFrom.set(update.id, State.focusId);
+        State.setFocus(update.id);
+      }
       if (State.focusId !== update.id) {
         task.pillBadge = event.success ? "finished" : "error";
       }
@@ -77,14 +105,18 @@ function handle(island: Island, update: IntegrationUpdate) {
         update.id,
         window.setTimeout(() => {
           clearTimers.delete(update.id);
+          const info = State.integrations[update.id];
+          if (info) info.news = null;
+          giveBack(update.id);
           const t = State.tasks.find((x) => x.id === update.id);
-          if (!t || (t.state !== "finished" && t.state !== "error")) return;
+          if (!t || (t.state !== "finished" && t.state !== "error")) {
+            State.notify();
+            return;
+          }
           t.state = "idle";
           t.steps = [];
           t.stepIndex = 0;
           t.pillBadge = null;
-          const info = State.integrations[update.id];
-          if (info) info.news = null;
           State.notify();
         }, 60_000),
       );

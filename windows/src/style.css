@@ -165,6 +165,32 @@ body {
   transition: opacity 0.25s ease-in-out;
 }
 
+/* What the pill at the front has to say, in the folded island: between Mochi
+   on the left and the mini grid on the right. */
+#pill-news {
+  position: absolute;
+  left: 62px;
+  right: 62px;
+  top: 0;
+  height: 32px;
+  font: 600 11px/32px var(--font);
+  color: var(--green-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease-in-out;
+}
+
+#pill-news.on {
+  opacity: 1;
+}
+
+#pill-news.bad {
+  color: var(--red-text);
+}
+
 /* A mini Mochi: the slot is the body, the canvas is larger and overflows it so
    hands, badges and particles are not cut off. */
 .mini {
@@ -1698,20 +1724,35 @@ button.gh-step:hover {
 }
 
 /* News that came in while the panel was open — a build that broke, a pull
-   request that went in: a line under the head, in the news's colour, that
-   opens what it is about. It leaves with the pill's badge. */
+   request that went in: a line in the news's colour that opens what it is
+   about. It leaves with the pill's badge. It stands above the card, in the
+   free middle of the island's bar (between its tabs and its two icons), so
+   it never mixes with what is being read. */
+.gh-notice-slot {
+  position: absolute;
+  left: 116px;
+  right: 62px;
+  top: -29px;
+  height: 24px;
+  display: flex;
+  justify-content: center;
+  z-index: 3;
+  pointer-events: none;
+}
+
 .gh-notice {
+  pointer-events: auto;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 7px;
   flex: 0 0 auto;
   min-width: 0;
-  width: calc(100% - 12px);
-  margin: 6px 6px 0;
-  padding: 5px 8px;
+  height: 24px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--c) 14%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c) 16%, #000);
   color: var(--ink);
   font: 500 11px var(--font);
   text-align: left;

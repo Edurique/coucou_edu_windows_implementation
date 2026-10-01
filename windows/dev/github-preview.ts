@@ -272,7 +272,8 @@ if (params.has("news")) {
     : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com" } };
 }
 // With the news, Mochi's state as the island's handler sets it. `view=pill`
-// shows it the way it arrives with the island away: the compact pill, badged.
+// shows it the way it arrives with the island away: the compact pill, GitHub's
+// Mochi at the front, the news in words.
 const news = State.integrations.integration_github.news;
 const pill = params.get("view") === "pill";
 if (news) {
@@ -281,10 +282,9 @@ if (news) {
     task.state = news.success ? "finished" : "error";
     task.steps = news.detail ? [news.label, news.detail] : [news.label];
     task.stepIndex = task.steps.length - 1;
-    if (pill) task.pillBadge = news.success ? "finished" : "error";
   }
 }
-if (!pill) State.setFocus("integration_github");
+State.setFocus("integration_github");
 // Pinned, so the island doesn't fold away while it's being looked at.
 State.isPinned = true;
 

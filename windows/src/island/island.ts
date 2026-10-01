@@ -45,6 +45,7 @@ export class Island {
   private botGlow!: HTMLElement;
   private greetingCanvas!: HTMLCanvasElement;
   private miniGrid!: HTMLElement;
+  private pillNews!: HTMLElement;
   private countdown!: HTMLElement;
   private wakeStrip!: HTMLElement;
 
@@ -189,6 +190,7 @@ export class Island {
     this.botCanvas = h("canvas", { id: "bot-canvas" });
     this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
     this.miniGrid = h("div", { id: "mini-grid" });
+    this.pillNews = h("div", { id: "pill-news" });
     this.countdown = h("div", { id: "countdown" });
 
     this.header = buildHeader(actions);
@@ -223,6 +225,7 @@ export class Island {
       this.botGlow,
       this.botCanvas,
       this.miniGrid,
+      this.pillNews,
       this.countdown,
     );
 
@@ -896,6 +899,14 @@ export class Island {
         void Bridge.focusWindow(false);
       }
     }
+
+    // Compact: the news of the pill at the front, in words, between Mochi and
+    // the mini grid.
+    const news = State.focusId ? State.integrations[State.focusId]?.news : null;
+    const say = State.mode === "compact" && news ? news.label : "";
+    if (this.pillNews.textContent !== say) this.pillNews.textContent = say;
+    this.pillNews.classList.toggle("on", say !== "");
+    this.pillNews.classList.toggle("bad", news?.success === false);
 
     // Compact mini grid
     const showGrid = State.mode === "compact";
