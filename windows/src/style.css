@@ -4058,12 +4058,36 @@ button.gh-block:hover {
 }
 
 .media-title {
-  padding-top: 5px;
+  padding-top: 4px;
   font: 600 13px var(--font);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.media-run {
+  display: inline-block;
+}
+
+/* A title too long for its line runs to its end and back, with a rest at each
+   end, its edges fading out. It stops with everything else when the island is
+   folded (see #content.away). */
+.media-title.runs {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 12px), transparent 100%);
+}
+
+.media-title.runs .media-run {
+  animation: media-run var(--run-time, 8s) ease-in-out infinite alternate;
+}
+
+@keyframes media-run {
+  0%, 18% {
+    transform: translateX(0);
+  }
+  82%, 100% {
+    transform: translateX(var(--run, 0));
+  }
 }
 
 .media-title.quiet {
@@ -4079,11 +4103,20 @@ button.gh-block:hover {
   text-overflow: ellipsis;
 }
 
+/* What the song is from. */
+.media-album {
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .media-keys {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-top: 7px;
+  padding-top: 6px;
 }
 
 .media-key {

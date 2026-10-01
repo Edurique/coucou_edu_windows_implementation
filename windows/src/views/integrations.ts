@@ -208,6 +208,28 @@ const SPOTIFY = "integration_spotify";
 /** After a key is pressed, how long the app takes to say so in its window's title. */
 const KEY_SETTLES_MS = 700;
 
+/** How fast a title too long for its line runs across it, in px per second, and how long it rests at each end. */
+const RUN_PX_PER_S = 28;
+const RUN_REST_S = 1.6;
+
+/**
+ * A line that runs from side to side when its words do not fit: to its end,
+ * a rest, back to its start, a rest — so a long title is read whole. A line
+ * that fits stays still. Measured once it is on screen.
+ */
+function runningLine(cls: string, text: string): HTMLElement {
+  const run = h("span", { class: "media-run", text });
+  const line = h("div", { class: cls, title: text }, run);
+  requestAnimationFrame(() => {
+    const over = run.offsetWidth - line.clientWidth;
+    if (over <= 0) return;
+    line.classList.add("runs");
+    line.style.setProperty("--run", `${-over}px`);
+    line.style.setProperty("--run-time", `${(over / RUN_PX_PER_S + RUN_REST_S * 2).toFixed(2)}s`);
+  });
+  return line;
+}
+
 /** One of the player's keys, asked of Spotify, then a look at what it did. */
 function mediaKey(icon: string, title: string, action: "toggle" | "next" | "previous"): HTMLElement {
   return h(
@@ -236,6 +258,9 @@ function spotifyCard(): HTMLElement {
   const playing = now.playing === true;
   const song = typeof now.title === "string" ? now.title : "";
   const artist = typeof now.artist === "string" ? now.artist : "";
+  // What the song is from. Windows knows the album; the playlist it is played
+  // from is not something a player tells the system.
+  const album = song && typeof now.album === "string" ? now.album : "";
   const title = song || (open ? "Nothing playing" : "Spotify is not playing");
   const by = song ? artist : open ? "Pick a song in Spotify" : "Play something in the Spotify app";
 
@@ -259,8 +284,9 @@ function spotifyCard(): HTMLElement {
     { class: "int-card media-card" },
     cover,
     header("#1DB954", "Spotify", playing ? "Now playing" : song ? "Paused" : "Music"),
-    h("div", { class: song ? "media-title" : "media-title quiet", text: title, title }),
-    h("div", { class: "media-artist", text: by, title: typeof now.album === "string" && now.album ? `${by} — ${now.album}` : by }),
+    runningLine(song ? "media-title" : "media-title quiet", title),
+    h("div", { class: "media-artist", text: by, title: by }),
+    album ? h("div", { class: "media-album", text: album, title: album }) : null,
     open ? keys : null,
   );
 }
