@@ -5,7 +5,7 @@
 import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { CLAUDE_ID, State, TURN_DONE, turnSteps, type AgentTask, type ClaudeSession, type SessionStep } from "../core/state";
-import { fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
+import { VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
@@ -71,6 +71,12 @@ export interface ViewActions {
 
 /** Lines of a step's preview the overview has room for. */
 const NOW_LINES = 3;
+/**
+ * A session's card holds a line more than the overview was cut for — the
+ * step, then three lines of what it did: the island is this much taller for
+ * it, so the card keeps the same air under its last line as above its first.
+ */
+const SESSION_CARD_ROOM = 12;
 
 /** A reply's first line as plain words: what marks it as bold, a heading or code goes. */
 function firstWords(text: string | null): string | null {
@@ -248,7 +254,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-function buildOverview(actions: ViewActions): ViewHost {
+function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
   const who = h("div", { class: "who" });
   // What the session is doing: the step, and under it a look at what it did.
   const nowLine = h("div", { class: "now-line" });
@@ -258,7 +264,7 @@ function buildOverview(actions: ViewActions): ViewHost {
     actions.blip();
     actions.openSessions();
   });
-  const sessionBody = h("div", { class: "card-body" }, who, nowLine, nowBox);
+  const sessionBody = h("div", { class: "card-body sess-card" }, who, nowLine, nowBox);
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
     "button",
@@ -289,6 +295,8 @@ function buildOverview(actions: ViewActions): ViewHost {
   let cardKey = "";
   let lineKey = "";
   let boxKey = "";
+  /** The mode the island's height was last asked for. */
+  let sized: "session" | "card" | null = null;
 
   const hooks: IntegrationCardHooks = {
     get detailOpen() {
@@ -349,6 +357,9 @@ function buildOverview(actions: ViewActions): ViewHost {
 
   return {
     el,
+    get height() {
+      return mode === "session" ? VIEW_LAYOUTS.overview.height + SESSION_CARD_ROOM : undefined;
+    },
     sync() {
       const task = State.focusTask;
       if (task?.id !== lastFocus) {
@@ -405,6 +416,10 @@ function buildOverview(actions: ViewActions): ViewHost {
       }
 
       jump.style.display = detailOpen ? "none" : "";
+      if (mode !== sized) {
+        sized = mode;
+        onResize();
+      }
 
       left.classList.toggle("opens", mode === "session");
       left.title = mode === "session" ? "Open the session" : "";
@@ -1000,7 +1015,7 @@ export function buildViews(
   onChatHeightChange: () => void,
 ): Map<IslandViewName, ViewHost> {
   const map = new Map<IslandViewName, ViewHost>();
-  map.set("overview", buildOverview(actions));
+  map.set("overview", buildOverview(actions, onChatHeightChange));
   map.set("empty", buildEmpty(actions));
   map.set("approval", buildApproval(actions));
   map.set("question", buildQuestion(actions, onChatHeightChange));
