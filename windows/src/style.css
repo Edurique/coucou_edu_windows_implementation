@@ -1621,8 +1621,22 @@ button.gh-step:hover {
 .gh-head-badge {
   display: grid;
   place-items: center;
-  width: 16px;
+  min-width: 16px;
   flex: 0 0 auto;
+}
+
+/* A changed file's dot, after its name, and its lines added and removed
+   beside the tab. */
+.gh-tab-flag,
+.gh-head-aside {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.gh-tab-flag:empty,
+.gh-head-aside:empty {
+  display: none;
 }
 
 .gh-head-badge .gh-block-icon {
@@ -1641,6 +1655,11 @@ button.gh-step:hover {
   min-width: 0;
   flex: 0 1 auto;
   padding-right: 2px;
+}
+
+/* A file's path, as an editor writes it. */
+.gh-sub.path {
+  font: 400 10.5px var(--mono);
 }
 
 .gh-icon {
@@ -2196,49 +2215,82 @@ button.gh-step:hover {
   font-style: normal;
 }
 
-/* ── GitHub panel: a file's diff ────────────────────────────────────────── */
+/* ── GitHub panel: a file's code ────────────────────────────────────────── */
 
-.gh-diff-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 8px;
-  min-width: 0;
-}
-
-.gh-diff-path {
-  flex: 1 1 auto;
-  min-width: 0;
-  font: 400 10.5px var(--mono);
-  color: var(--dim);
+/* A file's kind as an editor's tab shows it: its letters on its language's
+   colour. */
+.gh-ext {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-width: 17px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 3.5px;
+  background: var(--c);
+  color: #fff;
+  font: 700 7.5px/1 var(--font);
+  font-style: normal;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
 }
 
-/* The settings window's diff, with GitHub's gutters: same ground, same greens
-   and reds. */
+.gh-ext.dark {
+  color: #15171a;
+}
+
+/* In the column, a mark among marks: a size down. */
+.gh-step .gh-ext {
+  min-width: 14px;
+  height: 11px;
+  padding: 0 2px;
+  border-radius: 3px;
+  font-size: 6.5px;
+}
+
+/* Badges are wider than the other rows' marks: the names still line up. */
+.gh-file .gh-row-icon {
+  width: 24px;
+  justify-items: start;
+}
+
+/* The panel is the editor: the code runs from one edge to the other. */
+.gh-list.code {
+  padding: 0;
+}
+
+.gh-code {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 0 10px;
+}
+
+.gh-code > .gh-host {
+  align-self: flex-start;
+  margin-left: 12px;
+}
+
+.gh-code-empty {
+  padding: 10px 12px;
+}
+
 .gh-diff {
-  background: #08090b;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  padding: 4px 0;
-  font: 400 10.5px/1.5 var(--mono);
+  font: 400 10.5px/16px var(--mono);
+  color: #d6d9df;
   user-select: text;
 }
 
+/* One gutter of numbers, the sign, the code. The left border is the bar a
+   changed line wears. */
 .gh-diff-line {
   display: grid;
-  grid-template-columns: 26px 26px 12px 1fr;
-  color: var(--dim);
+  grid-template-columns: 34px 16px 1fr;
+  border-left: 2px solid transparent;
 }
 
 .gh-diff-line .n {
-  padding-right: 4px;
   text-align: right;
-  color: var(--dim-4);
+  color: var(--dim-5);
   user-select: none;
 }
 
@@ -2249,33 +2301,63 @@ button.gh-step:hover {
 
 .gh-diff-line .t {
   min-width: 0;
-  padding-right: 8px;
+  padding: 0 10px 0 4px;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
 .gh-diff-line.add {
-  background: rgba(52, 211, 153, 0.09);
-  color: #86efac;
+  background: rgba(52, 211, 153, 0.1);
+  border-left-color: #34d399;
 }
 
+.gh-diff-line.add .n,
+.gh-diff-line.add .s {
+  color: #6ee7b7;
+}
+
+/* A line that is gone: struck through, its colours drained to the red. */
 .gh-diff-line.del {
-  background: rgba(244, 80, 94, 0.1);
+  background: rgba(244, 80, 94, 0.13);
+  border-left-color: #f4505e;
+}
+
+.gh-diff-line.del .n,
+.gh-diff-line.del .s {
   color: #ff8d97;
 }
 
-.gh-diff-line.hunk {
-  grid-template-columns: 1fr;
-  margin: 3px 0;
-  padding: 1px 8px;
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--dim-3);
+.gh-diff-line.del .t {
+  color: #b86f78;
 }
 
-.gh-diff-line.meta {
-  color: var(--dim-4);
-  font-style: italic;
+.gh-diff-line.del .gone {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 141, 151, 0.5);
 }
+
+/* Lines skipped: a quiet break, with where the next ones sit. */
+.gh-diff-line.hunk {
+  margin: 4px 0;
+  color: var(--dim-4);
+}
+
+.gh-diff-line.hunk .t {
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An editor's colours (see code.ts): keyword, string, key, number or
+   constant, call, type, comment. */
+.gh-diff .hl-k { color: #c792ea; }
+.gh-diff .hl-s { color: #c3e88d; }
+.gh-diff .hl-p { color: #82aaff; }
+.gh-diff .hl-c { color: #f78c6c; }
+.gh-diff .hl-f { color: #82aaff; }
+.gh-diff .hl-y { color: #ffcb6b; }
+.gh-diff .hl-m { color: #5c6370; font-style: italic; }
 
 /* ── GitHub panel: a project's sheet ────────────────────────────────────── */
 

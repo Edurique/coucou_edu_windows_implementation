@@ -5,6 +5,7 @@
 // rather than from GitHub's look.
 
 import { h, svg, clear, dot } from "./dom";
+import { extBadge, fileKind, highlight } from "./code";
 import { ICONS } from "./icons";
 import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
@@ -1041,23 +1042,30 @@ function splitPath(path: string): { dir: string; base: string } {
 }
 
 /** Mochi's state colours again: new green, gone red, moved indigo, changed amber. */
-const FILE_STATUS: Record<string, { letter: string; color: string }> = {
-  added: { letter: "A", color: "#34D399" },
-  removed: { letter: "D", color: "#F4505E" },
-  renamed: { letter: "R", color: "#6366F1" },
-  copied: { letter: "C", color: "#6366F1" },
+const FILE_STATUS: Record<string, { color: string }> = {
+  added: { color: "#34D399" },
+  removed: { color: "#F4505E" },
+  renamed: { color: "#6366F1" },
+  copied: { color: "#6366F1" },
 };
-const MODIFIED = { letter: "M", color: "#F5A524" };
+const MODIFIED = { color: "#F5A524" };
 
-/** One file touched; it opens the file's diff. */
+/** A dot in the status's colour, as an editor flags a changed file. */
+function statusDot(file: GithubFile): HTMLElement {
+  const flag = dot((FILE_STATUS[file.status ?? ""] ?? MODIFIED).color, 5);
+  flag.title = file.status ?? "modified";
+  return flag;
+}
+
+/** One file touched, under its extension's badge; it opens the file's diff. */
 function fileRow(file: GithubFile, url: string): HTMLElement {
-  const status = FILE_STATUS[file.status ?? ""] ?? MODIFIED;
   const { dir, base } = splitPath(file.path);
   return h(
     "button",
     { class: "gh-row gh-file", onclick: () => openDiff(file, url) },
-    h("i", { class: "gh-row-icon gh-status", style: `color:${status.color}`, text: status.letter }),
+    h("i", { class: "gh-row-icon" }, extBadge(file.path)),
     h("span", { class: "gh-row-title", text: base }),
+    statusDot(file),
     h("span", { class: "gh-row-where", text: dir }),
     plusMinus(file.additions, file.deletions),
   );
@@ -1442,6 +1450,10 @@ interface ScreenLook {
   label: string;
   color: string;
   icon: () => SVGSVGElement;
+  /** A mark of its own in place of the tinted round icon: a file's extension badge. */
+  mark?: () => HTMLElement;
+  /** A dot after the name, as an editor flags a changed file. */
+  flag?: { color: string; title: string };
 }
 
 const NEUTRAL = "#9398A1";
@@ -1455,10 +1467,13 @@ function screenLook(screen: Screen): ScreenLook {
     };
   }
   if (screen.type === "diff") {
+    const status = FILE_STATUS[screen.file.status ?? ""] ?? MODIFIED;
     return {
       label: "File",
-      color: (FILE_STATUS[screen.file.status ?? ""] ?? MODIFIED).color,
+      color: status.color,
       icon: () => svg(ICONS.doc, 10),
+      mark: () => extBadge(screen.file.path),
+      flag: { color: status.color, title: screen.file.status ?? "modified" },
     };
   }
   if (screen.type === "job") {
@@ -1523,73 +1538,82 @@ function detailHead(screen: DetailScreen): string {
 
 // ── A file's diff ─────────────────────────────────────────────────────────────
 //
-// The unified diff GitHub sends, drawn the way the settings window already
-// draws the hooks' diff: monospace, added lines green, removed lines red —
-// with GitHub's old and new line numbers in the gutter.
+// The unified diff GitHub sends, drawn as the session view draws a file being
+// edited: the panel is the editor, the code wears an editor's colours, one
+// gutter of line numbers, and a changed line runs edge to edge with a bar of
+// its colour at the left — the old line struck through, the new one under it.
+// The file's name, its status and its path are in the panel's head.
 
-const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
 
 function diffView(file: GithubFile, url: string): HTMLElement {
-  const status = FILE_STATUS[file.status ?? ""] ?? MODIFIED;
-  const wrap = h(
-    "div",
-    { class: "gh-sheet" },
-    h(
-      "div",
-      { class: "gh-diff-head" },
-      chip(file.status ?? "modified", status.color),
-      h("span", { class: "gh-diff-path", text: file.path }),
-      plusMinus(file.additions, file.deletions),
-    ),
-  );
   if (!file.patch) {
-    wrap.append(h("div", { class: "int-empty", text: "No text diff for this file — binary, or too large for GitHub to show." }));
-    return wrap;
+    return h(
+      "div",
+      { class: "gh-sheet gh-code-empty" },
+      h("div", { class: "int-empty", text: "No text diff for this file — binary, or too large for GitHub to show." }),
+    );
   }
 
+  const kind = fileKind(file.path);
   const diff = h("div", { class: "gh-diff" });
   let oldLine = 0;
   let newLine = 0;
+  let first = true;
   for (const raw of file.patch.split("\n")) {
     const hunk = HUNK.exec(raw);
     if (hunk) {
       oldLine = Number(hunk[1]);
       newLine = Number(hunk[2]);
-      diff.append(h("div", { class: "gh-diff-line hunk" }, h("span", { class: "t", text: raw })));
+      // Where lines were skipped: a quiet break, with the function GitHub
+      // says the next lines sit in. The very first needs one only for that.
+      const where = hunk[3] ?? "";
+      if (!first || where) {
+        diff.append(
+          h("div", { class: "gh-diff-line hunk" }, h("span", { class: "n", text: "⋯" }), h("span", { class: "s" }), h("span", { class: "t", text: where })),
+        );
+      }
+      first = false;
       continue;
     }
     const sign = raw.charAt(0);
-    let kind = "ctx";
-    let before = "";
-    let after = "";
+    // "\ No newline at end of file": true of the file, nothing to read.
+    if (sign === "\\" || raw === "") continue;
+    const text = raw.slice(1);
+    let change = "ctx";
+    let number: number;
     if (sign === "+") {
-      kind = "add";
-      after = String(newLine++);
+      change = "add";
+      number = newLine++;
     } else if (sign === "-") {
-      kind = "del";
-      before = String(oldLine++);
-    } else if (sign === "\\") {
-      kind = "meta";
+      change = "del";
+      number = oldLine++;
     } else {
-      before = String(oldLine++);
-      after = String(newLine++);
+      number = newLine++;
+      oldLine++;
     }
     diff.append(
       h(
         "div",
-        { class: `gh-diff-line ${kind}` },
-        h("span", { class: "n", text: before }),
-        h("span", { class: "n", text: after }),
-        h("span", { class: "s", text: kind === "add" || kind === "del" ? sign : "" }),
-        h("span", { class: "t", text: kind === "meta" ? raw : raw.slice(1) }),
+        { class: `gh-diff-line ${change}` },
+        h("span", { class: "n", text: String(number) }),
+        h("span", { class: "s", text: change === "ctx" ? "" : sign }),
+        // A line that is gone is only struck through — its words, not the
+        // indentation before them; the others are coloured.
+        change === "del"
+          ? h("span", { class: "t" }, text.slice(0, text.length - text.trimStart().length), h("span", { class: "gone", text: text.trimStart() }))
+          : h("span", { class: "t" }, ...highlight(text, kind)),
       ),
     );
   }
-  wrap.append(diff);
-  if (file.truncated) {
-    wrap.append(h("button", { class: "gh-host", text: "The rest of this diff is on GitHub", onclick: () => void Bridge.openUrl(url) }));
-  }
-  return wrap;
+  return h(
+    "div",
+    { class: "gh-code" },
+    diff,
+    file.truncated
+      ? h("button", { class: "gh-host", text: "The rest of this diff is on GitHub", onclick: () => void Bridge.openUrl(url) })
+      : null,
+  );
 }
 
 export function buildGithub(actions: ViewActions): ViewHost {
@@ -1620,12 +1644,16 @@ export function buildGithub(actions: ViewActions): ViewHost {
   );
   // GitHub's red dot on the lists; the screen's own badge over them.
   const badge = h("span", { class: "gh-head-badge" });
+  // A changed file's dot, after its name; and what rides next to the tab (a
+  // file's lines added and removed).
+  const flag = h("span", { class: "gh-tab-flag" });
+  const aside = h("span", { class: "gh-head-aside" });
   // Like an editor's tab: what is open on the left, where it sits on the right.
   // No ‹ here: the column's trail steps back, the island's house goes home.
   const head = h(
     "div",
     { class: "gh-head" },
-    h("div", { class: "gh-tab" }, badge, who), h("div", { class: "grow" }), sub, refreshBtn, openBtn,
+    h("div", { class: "gh-tab" }, badge, who, flag), aside, h("div", { class: "grow" }), sub, refreshBtn, openBtn,
   );
   const status = h("div", { class: "gh-status" });
   const list = h("div", { class: "gh-list" });
@@ -1644,8 +1672,16 @@ export function buildGithub(actions: ViewActions): ViewHost {
   /** Says which kind of screen is up: the tab's badge and the panel's light. */
   function dress(look: ScreenLook | null) {
     clear(badge);
+    clear(flag);
+    clear(aside);
+    sub.classList.remove("path");
     if (look) {
-      badge.append(roundIcon(look.color, look.icon()));
+      badge.append(look.mark ? look.mark() : roundIcon(look.color, look.icon()));
+      if (look.flag) {
+        const mark = dot(look.flag.color, 6);
+        mark.title = look.flag.title;
+        flag.append(mark);
+      }
       main.style.setProperty("--wash", `${look.color}73`);
     } else {
       badge.append(dot(GITHUB_RED, 7));
@@ -1744,7 +1780,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
         const look = screenLook(s);
         const last = i === stack.length - 1;
         const { short, whole } = stepLabel(s);
-        const el = step(short, look.icon(), last, look.color, last ? null : () => {
+        const el = step(short, look.mark ? look.mark() : look.icon(), last, look.color, last ? null : () => {
           actions.blip();
           popTo(i + 1);
         });
@@ -1798,6 +1834,8 @@ export function buildGithub(actions: ViewActions): ViewHost {
    */
   function clearList() {
     clear(list);
+    // Only a file's code runs edge to edge; everything else keeps its margins.
+    list.classList.remove("code");
     actions.tintMochi(null);
   }
 
@@ -1868,9 +1906,12 @@ export function buildGithub(actions: ViewActions): ViewHost {
       if (found) list.append(jobView(found.job, found.run));
       else list.append(h("div", { class: "int-empty", text: "This job is gone from the run." }));
     } else if (screen.type === "diff") {
-      const { dir, base } = splitPath(screen.file.path);
-      who.textContent = base;
-      sub.textContent = kind(dir);
+      // As an editor heads a file: its name on the tab, its path on the right.
+      who.textContent = splitPath(screen.file.path).base;
+      sub.textContent = screen.file.path;
+      sub.classList.add("path");
+      aside.append(plusMinus(screen.file.additions, screen.file.deletions));
+      list.classList.add("code");
       list.append(diffView(screen.file, screen.url));
     } else if (screen.type === "project") {
       who.textContent = repoName(screen.fullName, login);
