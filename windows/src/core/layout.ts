@@ -127,14 +127,23 @@ export const PROPOSAL_ROOM = PANEL_H - 160;
 /**
  * A view whose content varies — a question has two options or four, a line
  * each or a row of buttons — says how tall the island should be for it: what
- * it holds, plus the island around it (its bar, the card's own margins),
- * between a card's usual height and the window's.
+ * it holds, the air the card keeps above and below it, and the island around
+ * the card (its bar, its own margins), between a card's usual height and the
+ * window's.
  */
-const VIEW_CHROME = 96;
+const ISLAND_CHROME = 52;
 const VIEW_MIN = 160;
+/** The air a card that asks something keeps above and below its lines. */
+export const CARD_AIR = 22;
+/**
+ * The least air any card keeps: one that tells something — a turn's end, an
+ * error — is as tall as it always was until its lines would come closer to
+ * its edges than this.
+ */
+export const CARD_AIR_MIN = 14;
 
-export function fittedHeight(content: number): number {
-  return Math.min(PANEL_H, Math.max(VIEW_MIN, Math.ceil(content) + VIEW_CHROME));
+export function fittedHeight(content: number, air = CARD_AIR): number {
+  return Math.min(PANEL_H, Math.max(VIEW_MIN, Math.ceil(content) + ISLAND_CHROME + 2 * air));
 }
 
 export function islandSize(
