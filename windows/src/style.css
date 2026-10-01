@@ -1185,76 +1185,9 @@ input[type="range"]::-webkit-slider-thumb {
   height: 18px;
 }
 
-/* A card row that opens something as a whole (the GitHub card): it lights up
-   in its own colour under the mouse, like the pills. */
-.int-open {
-  width: 100%;
-  border: 0;
-  font: inherit;
-  text-align: left;
-  cursor: default;
-  background: var(--row);
-  transition: background 0.12s ease-out, transform 0.08s ease-out;
-}
-
-.int-open:hover {
-  background: var(--row-hover);
-}
-
-.int-open:active {
-  transform: scale(0.98);
-}
-
-/* The name takes the room, so the time and the `…` stay together on the right. */
-.int-open .int-name {
-  flex: 1 1 auto;
-}
-
-.int-open .int-more {
-  color: var(--dim-2);
-  transition: color 0.12s ease-out;
-}
-
-.int-open:hover .int-more,
-.int-open:hover .int-name {
-  color: var(--ink);
-}
-
 .int-back {
   width: 28px;
   height: 28px;
-}
-
-.int-stats {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding-top: 8px;
-  padding-right: 12px;
-}
-
-.int-stat {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.int-stat-icon {
-  width: 14px;
-  display: grid;
-  place-items: center;
-}
-
-.int-stat-label {
-  font: 400 11px var(--font);
-  color: var(--dim-3);
-}
-
-.int-stat-value {
-  margin-left: auto;
-  font: 600 12px var(--font);
-  color: #c5c8cd;
-  font-variant-numeric: tabular-nums;
 }
 
 .int-balance {
@@ -1273,6 +1206,80 @@ input[type="range"]::-webkit-slider-thumb {
   font: 600 9px var(--font);
   font-style: normal;
   color: var(--dim-3);
+}
+
+/* GitHub's figure is a way in: it opens the panel, and lights up under the
+   mouse like the pills. The last seven days ride at its right, as GitHub
+   draws a day. */
+.int-figure {
+  align-self: stretch;
+  margin: 2px -6px 0;
+  padding: 2px 6px 1px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background 0.12s ease-out;
+}
+
+.int-figure:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Its right edge on the times of the lines under it. */
+.int-week {
+  display: inline-flex;
+  gap: 2px;
+  margin: 0 2px 0 auto;
+  align-self: center;
+}
+
+.int-week i {
+  width: 6px;
+  height: 6px;
+  border-radius: 34%;
+}
+
+.int-star {
+  display: grid;
+  place-items: center;
+  color: #f5a524;
+}
+
+/* A line of the card that opens its sheet in the panel. */
+.int-go {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  transition: background 0.12s ease-out;
+}
+
+.int-go:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.int-go:hover .int-name {
+  color: var(--ink);
+}
+
+/* The title takes what room is left and is the one cut short; what follows it
+   — a number, a project — keeps its own, up to half the line. */
+.int-go .int-name {
+  flex: 1 1 0;
+}
+
+.int-go .int-amount {
+  font: 500 10.5px var(--mono);
+  max-width: 50%;
+  margin-left: 0;
+  padding-left: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .int-page {

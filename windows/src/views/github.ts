@@ -7,7 +7,7 @@
 import { h, svg, clear, dot } from "./dom";
 import { extBadge, fileKind, highlight, type FileKind } from "./code";
 import { ICONS } from "./icons";
-import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
+import { ACTIVITY_STYLE, GITHUB_LEVELS, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
   Bridge,
   type GithubActivity, type GithubBuild, type GithubCommentsDetail, type GithubCommitsDetail, type GithubContributions,
@@ -570,13 +570,6 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
 
 const DAY_MS = 86_400_000;
 
-/**
- * GitHub's dark-theme contribution colours, level 0 to 4 (Primer's
- * contribution-default-bgColor-*). The empty day is lifted a shade, since the
- * island's card is a little lighter than GitHub's page and #151B23 would
- * vanish on it.
- */
-const GITHUB_LEVELS = ["#1C2128", "#033A16", "#196C2E", "#2EA043", "#56D364"];
 /** Mochi at rest, the `idle` colour: what an empty day turns him. */
 const IDLE = "#E6E9EE";
 

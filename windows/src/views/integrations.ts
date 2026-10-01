@@ -7,7 +7,7 @@
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { State, type AgentTask } from "../core/state";
-import { Bridge, type GithubActivityKind, type GithubData } from "../core/bridge";
+import { Bridge, type GithubActivityKind, type GithubData, type GithubTarget } from "../core/bridge";
 
 /** Same shape as the Swift `timeAgo` computed properties. */
 export function timeAgo(value: unknown): string {
@@ -201,15 +201,13 @@ function resendCard(): HTMLElement {
 
 // ── GitHub ────────────────────────────────────────────────────────────────────
 
-function statRow(icon: string, color: string, label: string, value: string): HTMLElement {
-  return h(
-    "div",
-    { class: "int-stat" },
-    h("i", { class: "int-stat-icon", style: `color:${color}` }, svg(icon, 10)),
-    h("span", { class: "int-stat-label", text: label }),
-    h("span", { class: "int-stat-value", text: value }),
-  );
-}
+/**
+ * GitHub's dark-theme contribution colours, level 0 to 4 (Primer's
+ * contribution-default-bgColor-*). The empty day is lifted a shade, since the
+ * island's card is a little lighter than GitHub's page and #151B23 would
+ * vanish on it.
+ */
+export const GITHUB_LEVELS = ["#1C2128", "#033A16", "#196C2E", "#2EA043", "#56D364"];
 
 /** The GitHub pill's data, or null before the first answer. */
 export function githubData(): GithubData | null {
@@ -244,52 +242,75 @@ export function repoName(repo: string, login: string): string {
 /** 1284 → "1.3k", as the macOS card writes star counts. */
 export const compact = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-/**
- * A highlighted first row that opens something as a whole. A lone `…` was too
- * small to read as clickable, so the row lights up in its own colour under the
- * mouse, the way the pills do, and the `…` brightens with it.
- */
-function openRow(accent: string, onOpen: () => void, ...children: Node[]): HTMLElement {
-  const row = h(
-    "button",
-    { class: "int-row first int-open", onclick: onOpen },
-    dot(accent, 5),
-    ...children,
-    h("i", { class: "int-more" }, svg(ICONS.ellipsis, 8)),
-  );
-  row.style.setProperty("--row", `${accent}14`);
-  row.style.setProperty("--row-hover", `${accent}33`);
-  return row;
+/** What the panel is asked to open on: a line of activity's sheet, or nothing — its lists. */
+export interface GithubOpening {
+  target?: GithubTarget;
+  label?: string;
+  url?: string;
 }
 
-/** The summary in the overview; its first row opens the full panel. */
-function githubCard(onPanel: () => void): HTMLElement {
+/** What a line of the card says after its title: a number, a tag, or where it happened. */
+function activityWhere(a: GithubData["activity"][number], login: string): string {
+  const first = a.detail?.split(" · ")[0] ?? "";
+  // "#12", "v0.3.0": the thing itself. A push's branch says less than its project.
+  return /^(#\d+|v?\d)/.test(first) ? first : repoName(a.repo, login);
+}
+
+/**
+ * The summary in the overview, laid out like the Stripe card: one figure, then
+ * what happened lately. The figure is the year's contributions, with the last
+ * seven days as the squares GitHub draws them; it opens the panel. Each line
+ * under it opens the panel on its own sheet.
+ */
+function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
   const d = githubData()!;
   const error = State.integrations.integration_github?.error ?? null;
+  const c = d.contributions;
 
-  const latest = d.activity[0];
-  const row = latest
-    ? openRow(
-        ACTIVITY_STYLE[latest.kind].color,
-        onPanel,
-        h("span", { class: "int-name", text: latest.title }),
-        h("span", { class: "int-ago", text: timeAgo(latest.at) }),
+  const week = c
+    ? h(
+        "span",
+        { class: "int-week", title: "The last 7 days" },
+        ...c.levels.slice(-7).map((level) => h("i", { style: `background:${GITHUB_LEVELS[level] ?? GITHUB_LEVELS[0]}` })),
       )
-    : openRow("#6B7079", onPanel, h("span", { class: "int-name", text: "No recent activity" }));
-  row.title = "Open the GitHub panel";
+    : null;
+  // Without the year (the token may not read it), the stars are the figure.
+  const figure = h(
+    "button",
+    { class: "int-balance int-figure", title: "Open the GitHub panel", onclick: () => onPanel() },
+    h("span", { text: c ? c.total.toLocaleString("en-US") : compact(d.totalStars) }),
+    h("i", { text: c ? "contributions" : "stars" }),
+    week,
+  );
 
-  const card = h("div", { class: "int-card" }, header("#F4505E", "GitHub", `@${d.login}`));
+  const rows = h("div", { class: "int-rows tight" });
+  for (const a of d.activity.slice(0, 4)) {
+    const style = ACTIVITY_STYLE[a.kind];
+    rows.append(
+      h(
+        "button",
+        {
+          class: "int-row int-go",
+          title: a.title,
+          onclick: () => onPanel({ target: a.target ?? undefined, label: a.title, url: a.url }),
+        },
+        dot(style.color, 5),
+        h("span", { class: "int-name", text: a.title }),
+        h("span", { class: "int-amount", style: `color:${style.color}`, text: activityWhere(a, d.login) }),
+        h("span", { class: "int-ago", text: timeAgo(a.at) }),
+      ),
+    );
+  }
+  if (d.activity.length === 0) rows.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days" }));
+
+  const stars = c && d.totalStars > 0
+    ? h("span", { class: "int-total", title: "Stars across your repositories" },
+        h("i", { class: "int-star" }, svg(ICONS.star, 9)), h("span", { text: compact(d.totalStars) }))
+    : undefined;
+  const card = h("div", { class: "int-card" }, header("#F4505E", "GitHub", `@${d.login}`, stars));
   // What's shown is the last good answer; say why it isn't fresher.
   if (error) card.append(h("div", { class: "int-status" }, dot("#F4505E", 5), h("span", { text: error })));
-  card.append(
-    h("div", { class: "int-rows" }, row),
-    h(
-      "div",
-      { class: "int-stats" },
-      statRow(ICONS.star, "#F5A524", "Total stars", compact(d.totalStars)),
-      statRow(ICONS.stack, "#6B7079", "Repositories", String(d.totalRepos)),
-    ),
-  );
+  card.append(figure, rows);
   return card;
 }
 
@@ -443,8 +464,8 @@ export interface IntegrationCardHooks {
   openDetail(): void;
   closeDetail(): void;
   openSettings(): void;
-  /** A view of its own, for the pills that outgrew the card (GitHub). */
-  openPanel(): void;
+  /** A view of its own, for the pills that outgrew the card (GitHub) — on a sheet, or on its lists. */
+  openPanel(open?: GithubOpening): void;
 }
 
 /** True when this integration has data worth showing instead of the idle card. */

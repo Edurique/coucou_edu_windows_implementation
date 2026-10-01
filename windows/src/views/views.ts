@@ -173,9 +173,10 @@ function buildOverview(actions: ViewActions): ViewHost {
       State.notify();
     },
     openSettings: () => actions.openSettingsWindow(),
-    openPanel() {
+    openPanel(open) {
       actions.blip();
-      enterGithubPanel();
+      if (open) openGithubNews(open);
+      else enterGithubPanel();
       actions.setView("github");
     },
   };
