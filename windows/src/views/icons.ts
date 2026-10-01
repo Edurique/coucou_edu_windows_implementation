@@ -65,4 +65,8 @@ export const ICONS = {
   pulse: "M3 12h4l2.5-6 5 12 2.5-6H21",
   // What was said: a speech bubble, drawn as a line like the other GitHub marks.
   comment: "M4 5.5h16v10.5h-8.5L7 20v-4H4z",
+
+  // A bell, and a bell struck through, stroked: a project that speaks up, one that keeps quiet.
+  bell: "M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14zM10 20.5a2 2 0 0 0 4 0",
+  bellOff: "M6.5 16.5V11a5.5 5.5 0 0 1 9-4.2M17.5 11.5v5l1.5 2H8M10 20.5a2 2 0 0 0 4 0M4.5 4.5l15 15",
 } as const;

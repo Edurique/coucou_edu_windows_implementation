@@ -554,9 +554,36 @@ function meta(icon: SVGSVGElement, count: number, onClick?: () => void): HTMLEle
 }
 
 /**
+ * Whether the pill speaks up for this project — a broken build, a merge, a
+ * pull request somebody opened — as a bell on its row. A click mutes it or
+ * gives it its voice back; the choice is kept with the settings, where the
+ * Rust side reads it before telling any news.
+ */
+function newsBell(repo: string): HTMLElement {
+  const bell = h("button", { class: "gh-bell" });
+  const draw = () => {
+    const quiet = State.settings.githubMuted.includes(repo);
+    clear(bell);
+    bell.append(svg(quiet ? ICONS.bellOff : ICONS.bell, 10, { stroke: 2 }));
+    bell.classList.toggle("off", quiet);
+    bell.title = quiet ? "Muted: no news from this project. Click to hear from it again." : "News from this project. Click to mute it.";
+  };
+  bell.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const muted = State.settings.githubMuted;
+    State.settings.githubMuted = muted.includes(repo) ? muted.filter((name) => name !== repo) : [...muted, repo];
+    void Bridge.saveSettings(State.settings);
+    draw();
+  });
+  draw();
+  return bell;
+}
+
+/**
  * Your own repositories by name; somebody else's with their owner in front.
  * The row opens the project's sheet, the badge its last run; the PR count
- * stays a shortcut straight to GitHub.
+ * stays a shortcut straight to GitHub, and the bell says whether the project
+ * speaks up.
  */
 function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLElement {
   return h(
@@ -569,6 +596,7 @@ function repoRow(repo: GithubRepo, login: string, onOpen: () => void): HTMLEleme
     h(
       "span",
       { class: "gh-right" },
+      newsBell(repo.fullName),
       buildBadge(repo.build, repo.fullName),
       meta(svg(ICONS.star, 9), repo.stars),
       meta(svg(ICONS.pullRequest, 9, { stroke: 2 }), repo.openPrs, () => void Bridge.openUrl(`${repo.url}/pulls`)),
