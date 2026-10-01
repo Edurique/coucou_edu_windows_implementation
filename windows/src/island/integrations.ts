@@ -4,7 +4,7 @@
 
 import { onEvent, Bridge, type GithubData, type IntegrationUpdate } from "../core/bridge";
 import { Sound } from "../core/sound";
-import { CLAUDE_ID, State } from "../core/state";
+import { CLAUDE_ID, SPOTIFY_ID, State } from "../core/state";
 import { enterGithubPanel, sawRunEnd } from "../views/github";
 import { announceOnCard, nowPlaying } from "../views/integrations";
 import type { Island } from "./island";
@@ -21,7 +21,7 @@ const KEY_FOR: Record<string, string> = {
 };
 
 /** The pills that have no key: read from what is on this machine, they are set up as soon as they are switched on. */
-const KEYLESS = ["integration_spotify"];
+const KEYLESS = [SPOTIFY_ID];
 
 const clearTimers = new Map<string, number>();
 /** As in the Swift pollers: a pill's finished or error look clears itself after this. */
@@ -48,7 +48,6 @@ const borrowedFrom = new Map<string, string>();
 /** States that are waiting for the user: nothing takes the front from those. */
 const WAITING = new Set(["approval", "question"]);
 
-const SPOTIFY = "integration_spotify";
 /** How long the island stays unfolded on a song that just started. */
 const ANNOUNCE_MS = 4_500;
 /** How long the island takes to fold: the front is handed back once it has. */
@@ -65,8 +64,8 @@ let announceTimer: number | null = null;
 function announceSong(island: Island) {
   const front = State.focusTask;
   if (State.mode === "expanded" || State.isPinned || (front && WAITING.has(front.state))) return;
-  if (State.focusId !== SPOTIFY && State.focusId && !borrowedFrom.has(SPOTIFY)) borrowedFrom.set(SPOTIFY, State.focusId);
-  if (State.focusId !== SPOTIFY) State.setFocus(SPOTIFY);
+  if (State.focusId !== SPOTIFY_ID && State.focusId && !borrowedFrom.has(SPOTIFY_ID)) borrowedFrom.set(SPOTIFY_ID, State.focusId);
+  if (State.focusId !== SPOTIFY_ID) State.setFocus(SPOTIFY_ID);
   island.alert("overview");
   // Light, so it reads as news and not as an island that opened by accident.
   announceOnCard(ANNOUNCE_MS);
@@ -76,9 +75,9 @@ function announceSong(island: Island) {
   announceTimer = window.setTimeout(() => {
     announceTimer = null;
     // Somebody took it from there — the mouse is on it, or it shows something else: it is theirs.
-    const untouched = State.mode === "expanded" && State.view === "overview" && State.focusId === SPOTIFY && !island.hovered;
+    const untouched = State.mode === "expanded" && State.view === "overview" && State.focusId === SPOTIFY_ID && !island.hovered;
     if (!untouched) {
-      borrowedFrom.delete(SPOTIFY);
+      borrowedFrom.delete(SPOTIFY_ID);
       return;
     }
     island.collapse();
@@ -87,7 +86,7 @@ function announceSong(island: Island) {
     // once, the cover would vanish from the middle of an island still folding.
     announceTimer = window.setTimeout(() => {
       announceTimer = null;
-      giveBack(SPOTIFY);
+      giveBack(SPOTIFY_ID);
       // A session that asked for something meanwhile only got a badge: its card is due.
       if (State.focusId === CLAUDE_ID && (State.pendingQuestion || State.pendingApproval)) {
         State.isPinned = true;
@@ -183,7 +182,7 @@ export function handleIntegration(island: Island, update: IntegrationUpdate) {
 
   const previous = State.integrations[update.id];
   // What Spotify was playing before this update, to tell a new song from the same one going on.
-  const before = update.id === SPOTIFY && previous?.loaded ? nowPlaying() : null;
+  const before = update.id === SPOTIFY_ID && previous?.loaded ? nowPlaying() : null;
   // A failed poll normally carries no data and keeps what was there. GitHub's
   // carries its last good snapshot, so the panel can go on showing it next to
   // the reason it isn't fresh.

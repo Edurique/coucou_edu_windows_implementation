@@ -11,7 +11,7 @@ import {
   type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { CLAUDE_ID, QUESTION_TOOL, State, type SessionStep } from "../core/state";
+import { CLAUDE_ID, QUESTION_TOOL, SPOTIFY_ID, State, type SessionStep } from "../core/state";
 import { BotEngine, hexToRGB, type RGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
@@ -37,9 +37,6 @@ const UPLOAD_VIEWS: ReadonlySet<IslandViewName> = new Set(["upload", "uploading"
 const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
-
-/** The pill whose song's cover stands where Mochi does: he steps out for it. */
-const SPOTIFY_ID = "integration_spotify";
 
 /** How fast Mochi's body goes to a new colour, per second: about 90 % of the way in 0.4 s. */
 const TINT_RATE = 5.5;
@@ -166,7 +163,7 @@ export class Island {
           integration_stripe: "https://dashboard.stripe.com/payments",
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
-          integration_spotify: "spotify:",
+          [SPOTIFY_ID]: "https://open.spotify.com",
         };
         if (task.id === CLAUDE_ID) this.openClient();
         else if (task.id === "integration_n8n") void Bridge.openN8n();

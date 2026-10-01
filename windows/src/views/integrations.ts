@@ -7,7 +7,7 @@
 import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { COLOR } from "./palette";
-import { State, type AgentTask } from "../core/state";
+import { SPOTIFY_ID, State, type AgentTask } from "../core/state";
 import { Bridge, type GithubActivityKind, type GithubData, type GithubTarget } from "../core/bridge";
 
 /** Same shape as the Swift `timeAgo` computed properties. */
@@ -204,9 +204,6 @@ function resendCard(): HTMLElement {
 
 // ── Spotify ───────────────────────────────────────────────────────────────────
 
-const SPOTIFY = "integration_spotify";
-/** After a key is pressed, how long the app takes to tell Windows what it did. */
-const KEY_SETTLES_MS = 700;
 /** How fast a title too long for its line runs across it, in px per second, and how long it rests at each end. */
 const RUN_PX_PER_S = 28;
 const RUN_REST_S = 1.6;
@@ -224,7 +221,7 @@ interface Playing {
 
 /** What Spotify is playing, as the Rust side last said it. */
 export function nowPlaying(): Playing {
-  const now = get(SPOTIFY);
+  const now = get(SPOTIFY_ID);
   const text = (value: unknown) => (typeof value === "string" ? value : "");
   const cover = text(now.cover);
   return {
@@ -240,7 +237,7 @@ export function nowPlaying(): Playing {
 
 /** What a card is drawn from, for a pill whose data is too big to compare whole: a cover is tens of kilobytes. */
 export function integrationKey(id: string): string {
-  if (id !== SPOTIFY) return JSON.stringify(State.integrations[id]?.data ?? {});
+  if (id !== SPOTIFY_ID) return JSON.stringify(State.integrations[id]?.data ?? {});
   const now = nowPlaying();
   return [now.open, now.playing, now.title, now.artist, now.album, now.cover?.length ?? 0].join("|");
 }
@@ -256,12 +253,12 @@ export function integrationKey(id: string): string {
  * in, play turns into pause, and nothing else moves — a card built again at
  * every change would play every entrance again each time.
  */
-function buildSpotifyCard(): { el: HTMLElement; sync(): void } {
+function buildSpotifyCard(color: string): { el: HTMLElement; sync(): void } {
   const slot = h("div", { class: "media-cover" }, svg(ICONS.play, 22));
   const kind = h("span");
   // Three bars that dance while something plays, and rest when it does not.
   const bars = h("i", { class: "media-bars" }, h("i"), h("i"), h("i"));
-  const head = h("div", { class: "int-head" }, dot("#1DB954", 7), h("b", { text: "Spotify" }), kind, bars);
+  const head = h("div", { class: "int-head" }, dot(color, 7), h("b", { text: "Spotify" }), kind, bars);
   const run = h("span", { class: "media-run" });
   const title = h("div", { class: "media-title" }, run);
   const artist = h("div", { class: "media-artist" });
@@ -273,10 +270,8 @@ function buildSpotifyCard(): { el: HTMLElement; sync(): void } {
       {
         class: action === "toggle" ? "media-key main" : "media-key",
         title: label,
-        onclick: () => {
-          void Bridge.mediaKey(action);
-          window.setTimeout(() => void Bridge.refreshIntegration(SPOTIFY), KEY_SETTLES_MS);
-        },
+        // What it did comes back on its own: Windows says when the song or its state changes.
+        onclick: () => void Bridge.mediaKey(action),
       },
       svg(icon, 11),
     );
@@ -343,7 +338,8 @@ let announced: number | null = null;
  * breathes behind the cover.
  */
 export function announceOnCard(ms: number) {
-  spotify ??= buildSpotifyCard();
+  // No card yet: Spotify's pill never had the front, so there is nothing to light.
+  if (!spotify) return;
   const { el } = spotify;
   el.style.setProperty("--announce", `${ms}ms`);
   replay(el, "announce");
@@ -351,8 +347,8 @@ export function announceOnCard(ms: number) {
   announced = window.setTimeout(() => el.classList.remove("announce"), ms);
 }
 
-function spotifyCard(): HTMLElement {
-  spotify ??= buildSpotifyCard();
+function spotifyCard(task: AgentTask): HTMLElement {
+  spotify ??= buildSpotifyCard(task.color);
   spotify.sync();
   return spotify.el;
 }
@@ -658,7 +654,7 @@ export function hasIntegrationData(id: string): boolean {
     case "integration_notion":
       return arr(id, "pages").length > 0;
     case "integration_calcom":
-    case "integration_spotify":
+    case SPOTIFY_ID:
       return info.loaded;
     default:
       return false;
@@ -688,8 +684,8 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
       return notionCard();
     case "integration_calcom":
       return calcomCard();
-    case "integration_spotify":
-      return spotifyCard();
+    case SPOTIFY_ID:
+      return spotifyCard(task);
     default:
       return idleCard(task, hooks.openSettings);
   }

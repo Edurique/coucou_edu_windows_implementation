@@ -1397,6 +1397,7 @@ input[type="range"]::-webkit-slider-thumb {
   --gh-tile: color-mix(in srgb, var(--card), #fff 3.5%);     /* a block of a sheet */
   --gh-tile-hover: color-mix(in srgb, var(--card), #fff 7%);
 
+  --spotify: #1db954;        /* Spotify's green: its pill, what plays, a song announced */
   --on-light: #0b0c0e;       /* a mark or a word on a light or a coloured ground */
 
   --code: #d6d9df;
@@ -4063,7 +4064,9 @@ button.gh-block:hover {
   pointer-events: none;
   opacity: 0;
   background: var(--card-flat);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  /* The shade under the cover, kept when it glows. */
+  --cover-shade: 0 3px 12px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--cover-shade);
   /* Gone at once: what it stood on is already leaving. */
   transition: opacity 0.1s ease-out;
 }
@@ -4103,7 +4106,7 @@ button.gh-block:hover {
   width: 2px;
   height: 3px;
   border-radius: 1px;
-  background: #1db954;
+  background: var(--spotify);
   transform-origin: bottom;
   transition: height 0.3s ease-out, opacity 0.3s ease-out;
   opacity: 0.45;
@@ -4196,6 +4199,7 @@ button.gh-block:hover {
   padding-top: 6px;
 }
 
+/* Under the finger a key gives; play turning into pause pops. */
 .media-key {
   width: 24px;
   height: 20px;
@@ -4206,16 +4210,11 @@ button.gh-block:hover {
   background: var(--gh-plate);
   color: var(--ink-2);
   cursor: default;
-  transition: background 0.12s ease-out;
+  transition: background 0.12s ease-out, transform 0.12s cubic-bezier(0.3, 1.2, 0.4, 1);
 }
 
 .media-key:hover {
   background: rgba(255, 255, 255, 0.14);
-}
-
-/* Under the finger a key gives; play turning into pause pops. */
-.media-key {
-  transition: background 0.12s ease-out, transform 0.12s cubic-bezier(0.3, 1.2, 0.4, 1);
 }
 
 .media-key:active {
@@ -4241,7 +4240,7 @@ button.gh-block:hover {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(120% 140% at 12% 50%, rgba(29, 185, 84, 0.34), rgba(29, 185, 84, 0) 62%);
+  background: radial-gradient(120% 140% at 12% 50%, color-mix(in srgb, var(--spotify) 34%, transparent), transparent 62%);
   animation: announce-wash var(--announce, 4.5s) ease-in-out both;
 }
 
@@ -4267,9 +4266,9 @@ button.gh-block:hover {
 }
 
 @keyframes cover-glow {
-  0% { box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(29, 185, 84, 0.9); }
-  35% { box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 22px 5px rgba(29, 185, 84, 0.65); }
-  100% { box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(29, 185, 84, 0); }
+  0% { box-shadow: var(--cover-shade), 0 0 0 0 color-mix(in srgb, var(--spotify) 90%, transparent); }
+  35% { box-shadow: var(--cover-shade), 0 0 22px 5px color-mix(in srgb, var(--spotify) 65%, transparent); }
+  100% { box-shadow: var(--cover-shade), 0 0 0 0 transparent; }
 }
 
 /* The sheen: a band of light that crosses the cover once. */
