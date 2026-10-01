@@ -19,7 +19,8 @@ import { ICONS } from "./icons";
 import { COLOR } from "./palette";
 import { timeAgo } from "./integrations";
 import { markdown } from "./markdown";
-import { CLAUDE_ID, State, type AgentTask, type ChangedFile, type ClaudeSession, type SessionStep } from "../core/state";
+import { CLAUDE_ID, State, TURN_DONE, type AgentTask, type ChangedFile, type ClaudeSession, type SessionStep } from "../core/state";
+import { stepName, stepPreview } from "./step";
 import { botGlowColor } from "../core/layout";
 import type { ViewActions, ViewHost } from "./views";
 
@@ -32,6 +33,13 @@ const FRESH_MS = 4_000;
 /** However long the edit, typing it takes about this long, a tick at a time. */
 const TYPE_MS = 1_800;
 const TICK_MS = 16;
+
+/**
+ * Lines of the last command the panel keeps in sight: under the file being
+ * written, and fewer under Claude's reply, which is what is being read then.
+ */
+const TERM_LINES = 6;
+const TERM_LINES_UNDER_REPLY = 3;
 
 /** What is on screen: the file being written, the list of changes, or one file's diff. */
 type Screen = { kind: "live" } | { kind: "list" } | { kind: "file"; path: string };
@@ -68,16 +76,6 @@ function talkView(asked: string | null, answer: string, at: number): HTMLElement
   );
   return el;
 }
-
-/** Tools by a name short enough for the column, where their own is not. */
-const STEP_NAMES: Record<string, string> = {
-  AskUserQuestion: "Question",
-  NotebookEdit: "Notebook",
-  TodoWrite: "Todos",
-  WebSearch: "Search",
-  WebFetch: "Fetch",
-};
-
 
 const counted = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
@@ -232,8 +230,13 @@ export function buildSession(actions: ViewActions): ViewHost {
   const tab = h("div", { class: "gh-tab" }, badge, who);
   const head = h("div", { class: "gh-head" }, backBtn, tab, aside, h("div", { class: "grow" }), sub, filesBtn, openBtn);
   const list = h("div", { class: "gh-list" });
+  // Under the file, as in a terminal below an editor: the turn's last command
+  // and the end of what it printed.
+  const term = h("div", { class: "sess-term" });
+  term.style.display = "none";
+  let termKey = "";
 
-  const main = h("div", { class: "gh-main" }, head, list);
+  const main = h("div", { class: "gh-main" }, head, list, term);
   const name = h("b", { text: UNNAMED });
   const nameSub = h("span", { text: UNNAMED });
   const steps = h("div", { class: "sess-steps" });
@@ -350,16 +353,33 @@ export function buildSession(actions: ViewActions): ViewHost {
         nameSub.textContent = title ? project : UNNAMED;
         clear(steps);
         for (const s of shown) {
-          steps.append(h("div", { class: `sess-step ${s.state}` }, STEP_ICONS[s.state](), h("span", { text: STEP_NAMES[s.tool] ?? s.tool, title: s.tool })));
+          steps.append(h("div", { class: `sess-step ${s.state}` }, STEP_ICONS[s.state](), h("span", { text: stepName(s), title: s.target ?? s.tool })));
         }
       }
+
+      // The last command of the turn, on the screens that follow the session.
+      const turn = State.session.steps.filter((s) => s.tool !== TURN_DONE);
+      const ran = screen.kind === "live" ? ([...turn].reverse().find((s) => s.kind === "command") ?? null) : null;
+      const room = !live && State.session.answer != null ? TERM_LINES_UNDER_REPLY : TERM_LINES;
+      const nextTerm = ran ? [State.session.id, ran.target, ran.state, ran.result?.text.length, room].join("~") : "";
+      if (nextTerm !== termKey) {
+        termKey = nextTerm;
+        clear(term);
+        const printed = ran ? stepPreview(ran, room) : null;
+        if (printed) term.append(printed);
+        term.style.display = printed ? "" : "none";
+      }
+      // The file on show is the one Claude was at last: read, when that came
+      // after its last edit.
+      const filed = [...turn].reverse().find((s) => s.kind === "edit" || (s.kind === "read" && s.result != null));
+      const read = filed?.kind === "read" ? filed : null;
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.
       const total = files.reduce((n, f) => n + f.edits.length, 0);
       // Once the turn is over, the live screen is what Claude said to end it.
       const answer = !live ? State.session.answer : null;
-      const next = [State.session.id, stamp, screen.kind, total, files[0]?.path, answer].join("~");
+      const next = [State.session.id, stamp, screen.kind, total, files[0]?.path, answer, read?.target, read?.result?.text.length].join("~");
       if (next === key) return;
       key = next;
 
@@ -368,7 +388,7 @@ export function buildSession(actions: ViewActions): ViewHost {
       const picked = opened ? (files.find((f) => f.path === opened) ?? null) : null;
       if (screen.kind === "file" && !picked) screen = { kind: "list" };
       const talking = screen.kind === "live" && answer != null;
-      const file = talking ? null : screen.kind === "live" ? (files[0] ?? null) : picked;
+      const file = talking ? null : screen.kind === "live" ? (read ? null : (files[0] ?? null)) : picked;
 
       const now = `${screen.kind}:${file?.path ?? ""}:${talking}`;
       const scroll = now === drawn ? list.scrollTop : 0;
@@ -413,6 +433,18 @@ export function buildSession(actions: ViewActions): ViewHost {
         }
         if (talking && answer) {
           list.append(talkView(State.session.asked, answer, State.session.answeredAt));
+        } else if (screen.kind === "live" && read?.target) {
+          // A file read: its name on the tab, its first lines under it.
+          who.textContent = splitPath(read.target).base;
+          who.classList.add("file");
+          sub.classList.add("path");
+          sub.textContent = read.target;
+          clear(badge);
+          badge.append(extBadge(read.target));
+          aside.append(h("span", { class: "gh-file-status", text: "read" }));
+          list.classList.add("gh-edge");
+          const lines = stepPreview(read);
+          if (lines) list.append(h("div", { class: "gh-code" }, lines));
         } else if (files.length === 0) {
           list.append(
             h("div", {

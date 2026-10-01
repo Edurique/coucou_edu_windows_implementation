@@ -445,53 +445,7 @@ body {
   z-index: 2;
 }
 
-/* Ticker */
-
-.ticker {
-  position: relative;
-  height: 44px;
-  margin: 6px 12px 0 108px;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0%,
-    #000 12%,
-    #000 85%,
-    transparent 100%
-  );
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 85%, transparent 100%);
-}
-
-.ticker-row {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transform-origin: left center;
-  will-change: transform, opacity;
-}
-
-.ticker-row .tick-icon {
-  width: 12px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 12px;
-  color: var(--dim-2);
-}
-
-.ticker-row .tick-text {
-  /* A block, or the ellipsis never comes and a long step runs on. */
-  display: block;
-  font: 500 13px var(--font);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Shimmer sweep, 2.2 s — same as TickerShimmerText / ShimmeringText */
+/* Shimmer sweep, 2.2 s — same as ShimmeringText */
 .shimmer {
   background: linear-gradient(
     90deg,
@@ -3757,4 +3711,119 @@ button.gh-block:hover {
   font: 500 10.5px var(--font);
   color: var(--amber);
   background: color-mix(in srgb, var(--amber) 14%, transparent);
+}
+
+/* What a session is doing now, as the prototype draws it: the step by its
+   icon and its name with what it is at, and under it a look at what it did. */
+.now-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 5px 12px 0 108px;
+  min-width: 0;
+  height: 16px;
+}
+
+.now-line > i {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--dim);
+}
+
+.now-line > b {
+  flex: 0 0 auto;
+  font: 600 12px var(--font);
+  color: var(--ink);
+}
+
+.now-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim-2);
+}
+
+/* A file or a command, as it is typed; Claude's words, as they are said. */
+.now-line > .at {
+  font: 400 10.5px var(--mono);
+}
+
+.now-line > .said {
+  font: 400 11.5px var(--font);
+}
+
+.now-box {
+  margin: 5px 12px 0 108px;
+  height: 54px;
+  padding: 3px 0;
+  border-radius: 8px;
+  background: var(--card-flat);
+  overflow: hidden;
+}
+
+.now-box .gh-diff-line {
+  grid-template-columns: 26px 12px 1fr;
+}
+
+.now-box .gh-diff-line .t,
+.now-box .term-line .t {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.now-words {
+  padding: 0 9px;
+  font: 400 11px/16px var(--font);
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* A terminal's lines: the prompt and the command, then what it printed. */
+.term-line {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  color: var(--dim);
+}
+
+.term-line .p {
+  text-align: right;
+  padding-right: 4px;
+  color: var(--dim-4);
+  user-select: none;
+}
+
+.term-line .t {
+  min-width: 0;
+  padding-right: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.term-line.cmd .t {
+  color: var(--ink-2);
+}
+
+.step-preview.failed .term-line:not(.cmd) .t {
+  color: var(--red-text);
+}
+
+/* In the session panel: the last command under the file, as a terminal sits
+   under an editor. */
+.sess-term {
+  flex: 0 0 auto;
+  padding: 6px 0 7px;
+  border-top: 1px solid var(--gh-edge);
+}
+
+.sess-term .term-line .t {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

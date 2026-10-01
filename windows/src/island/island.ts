@@ -837,9 +837,6 @@ export class Island {
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
         greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling ||
-        // A view half-way through a motion of its own — the ticker scrolling a
-        // step — would be left there, two rows on one line.
-        this.views.get(State.view)?.animating === true ||
         // A view showing something live keeps its Mochis moving: a run's crew
         // would otherwise freeze the moment the big one came to rest.
         this.viewState != null;

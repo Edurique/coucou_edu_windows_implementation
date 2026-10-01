@@ -12,8 +12,8 @@
 import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
 import {
-  CLAUDE_ID, SESSION_UNNAMED, State, newSession,
-  type ChangedFile, type ClaudeClient, type ClaudeSession, type Question,
+  CLAUDE_ID, SESSION_UNNAMED, State, TURN_DONE, newSession,
+  type ChangedFile, type ClaudeClient, type ClaudeSession, type Question, type StepKind, type StepResult,
 } from "../core/state";
 import type { IslandViewName } from "../core/layout";
 import type { Island } from "./island";
@@ -41,6 +41,10 @@ export interface HookPayload {
   term_program?: string;
   /** What an edit tool did to its file — added by coucou-hook to PostToolUse. */
   change?: { patch: string; additions: number; deletions: number; truncated: boolean; created: boolean };
+  /** A few lines of what a tool gave back — added by coucou-hook to PostToolUse. */
+  result?: StepResult;
+  /** On a PostToolUseFailure: what went wrong. */
+  error?: string;
   /** What an edit asking for permission would do — added by coucou-hook to PermissionRequest. */
   proposal?: { patch: string; additions: number; deletions: number; truncated: boolean; created: boolean };
   /** The conversation's title, read by coucou-hook from the session's transcript. */
@@ -59,37 +63,62 @@ const MAX_FILES = 40;
 const MAX_EDITS = 30;
 /** Steps kept for the turn under way; the session panel shows the last few. */
 const MAX_STEPS = 12;
-/** Lines kept for the ticker; past that the older half goes. */
+/** Lines kept of what a session did; past that the older half goes. */
 const MAX_LINES = 200;
-/** A line of the ticker is this long at most. */
+/** Such a line is this long at most. */
 const LINE_CHARS = 60;
 /** How long a session that just finished says so before it goes back to rest. */
 const FINISHED_MS = 5_200;
 /** The id of a session whose hooks carry none. */
 const ANONYMOUS = "session";
 
-/** The step that closes a turn, in the place of a tool's name. */
-const TURN_DONE = "Done";
+/** What each tool does, as far as showing it goes; one not listed is "other". */
+const STEP_KINDS: Record<string, StepKind> = {
+  Read: "read", NotebookRead: "read",
+  Edit: "edit", Write: "edit", MultiEdit: "edit", NotebookEdit: "edit",
+  Bash: "command", PowerShell: "command",
+  Grep: "search", Glob: "search", WebSearch: "search", ToolSearch: "search",
+};
+
+/** The fields of a tool's input that say what it is at, the most telling first. */
+const TARGET_FIELDS = ["command", "file_path", "notebook_path", "path", "pattern", "query", "url", "description"] as const;
+const PATH_FIELDS: ReadonlySet<string> = new Set(["file_path", "notebook_path", "path"]);
+
+/** What a tool is at: its file by its path in the session's folder, its command, what it looks for. */
+function stepTarget(input: Record<string, unknown>, cwd: string): string | null {
+  for (const field of TARGET_FIELDS) {
+    const value = input[field];
+    if (typeof value === "string" && value.trim()) return PATH_FIELDS.has(field) ? sessionPath(value, cwd) : value.trim();
+  }
+  return null;
+}
 
 /** A tool starts: one more step, going. */
-function startStep(session: ClaudeSession, tool: string) {
-  session.steps.push({ tool, state: "running" });
+function startStep(session: ClaudeSession, tool: string, input: Record<string, unknown>, cwd: string) {
+  session.steps.push({
+    tool, kind: STEP_KINDS[tool] ?? "other", state: "running",
+    target: stepTarget(input, cwd), result: null, patch: null,
+  });
   if (session.steps.length > MAX_STEPS) session.steps.shift();
 }
 
-/** A tool ends: its last step still going takes the outcome. */
-function endStep(session: ClaudeSession, tool: string, state: "done" | "failed") {
+/** A tool ends: its last step still going takes the outcome, and what the tool gave back. */
+function endStep(session: ClaudeSession, payload: HookPayload, state: "done" | "failed") {
+  const tool = payload.tool_name ?? "Tool";
   const step = [...session.steps].reverse().find((s) => s.tool === tool && s.state === "running");
-  if (step) step.state = state;
+  if (!step) return;
+  step.state = state;
+  step.patch = payload.change?.patch ?? null;
+  step.result = payload.result ?? (payload.error ? { text: payload.error, start: null, truncated: false, tail: false } : null);
 }
 
 /** The turn ends: nothing is going any more, and the column says so. */
 function closeSteps(session: ClaudeSession) {
   for (const step of session.steps) if (step.state === "running") step.state = "done";
-  session.steps.push({ tool: TURN_DONE, state: "done" });
+  session.steps.push({ tool: TURN_DONE, kind: "other", state: "done", target: null, result: null, patch: null });
 }
 
-/** One more line for the session's ticker. */
+/** One more line of what the session did. */
 function say(session: ClaudeSession, line: string) {
   session.lines.push(line);
   if (session.lines.length > MAX_LINES) session.lines.splice(0, MAX_LINES / 2);
@@ -427,7 +456,7 @@ export function handleHook(island: Island, payload: HookPayload) {
     case "PreToolUse": {
       session.state = "working";
       const tool = payload.tool_name ?? "Tool";
-      startStep(session, tool);
+      startStep(session, tool, payload.tool_input ?? {}, cwd);
       say(session, stepLabel(tool, payload.tool_input ?? {}));
       surface("overview", false);
       break;
@@ -435,14 +464,14 @@ export function handleHook(island: Island, payload: HookPayload) {
 
     case "PostToolUse":
       if (answeredElsewhere(session, payload)) dropPending(island, session);
-      endStep(session, payload.tool_name ?? "Tool", "done");
+      endStep(session, payload, "done");
       recordChange(session, payload);
       session.state = "working";
       break;
 
     case "PostToolUseFailure":
       if (answeredElsewhere(session, payload)) dropPending(island, session);
-      endStep(session, payload.tool_name ?? "Tool", "failed");
+      endStep(session, payload, "failed");
       session.state = "working";
       say(session, "⚠ failed");
       break;

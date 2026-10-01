@@ -92,10 +92,34 @@ export interface ChangedFile {
   at: number;
 }
 
+/** A few lines of what a tool gave back, as coucou-hook forwards them. */
+export interface StepResult {
+  text: string;
+  /** For a file: the number of its first line. */
+  start: number | null;
+  /** There was more than this. */
+  truncated: boolean;
+  /** These are the last lines, not the first: what a command ended on. */
+  tail: boolean;
+}
+
+/** The step that closes a turn, in the place of a tool's name. */
+export const TURN_DONE = "Done";
+
+/** What a tool does, as far as showing it goes. */
+export type StepKind = "read" | "edit" | "command" | "search" | "other";
+
 /** One tool of the turn under way, by its own name: going, done, or failed. */
 export interface SessionStep {
   tool: string;
+  kind: StepKind;
   state: "running" | "done" | "failed";
+  /** What it is at: a file by its path in the session's folder, a command, what is looked for. */
+  target: string | null;
+  /** What it gave back, once it is done. */
+  result: StepResult | null;
+  /** For an edit: the diff it made. */
+  patch: string | null;
 }
 
 /**
@@ -112,7 +136,7 @@ export interface ClaudeSession {
   project: string;
   cwd: string | null;
   state: BotStateName;
-  /** What the overview's ticker scrolls: a line per step, oldest first. */
+  /** What it did, a line per step, oldest first: what a card falls back on. */
   lines: string[];
   /** The tools of the turn under way, oldest first; "Done" closes a turn. */
   steps: SessionStep[];

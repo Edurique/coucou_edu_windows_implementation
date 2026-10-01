@@ -72,22 +72,48 @@ session is in, and its ↗ brings that app forward.
 
 ### Watching a session
 
-<img src="screenshots/claude-session.png" width="640" alt="The session panel: the session's steps on the left, a file being written on the right">
+<img src="screenshots/claude-card.png" width="640" alt="A session's card: the step under way with its icon and its file, and the lines it read">
 
-A session at work shows on its card: the conversation's title, the step under
-way, the lines added and removed so far. Click the card for the **session
-panel**:
+A session shows on its card, as the prototype draws it: the conversation's
+title, the step under way — its icon, its name, the file or the command it is at
+— and under it a look at what the step did: the lines of the file it read, the
+diff of its edit, the command it ran with the end of what that printed. Once the
+turn is over the card says **Done**, with Claude's first words and what its last
+command printed.
+
+<img src="screenshots/claude-session.png" width="640" alt="The session panel: the session's steps on the left, a file being written on the right, the last command under it">
+
+Click the card for the **session panel**:
 
 | What | Where |
 |---|---|
 | The steps of the turn — each tool going, done or failed | Mochi's column, on the left |
-| The file being written, the old line struck and the new ones typed under it | The panel, while Claude works |
+| The file Claude is at: read, or being written, the old line struck and the new ones typed under it | The panel, while Claude works |
+| The last command and the end of what it printed | Under the file, as a terminal sits under an editor |
 | Every file the session changed, and each one's whole diff | **N files**, at the top right |
 | What Claude said to end its turn, as it wrote it | The panel, once the turn is over — or **Read reply** on the finished card |
 
 An edit is shown the moment Claude Code reports it, so the typing is a replay of
 it, about a second behind. The island only watches: to write to Claude, there is
 Claude Code.
+
+### Several sessions at once
+
+<img src="screenshots/claude-sessions.png" width="640" alt="Two more sessions as tabs under the card of the one on show">
+
+Two conversations in the Claude app, one more in a terminal: each is followed on
+its own, and one of them is in front — the one the card, the panel and Mochi
+show. The others get a tab each, under the card and at the foot of the panel's
+column, with a dot for where they are at: at work, waiting for you, finished. A
+click puts one in front.
+
+The island stays on the session it shows for as long as that one is at work or
+being looked at. Another one takes its place when the first has nothing going
+on, or to ask for something. When two ask at once, the second waits its turn:
+the card says how many are waiting, and the next comes forward once the first is
+answered. Up to four sessions are followed; past that, the one at rest and heard
+from longest ago gives its place. Sessions started by a program rather than a
+person — a review run by a plugin, a script using the SDK — are left alone.
 
 ### Answering from the island
 
@@ -104,8 +130,10 @@ Claude Code.
 ### What it reads
 
 Everything comes from the hooks Claude Code already sends — nothing is asked of
-Anthropic, and nothing leaves your machine. Two things are read from disk by the
-relay, and only then: the file an edit asks permission for (to show its diff —
+Anthropic, and nothing leaves your machine. Of what a tool gives back, the relay
+forwards a few lines and no more: the diff of an edit, the first lines of a file
+that was read, the last lines a command printed, the names a search found. Two
+things are read from disk by the relay, and only then: the file an edit asks permission for (to show its diff —
 it is never written), and the end of the session's transcript at the start and
 end of a turn (for the conversation's title and Claude's last message). That
 transcript's format is Claude Code's own: if it changes, the title and the last
@@ -216,7 +244,7 @@ app:
   to each screen: a project, a run in progress, a failing build, the comments.
 - `dev/claude-preview.html` plays a made-up Claude Code session through the
   island's own hook handler: a file being written, a question, a permission
-  request with its diff, the end of a turn.
+  request with its diff, the end of a turn, several sessions at once.
 
 `npm run pack` leaves two files in `windows/release/`, the same names the release
 workflow publishes:

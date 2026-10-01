@@ -4,8 +4,7 @@
 
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
-import { Ticker } from "./ticker";
-import { CLAUDE_ID, State, type AgentTask } from "../core/state";
+import { CLAUDE_ID, State, TURN_DONE, type AgentTask, type ClaudeSession, type SessionStep } from "../core/state";
 import { VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
@@ -14,6 +13,8 @@ import { renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } 
 import { buildGithub, enterGithubPanel, newsFacts } from "./github";
 import { buildSession, sessionName, sessionTabs } from "./session";
 import { diffLine, fileKind, plusMinus, readPatch } from "./code";
+import { hasPreview, stepIcon, stepName, stepPreview } from "./step";
+import { COLOR } from "./palette";
 import type { IntegrationNews } from "../core/bridge";
 
 export interface ViewActions {
@@ -66,8 +67,65 @@ export interface ViewActions {
   pickSession(id: string): void;
 }
 
-/** With several sessions, the overview has a row of tabs under the ticker: this much taller. */
+/** With several sessions, the overview has a row of tabs under the session's card: this much taller. */
 const SESSION_TABS_ROOM = 24;
+/** Lines of a step's preview the overview has room for. */
+const NOW_LINES = 3;
+
+/** A reply's first line as plain words: what marks it as bold, a heading or code goes. */
+function firstWords(text: string | null): string | null {
+  return text?.split("\n").find((line) => line.trim())?.replace(/^#{1,6}\s+|\*\*|`/g, "").trim() ?? null;
+}
+
+/**
+ * What a session is doing now, in the two lines the overview gives it: the
+ * step by its icon and its name with what it is at, and a look at what it did
+ * — or, the turn over, "Done" with Claude's first words and what its last
+ * command printed.
+ */
+interface Now {
+  icon: Element;
+  label: string;
+  detail: string;
+  /** The colour the label takes when it says more than a tool's name. */
+  color: string | null;
+  /** The step whose preview fills the box, or the words that do. */
+  step: SessionStep | null;
+  words: string | null;
+}
+
+function nowOf(session: ClaudeSession): Now {
+  const steps = session.steps.filter((step) => step.tool !== TURN_DONE);
+  const last = steps.at(-1) ?? null;
+  const shown = [...steps].reverse().find(hasPreview) ?? null;
+  const oneLine = (text: string | null) => text?.split("\n")[0] ?? "";
+
+  if (session.question || session.approval) {
+    return {
+      icon: svg(ICONS.bang, 12), label: "Waiting", color: session.question ? COLOR.cyan : COLOR.amber,
+      detail: session.question ? "for your answer" : "for your permission", step: shown, words: null,
+    };
+  }
+  if (session.state === "error") {
+    return { icon: svg(ICONS.xmark, 11), label: "Stopped", color: COLOR.red, detail: "on an error", step: shown, words: session.lines.at(-1) ?? null };
+  }
+  const over = session.steps.at(-1)?.tool === TURN_DONE || session.state === "finished";
+  if (over) {
+    // What the turn ended on: its last command's output says more than its last edit.
+    const ran = [...steps].reverse().find((step) => step.kind === "command" && step.result != null) ?? null;
+    return {
+      icon: svg(ICONS.check, 12, { stroke: 3 }), label: "Done", color: COLOR.green,
+      detail: firstWords(session.answer) ?? "", step: ran ?? shown, words: session.answer,
+    };
+  }
+  if (last) {
+    return { icon: stepIcon(last), label: stepName(last), color: null, detail: oneLine(last.target), step: hasPreview(last) ? last : shown, words: null };
+  }
+  if (session.state === "thinking") {
+    return { icon: svg(ICONS.bubble, 12), label: "Thinking", color: null, detail: "", step: null, words: session.asked };
+  }
+  return { icon: svg(ICONS.bubble, 12), label: "Open", color: null, detail: "waiting for a prompt", step: null, words: null };
+}
 
 
 export interface ViewHost {
@@ -79,8 +137,6 @@ export interface ViewHost {
   tick?(nowMs: number): void;
   /** How tall the island should be for what the view holds now, when that varies. */
   readonly height?: number;
-  /** True while the view has a motion of its own to finish: the frame loop waits for it. */
-  readonly animating?: boolean;
 }
 
 // ── Shared pieces ─────────────────────────────────────────────────────────────
@@ -180,14 +236,14 @@ export function buildHeader(actions: ViewActions): ViewHost {
 // ── Overview ──────────────────────────────────────────────────────────────────
 
 function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
-  let ticker = new Ticker();
   const who = h("div", { class: "who" });
-  // With several sessions open: under the ticker, a tab for each of the others.
+  // What the session is doing: the step, and under it a look at what it did.
+  const nowLine = h("div", { class: "now-line" });
+  const nowBox = h("div", { class: "now-box" });
+  // With several sessions open: a tab for each of the others.
   const tabs = h("div", { class: "sess-tabs" });
   const syncTabs = sessionTabs(tabs, (id) => actions.pickSession(id));
-  const tickerBody = h("div", { class: "card-body" }, who, ticker.el, tabs);
-  /** The session the ticker is scrolling the steps of. */
-  let tickerOf = "";
+  const sessionBody = h("div", { class: "card-body" }, who, nowLine, nowBox, tabs);
   let tabbed = false;
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
@@ -196,11 +252,11 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
     svg(ICONS.arrowUpRight, 8),
   );
   const left = card(null, leftBody, jump);
-  // A session at work is its card: a click anywhere on it opens the session
-  // panel — the file being written, the steps, the changes. The ↗ stays the
-  // way out to where the session runs.
+  // A session is its card: a click anywhere on it opens the session panel —
+  // the file being written, the steps, the changes. The ↗ stays the way out
+  // to where the session runs.
   left.addEventListener("click", (e) => {
-    if (mode !== "ticker" || (e.target as Element).closest("button")) return;
+    if (mode !== "session" || (e.target as Element).closest("button")) return;
     actions.blip();
     actions.openSession();
   });
@@ -215,8 +271,9 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
   let pillIds = "";
   let detailOpen = false;
   let lastFocus: string | null = null;
-  let mode: "ticker" | "card" | null = null;
+  let mode: "session" | "card" | null = null;
   let cardKey = "";
+  let nowKey = "";
 
   const hooks: IntegrationCardHooks = {
     get detailOpen() {
@@ -241,14 +298,33 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
     },
   };
 
+  /** The session's two lines, redrawn only when what they show has changed. */
+  function syncNow(session: ClaudeSession) {
+    const now = nowOf(session);
+    const step = now.step;
+    const next = [
+      session.id, now.label, now.detail, step?.tool, step?.target, step?.state,
+      step?.result?.text.length, step?.patch?.length, step ? "" : now.words,
+    ].join("~");
+    if (next === nowKey) return;
+    nowKey = next;
+    clear(nowLine);
+    const label = h("b", { text: now.label });
+    const icon = h("i", {}, now.icon);
+    if (now.color) {
+      label.style.color = now.color;
+      icon.style.color = now.color;
+    }
+    nowLine.append(icon, label, h("span", { class: now.color ? "said" : "at", text: now.detail, title: now.detail }));
+    clear(nowBox);
+    const preview = step ? stepPreview(step, NOW_LINES) : null;
+    if (preview) nowBox.append(preview);
+    else if (now.words) nowBox.append(h("div", { class: "now-words", text: now.words.trim() }));
+    nowBox.style.display = nowBox.firstChild ? "" : "none";
+  }
+
   return {
     el,
-    tick(nowMs: number) {
-      if (mode === "ticker") ticker.tick(nowMs);
-    },
-    get animating() {
-      return mode === "ticker" && ticker.animating;
-    },
     get height() {
       return tabbed ? VIEW_LAYOUTS.overview.height + SESSION_TABS_ROOM : undefined;
     },
@@ -261,50 +337,34 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
         mode = null;
       }
 
-      // VS Code with a live Claude Code session keeps the ticker; every other
-      // pill shows its own card, exactly like IntegrationCardView.
-      const sessionActive =
-        task?.id === CLAUDE_ID && (task.state !== "idle" || task.steps.length > 0 || State.sessions.length > 1);
+      // The Claude pill with a session to show has the session's card; every
+      // other pill shows its own, exactly like IntegrationCardView.
+      const session = task?.id === CLAUDE_ID && State.session.id ? State.session : null;
 
-      if (task && sessionActive) {
-        if (mode !== "ticker") {
+      if (task && session) {
+        if (mode !== "session") {
           clear(leftBody);
-          leftBody.append(tickerBody);
-          mode = "ticker";
+          leftBody.append(sessionBody);
+          mode = "session";
           cardKey = "";
         }
         clear(who);
-        const title = task.id === CLAUDE_ID ? State.session.title : null;
         who.append(
           dot(task.color, 7),
           // A conversation that has a title goes by it, as it does in Claude
           // Code, with its project after; untitled, the project is its name.
-          h("span", { class: "name", text: title ?? task.name, title: title ?? "" }),
-          h("span", { class: "tool", text: title ? task.name : task.source === "claudeCode" ? "Claude Code" : "n8n" }),
+          h("span", { class: "name", text: session.title ?? task.name, title: session.title ?? "" }),
+          h("span", { class: "tool", text: session.title ? task.name : "Claude Code" }),
         );
-        // Once the session has written something, how much says more than
-        // how many steps it took: the lines added and removed take the count's place.
-        const files = task.id === CLAUDE_ID ? State.sessionFiles : [];
+        // What the session has written so far: the lines added and removed.
+        const files = State.sessionFiles;
         if (files.length > 0) {
           const size = plusMinus(files.reduce((n, f) => n + f.additions, 0), files.reduce((n, f) => n + f.deletions, 0));
           size.classList.add("count");
           size.title = files.length === 1 ? "1 file changed" : `${files.length} files changed`;
           who.append(size);
-        } else if (task.steps.length > 1) {
-          who.append(h("span", {
-            class: "count",
-            text: `${Math.min(task.stepIndex + 1, task.steps.length)}/${task.steps.length}`,
-          }));
         }
-        // Another session in front: its steps are not the next ones of the
-        // session before it, and a new ticker starts on them without scrolling.
-        if (State.frontId !== tickerOf) {
-          tickerOf = State.frontId;
-          const fresh = new Ticker();
-          ticker.el.replaceWith(fresh.el);
-          ticker = fresh;
-        }
-        ticker.sync(task);
+        syncNow(session);
       } else if (task) {
         const info = State.integrations[task.id];
         const key = [
@@ -322,14 +382,14 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
 
       jump.style.display = detailOpen ? "none" : "";
 
-      const nowTabbed = syncTabs() > 0 && mode === "ticker";
+      const nowTabbed = syncTabs() > 0 && mode === "session";
       if (nowTabbed !== tabbed) {
         tabbed = nowTabbed;
         onResize();
       }
 
-      left.classList.toggle("opens", mode === "ticker");
-      left.title = mode === "ticker" ? "Open the session" : "";
+      left.classList.toggle("opens", mode === "session");
+      left.title = mode === "session" ? "Open the session" : "";
 
       const others = State.otherTasks.slice(0, 4);
       const pillKey = others.map((t) => `${t.id}:${t.pillBadge ?? ""}`).join("|");
@@ -790,12 +850,7 @@ function buildFinished(actions: ViewActions): ViewHost {
       }
       who.append(sessionWho("finished"));
       // What Claude said to end its turn, its first line; its last step otherwise.
-      const answer = State.session.answer
-        ?.split("\n")
-        .find((line) => line.trim())
-        // Its first line as words: what marks it as bold, a heading or code goes.
-        ?.replace(/^#{1,6}\s+|\*\*|`/g, "")
-        .trim();
+      const answer = firstWords(State.session.answer);
       title.textContent = answer ?? State.focusTask?.steps.at(-1) ?? "Session finished";
       // An answer is a sentence, not a step: smaller, and two lines at most.
       title.classList.toggle("said", answer != null);

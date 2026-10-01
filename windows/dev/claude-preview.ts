@@ -84,7 +84,40 @@ edit("windows\\src\\island\\hooks.ts", [
   "       break;",
 ].join("\n"));
 edit("windows\\README.md", ["@@ -40,3 +40,4 @@", " ## Claude Code", "+Answer Claude's questions from the island.", " "].join("\n"));
-hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "cargo test -p coucou-hook" } });
+const TESTS = [
+  "running 12 tests",
+  "test tests::an_edit_becomes_a_diff_with_its_line_numbers ... ok",
+  "test tests::a_command_shows_the_end_of_what_it_printed ... ok",
+  "test tests::a_file_read_shows_its_first_lines_with_their_numbers ... ok",
+  "",
+  "test result: ok. 12 passed; 0 failed; finished in 0.01s",
+].join("\n");
+const run = (command: string, printed: string | null) => {
+  const tool_input = { command };
+  hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input });
+  if (printed != null) {
+    hook({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input, result: { text: printed, start: null, truncated: false, tail: true } });
+  }
+};
+const read = (file: string, start: number, text: string) => {
+  const tool_input = { file_path: `${CWD}\\${file}` };
+  hook({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input });
+  hook({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input, result: { text, start, truncated: true, tail: false } });
+};
+// `step`: where the session is at — reading, running its tests, or (the default) done running them.
+const at = params.get("step");
+if (at === "read") {
+  read("windows\\src\\island\\hooks.ts", 96, [
+    "/** The session an event comes from, told what the event says of it. */",
+    "function sessionOf(island: Island, payload: HookPayload): ClaudeSession {",
+    "  const id = payload.session_id || ANONYMOUS;",
+    "  let session = State.sessions.find((s) => s.id === id);",
+    "  if (!session) {",
+    "    session = newSession(id);",
+  ].join("\n"));
+} else {
+  run("cargo test -p coucou-hook", at === "run" ? null : TESTS);
+}
 
 // `sessions`: two more conversations going on behind the first — one at work
 // in a terminal, one that has just finished in the Claude app.
