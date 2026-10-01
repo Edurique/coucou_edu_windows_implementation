@@ -2232,10 +2232,21 @@ button.gh-step:hover {
   font: 700 7.5px/1 var(--font);
   font-style: normal;
   white-space: nowrap;
+  /* Centred on the line's box, a badge reads as standing on the name's
+     baseline: a name's weight is in its lower-case letters, which sit below
+     the middle of the line. A pixel down puts both on one axis. */
+  translate: 0 1px;
 }
 
 .gh-ext.dark {
   color: #15171a;
+}
+
+/* The same for the dot that flags a changed file, which belongs at the
+   middle of the lower-case letters like a bullet. */
+.gh-file > .dot,
+.gh-tab-flag > .dot {
+  translate: 0 1.5px;
 }
 
 /* In the column, a mark among marks: a size down. */
