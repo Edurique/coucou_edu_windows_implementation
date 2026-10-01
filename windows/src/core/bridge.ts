@@ -493,7 +493,11 @@ export interface IntegrationNews {
    * facts for the card — the step that broke, who merged — and the run or
    * the pull request to go to.
    */
-  open?: { target?: GithubTarget; label?: string; url?: string; title?: string; facts?: NewsFact[] };
+  open?: {
+    target?: GithubTarget; label?: string; url?: string; title?: string; facts?: NewsFact[];
+    /** What kind of news this is, as the card says it: "pull request opened". */
+    says?: string;
+  };
 }
 
 export interface IntegrationUpdate {

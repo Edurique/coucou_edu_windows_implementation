@@ -109,9 +109,10 @@ one click away. The arrow at the top right opens the same thing on github.com.
 
 <img src="screenshots/github-news-merge.png" width="640" alt="The island opened on a merged pull request, with Open and OK">
 
-Two things make Mochi speak up, with a sound and a card: **a build of yours
-breaks**, and **a pull request of yours is merged**. **Open** goes straight to the
-run or the pull request. **OK** folds the island and leaves the news on the pill
+Three things make Mochi speak up, with a sound and a card: **a build of yours
+breaks**, **a pull request of yours is merged**, and **somebody opens a pull
+request on one of your projects** — the ones the Projects tab lists. **Open**
+goes straight to the run or the pull request. **OK** folds the island and leaves the news on the pill
 for five minutes, so it isn't lost: click Mochi, or the card, to go to it.
 
 ### The token

@@ -518,6 +518,8 @@ struct Cache {
     /// When the latest merge known happened, so only a later one is news.
     /// None until the first refresh, which announces nothing.
     merged: Option<String>,
+    /// The same for the latest pull request somebody else opened.
+    opened: Option<String>,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
@@ -598,6 +600,44 @@ fn parse_merged(viewer: &Value) -> Vec<Merged> {
         .collect()
 }
 
+/// A pull request open on one of your projects.
+struct Opened {
+    repo: String,
+    number: u64,
+    title: String,
+    url: String,
+    /// None for an account that is gone.
+    author: Option<String>,
+    /// ISO 8601 in UTC, as GitHub sends it: these sort as text.
+    at: String,
+}
+
+/// The newest open pull requests of every project the panel lists. A project
+/// you own that you also contributed to comes back in both lists: once is enough.
+fn parse_opened(viewer: &Value) -> Vec<Opened> {
+    let mut seen = std::collections::HashSet::new();
+    nodes(viewer, "/repositories/nodes")
+        .iter()
+        .chain(nodes(viewer, "/repositoriesContributedTo/nodes"))
+        .filter(|project| !flag(project, "isArchived"))
+        .filter_map(|project| Some((text(project.get("nameWithOwner"))?, nodes(project, "/pullRequests/nodes"))))
+        .flat_map(|(repo, pulls)| {
+            pulls.iter().filter_map(move |n| {
+                let number = n.get("number")?.as_u64()?;
+                Some(Opened {
+                    number,
+                    title: text(n.get("title")).unwrap_or_default(),
+                    url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{repo}/pull/{number}")),
+                    author: text(n.pointer("/author/login")),
+                    at: text(n.get("createdAt"))?,
+                    repo: repo.clone(),
+                })
+            })
+        })
+        .filter(|pull| seen.insert((pull.repo.clone(), pull.number)))
+        .collect()
+}
+
 /// A piece of news, and what to ask GitHub about to say more of it on the card.
 type News = (IntegrationEvent, Target);
 
@@ -616,7 +656,7 @@ fn broke(before: &[Repo], now: &[Repo]) -> Option<News> {
             success: false,
             label: format!("{} failed on {}", build.workflow, short_name(&repo.full_name)),
             detail: build.branch.clone(),
-            open: Some(json!({ "target": target, "label": build.workflow, "url": build.url })),
+            open: Some(json!({ "target": target, "label": build.workflow, "url": build.url, "says": "a build broke" })),
         };
         Some((event, target))
     })
@@ -639,9 +679,47 @@ fn went_in(seen: Option<&str>, merged: &[Merged]) -> Option<News> {
             "label": format!("#{}", pull.number),
             "url": pull.url,
             "title": format!("#{} {}", pull.number, pull.title),
+            "says": "pull request merged",
         })),
     };
     Some((event, target))
+}
+
+/// A pull request somebody else opened on one of your projects since the last
+/// look: later than the latest one known (`seen`), which is None on the first
+/// refresh — it only learns how things stand. One of your own is not news to you.
+fn came_in(seen: Option<&str>, opened: &[Opened], login: &str) -> Option<News> {
+    let seen = seen?;
+    let pull = opened
+        .iter()
+        .filter(|p| p.at.as_str() > seen && p.author.as_deref() != Some(login))
+        .max_by(|a, b| a.at.cmp(&b.at))?;
+    let target = Target::Pull { repo: pull.repo.clone(), number: pull.number };
+    let event = IntegrationEvent {
+        success: true,
+        label: format!("#{} opened on {}", pull.number, short_name(&pull.repo)),
+        detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
+        open: Some(json!({
+            "target": target,
+            "label": format!("#{}", pull.number),
+            "url": pull.url,
+            "title": format!("#{} {}", pull.number, pull.title),
+            "says": "pull request opened",
+        })),
+    };
+    Some((event, target))
+}
+
+/// What the card says under a pull request somebody opened: where, by whom, how big.
+fn opened_facts(pull: &crate::github_detail::PullDetail) -> Vec<Value> {
+    let mut facts = vec![json!({ "kind": "repo", "text": short_name(&pull.repo) })];
+    if let Some(who) = &pull.author {
+        facts.push(json!({ "kind": "by", "verb": "opened by", "text": who }));
+    }
+    facts.push(json!({ "kind": "diff", "additions": pull.additions, "deletions": pull.deletions }));
+    let files = pull.changed_files;
+    facts.push(json!({ "kind": "files", "text": if files == 1 { "1 file".to_string() } else { format!("{files} files") } }));
+    facts
 }
 
 /// What the card says under a merged pull request: where, by whom, how big.
@@ -696,7 +774,8 @@ async fn tell(event: &mut IntegrationEvent, target: Target) {
             open["title"] = json!(event.label);
             open["facts"] = json!(failure_facts(&run));
         }
-        Ok(Detail::Pull(pull)) => open["facts"] = json!(merge_facts(&pull)),
+        Ok(Detail::Pull(pull)) if pull.state == "merged" => open["facts"] = json!(merge_facts(&pull)),
+        Ok(Detail::Pull(pull)) => open["facts"] = json!(opened_facts(&pull)),
         _ => {}
     }
 }
@@ -733,7 +812,7 @@ pub async fn refresh(app: AppHandle) {
     let Some(_busy) = BusyGuard::take() else { return };
 
     match fetch().await {
-        Ok((snapshot, merged)) => {
+        Ok((snapshot, merged, opened)) => {
             log::line(format!(
                 "github refresh: {} events, {} projects, {} with a build, {} contribution days",
                 snapshot.activity.len(),
@@ -748,10 +827,14 @@ pub async fn refresh(app: AppHandle) {
                     .snapshot
                     .as_ref()
                     .and_then(|before| broke(&before.repos, &snapshot.repos))
-                    .or_else(|| went_in(cache.merged.as_deref(), &merged));
+                    .or_else(|| went_in(cache.merged.as_deref(), &merged))
+                    .or_else(|| came_in(cache.opened.as_deref(), &opened, &snapshot.login));
                 let newest = merged.iter().map(|m| m.at.as_str()).max().unwrap_or_default();
                 let seen = cache.merged.take().filter(|seen| seen.as_str() >= newest);
                 cache.merged = Some(seen.unwrap_or_else(|| newest.to_string()));
+                let newest = opened.iter().map(|p| p.at.as_str()).max().unwrap_or_default();
+                let seen = cache.opened.take().filter(|seen| seen.as_str() >= newest);
+                cache.opened = Some(seen.unwrap_or_else(|| newest.to_string()));
                 cache.snapshot = Some(snapshot);
                 news
             };
@@ -805,6 +888,8 @@ const STAR_REPOS: usize = 100;
 const CONTRIBUTED_REPOS: usize = MAX_REPOS * 2;
 /// Merged pull requests looked at for news.
 const MERGED_PULLS: usize = 5;
+/// Open pull requests looked at for news, the newest of each project.
+const OPENED_PULLS: usize = 3;
 /// How long a project whose runs the token may not read is left alone.
 const REFUSED_FOR: u64 = 3600;
 
@@ -814,7 +899,7 @@ const REFUSED_FOR: u64 = 3600;
 /// contributed to elsewhere — as far as the token can see, which for a
 /// fine-grained token means your own repositories, organisations it was made
 /// for, and public ones — and asks for no more of them than it shows.
-const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!) { viewer { login url \
+const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!, $opened: Int!) { viewer { login url \
     contributionsCollection { contributionCalendar { totalContributions \
     weeks { firstDay contributionDays { contributionCount contributionLevel } } } } \
     starred: repositories(ownerAffiliations: OWNER, first: $stars, orderBy: {field: PUSHED_AT, direction: DESC}) { \
@@ -826,11 +911,16 @@ const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int
     merged: pullRequests(states: MERGED, first: $merged, orderBy: {field: UPDATED_AT, direction: DESC}) { \
     nodes { number title url mergedAt repository { nameWithOwner } } } } } \
     fragment Project on Repository { nameWithOwner url isPrivate isArchived pushedAt \
-    stargazerCount primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } }";
+    stargazerCount primaryLanguage { name color } \
+    pullRequests(states: OPEN, first: $opened, orderBy: {field: CREATED_AT, direction: DESC}) { \
+    totalCount nodes { number title url createdAt author { login } } } }";
 
-async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
+async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>), GhError> {
     let gh = Gh::from_store()?;
-    let sizes = json!({ "stars": STAR_REPOS, "owned": MAX_REPOS, "contributed": CONTRIBUTED_REPOS, "merged": MERGED_PULLS });
+    let sizes = json!({
+        "stars": STAR_REPOS, "owned": MAX_REPOS, "contributed": CONTRIBUTED_REPOS,
+        "merged": MERGED_PULLS, "opened": OPENED_PULLS,
+    });
     let (data, _) = gh.graphql_with(PROFILE_QUERY, sizes).await?;
     let viewer = data.get("viewer").ok_or(GhError::BadResponse)?;
 
@@ -846,6 +936,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
     }
 
     let merged = parse_merged(viewer);
+    let opened = parse_opened(viewer);
     Ok((Snapshot {
         profile_url: text(viewer.get("url")).unwrap_or_else(|| format!("{WEB}/{login}")),
         contributions: parse_contributions(viewer.pointer("/contributionsCollection/contributionCalendar")),
@@ -854,7 +945,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
         activity,
         repos,
         fetched_at: unix_now() * 1000,
-    }, merged))
+    }, merged, opened))
 }
 
 fn parse_contributions(calendar: Option<&Value>) -> Option<Contributions> {
@@ -1759,6 +1850,33 @@ mod tests {
         assert!(went_in(Some("2026-09-30T18:00:00Z"), &merged).is_none());
         // An account with no merge yet hears of its first.
         assert!(went_in(Some(""), &merged).is_some());
+    }
+
+    #[test]
+    fn the_pill_hears_of_a_pull_request_somebody_else_opened() {
+        let pull = |number: u64, who: &str, at: &str| json!({ "number": number, "title": format!("Pull {number}"), "createdAt": at, "author": { "login": who } });
+        let project = |name: &str, pulls: Vec<Value>| json!({ "nameWithOwner": name, "pullRequests": { "totalCount": pulls.len(), "nodes": pulls } });
+        let opened = parse_opened(&json!({
+            "repositories": { "nodes": [project("edu/coucou", vec![
+                pull(8, "edu", "2026-10-01T16:00:00Z"),
+                pull(7, "kirzen", "2026-10-01T15:00:00Z"),
+            ])] },
+            // The same project again, as one contributed to, and one that is archived.
+            "repositoriesContributedTo": { "nodes": [
+                project("edu/coucou", vec![pull(7, "kirzen", "2026-10-01T15:00:00Z")]),
+                json!({ "nameWithOwner": "old/thing", "isArchived": true, "pullRequests": { "nodes": [pull(1, "kirzen", "2026-10-01T17:00:00Z")] } }),
+            ] },
+        }));
+        assert_eq!(opened.len(), 2);
+
+        // The first refresh only learns how things stand.
+        assert!(came_in(None, &opened, "edu").is_none());
+        // Opened since by somebody else: news, and it opens that pull request. Your own is not.
+        let (event, target) = came_in(Some("2026-10-01T14:00:00Z"), &opened, "edu").unwrap();
+        assert_eq!((event.success, event.label.as_str(), event.detail.as_deref()), (true, "#7 opened on coucou", Some("Pull 7")));
+        assert_eq!(target, Target::Pull { repo: "edu/coucou".into(), number: 7 });
+        // Nothing but your own since.
+        assert!(came_in(Some("2026-10-01T15:00:00Z"), &opened, "edu").is_none());
     }
 
     const NOW: u64 = 1_000_000;
