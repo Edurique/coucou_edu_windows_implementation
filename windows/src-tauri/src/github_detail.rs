@@ -1,6 +1,7 @@
 // GitHub, one level deeper: the sheet behind a line of activity — a pull
-// request, an issue, a push's commits, a release, a run of Actions — so that
-// GitHub's own site is the last place to go, not the first.
+// request and what was said on it, an issue, a push's commits, a release, a
+// run of Actions — so that GitHub's own site is the last place to go, not the
+// first.
 //
 // Fetched on the click only, never by the tick, and kept a minute. What to
 // fetch comes as a Target that github.rs built from GitHub's answers; it
@@ -37,6 +38,8 @@ pub enum Target {
     Project { repo: String },
     /// A run of Actions, from a CI line of a project, a pull request or a commit.
     Run { repo: String, id: u64 },
+    /// What was said on a pull request, from its sheet.
+    Comments { repo: String, number: u64 },
 }
 
 /// A line's sheet. `Locked` is a sheet the token may not read, with the
@@ -50,6 +53,7 @@ pub enum Detail {
     Commits(CommitsDetail),
     Release(ReleaseDetail),
     Run(RunDetail),
+    Comments(CommentsDetail),
     Locked { permission: &'static str },
 }
 
@@ -101,6 +105,8 @@ pub struct PullDetail {
     pub changed_files: i64,
     pub commits: i64,
     pub comments: i64,
+    /// Threads of comments on the lines of code.
+    pub threads: i64,
     /// approved, changes requested or review required.
     pub review: Option<&'static str>,
     pub reviewers: Vec<Review>,
@@ -251,6 +257,97 @@ pub struct Step {
     pub ended_at: Option<String>,
 }
 
+/// What was said on a pull request — its description, the comments, the
+/// reviews, the threads on its lines of code — oldest first, the way a
+/// conversation reads. To read only: the token cannot answer, and Coucou never
+/// asks for one that could.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentsDetail {
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub entries: Vec<Entry>,
+    /// Older comments, reviews or threads than the ones carried are on GitHub.
+    pub earlier: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Entry {
+    /// What the pull request says of itself.
+    Description(Remark),
+    Comment(Remark),
+    Review(Verdict),
+    Thread(Thread),
+}
+
+impl Entry {
+    /// When it was said; a thread, when it started.
+    fn at(&self) -> Option<&str> {
+        match self {
+            Entry::Description(r) | Entry::Comment(r) => r.at.as_deref(),
+            Entry::Review(v) => v.remark.at.as_deref(),
+            Entry::Thread(t) => t.remarks.first().and_then(|r| r.at.as_deref()),
+        }
+    }
+}
+
+/// Something somebody wrote.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Remark {
+    /// None for an account that is gone.
+    pub author: Option<String>,
+    /// Plain text, its lines kept; empty for a review that only gave a verdict.
+    pub body: String,
+    /// The text was cut to MAX_REMARK; the whole of it is at `url`.
+    pub cut: bool,
+    pub at: Option<String>,
+    pub url: String,
+}
+
+/// A review: its verdict, and what the reviewer wrote under it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Verdict {
+    /// approved, changes requested, commented or dismissed.
+    pub state: &'static str,
+    #[serde(flatten)]
+    pub remark: Remark,
+}
+
+/// Comments on one place in the code, and the replies under them.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Thread {
+    pub path: String,
+    /// The line it sits on in the file as it is now; None on a whole file, or
+    /// once the code under it has changed.
+    pub line: Option<u64>,
+    /// "left" on a line that was removed, "right" otherwise.
+    pub side: &'static str,
+    pub resolved: bool,
+    /// The code has changed since: the thread is about lines that are gone.
+    pub outdated: bool,
+    /// The lines it is about: the end of the hunk it was written on.
+    pub code: Vec<CodeLine>,
+    pub remarks: Vec<Remark>,
+    /// Replies beyond the ones carried.
+    pub more: u64,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeLine {
+    /// Its number in the file: the old one for a removed line.
+    pub number: Option<u64>,
+    /// "+", "-", or "" for a line that did not change.
+    pub sign: &'static str,
+    pub text: String,
+}
+
 const TTL: u64 = 60;
 /// A run still going is worth asking again sooner: its jobs finish one by one.
 const LIVE_TTL: u64 = 10;
@@ -263,6 +360,12 @@ const EXCERPT: usize = 320;
 const MAX_FILES: usize = 20;
 const MAX_PATCH: usize = 12_000;
 const MAX_COMMITS: u64 = 10;
+/// A comment is there to be read, so it gets more room than an excerpt; past
+/// this it is an essay, and GitHub has it.
+const MAX_REMARK: usize = 1600;
+/// Lines of code shown over a thread, and the most of one line.
+const CODE_LINES: usize = 4;
+const MAX_CODE: usize = 240;
 
 static CACHE: LazyLock<Mutex<HashMap<String, (u64, Detail)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -271,8 +374,20 @@ const PULL_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) 
     number title url state isDraft merged mergedAt createdAt closedAt \
     additions deletions changedFiles baseRefName headRefName headRefOid reviewDecision \
     author { login } mergedBy { login } commits { totalCount } comments { totalCount } \
+    reviewThreads { totalCount } \
     latestReviews(first: 6) { nodes { state author { login } } } \
     labels(first: 6) { nodes { name color } } } } }";
+
+/// The newest thirty of each kind, and ten replies a thread. `hunk` is the
+/// code a thread was written on, which only its first comment needs to say.
+const COMMENTS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
+    repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
+    number title url bodyText createdAt author { login } \
+    comments(last: 30) { totalCount nodes { url bodyText createdAt author { login } } } \
+    reviews(last: 30) { totalCount nodes { url state bodyText submittedAt author { login } } } \
+    reviewThreads(last: 30) { totalCount nodes { isResolved isOutdated path line diffSide \
+    hunk: comments(first: 1) { nodes { diffHunk } } \
+    comments(first: 10) { totalCount nodes { url bodyText createdAt author { login } } } } } } } }";
 
 const ISSUE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
     repository(owner: $owner, name: $name) { issue(number: $number) { \
@@ -300,6 +415,7 @@ pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
         }
         Target::Release { repo, tag } => release(&gh, repo, tag).await,
         Target::Run { repo, id } => run(&gh, repo, *id).await,
+        Target::Comments { repo, number } => comments(&gh, repo, *number).await,
         Target::Project { .. } => Err(GhError::BadResponse),
     };
     let detail = fetched.map_err(|e| e.message())?;
@@ -469,6 +585,7 @@ fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
         changed_files: count("/changedFiles"),
         commits: count("/commits/totalCount"),
         comments: count("/comments/totalCount"),
+        threads: count("/reviewThreads/totalCount"),
         review,
         reviewers,
         labels: labels(node),
@@ -480,6 +597,166 @@ fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
         ci: None,
         missing: Vec::new(),
     })
+}
+
+// ── What was said on a pull request ───────────────────────────────────────────
+
+async fn comments(gh: &Gh, repo: &str, number: u64) -> Result<Detail, GhError> {
+    let (owner, name) = owner_name(repo)?;
+    let (data, _) = gh
+        .graphql_with(COMMENTS_QUERY, json!({ "owner": owner, "name": name, "number": number }))
+        .await
+        .or_else(locked_on_refusal)?;
+    let Some(node) = data.pointer("/repository/pullRequest").filter(|n| !n.is_null()) else {
+        return Ok(Detail::Locked { permission: "Pull requests" });
+    };
+    parse_comments(repo, node).map(Detail::Comments).ok_or(GhError::BadResponse)
+}
+
+/// The nodes of one of a pull request's lists, and whether GitHub has more.
+fn listed<'a>(node: &'a Value, list: &str) -> (&'a [Value], bool) {
+    let nodes = node
+        .pointer(&format!("/{list}/nodes"))
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let total = node.pointer(&format!("/{list}/totalCount")).and_then(Value::as_u64).unwrap_or(0);
+    (nodes, total > nodes.len() as u64)
+}
+
+/// What a node says, by whom and when; `when` is the name of its date.
+fn remark(node: &Value, when: &str) -> Option<Remark> {
+    let (body, cut) = passage(node.get("bodyText").and_then(Value::as_str).unwrap_or(""));
+    Some(Remark {
+        author: text(node.pointer("/author/login")),
+        body,
+        cut,
+        at: text(node.get(when)),
+        url: text(node.get("url"))?,
+    })
+}
+
+fn parse_comments(repo: &str, node: &Value) -> Option<CommentsDetail> {
+    let mut entries = Vec::new();
+
+    let (comments, more_comments) = listed(node, "comments");
+    entries.extend(
+        comments
+            .iter()
+            .filter_map(|c| remark(c, "createdAt"))
+            .filter(|r| !r.body.is_empty())
+            .map(Entry::Comment),
+    );
+
+    let (reviews, more_reviews) = listed(node, "reviews");
+    entries.extend(reviews.iter().filter_map(|r| {
+        let state = match r.get("state").and_then(Value::as_str)? {
+            "APPROVED" => "approved",
+            "CHANGES_REQUESTED" => "changes requested",
+            "COMMENTED" => "commented",
+            "DISMISSED" => "dismissed",
+            // PENDING: not sent yet, and only its author can see it.
+            _ => return None,
+        };
+        let remark = remark(r, "submittedAt")?;
+        // A review that only commented, without a word of its own, is the
+        // envelope of its comments on the code: the threads say it all.
+        if state == "commented" && remark.body.is_empty() {
+            return None;
+        }
+        Some(Entry::Review(Verdict { state, remark }))
+    }));
+
+    let (threads, more_threads) = listed(node, "reviewThreads");
+    entries.extend(threads.iter().filter_map(parse_thread).map(Entry::Thread));
+
+    // GitHub's timestamps are all UTC in one format: they sort as text.
+    entries.sort_by(|a, b| a.at().cmp(&b.at()));
+
+    // The description opens the conversation, whenever it was last edited.
+    if let Some(description) = remark(node, "createdAt").filter(|r| !r.body.is_empty()) {
+        entries.insert(0, Entry::Description(description));
+    }
+
+    Some(CommentsDetail {
+        repo: repo.to_string(),
+        number: node.get("number")?.as_u64()?,
+        title: text(node.get("title")).unwrap_or_else(|| "Untitled".into()),
+        url: text(node.get("url"))?,
+        entries,
+        earlier: more_comments || more_reviews || more_threads,
+    })
+}
+
+fn parse_thread(thread: &Value) -> Option<Thread> {
+    let (replies, _) = listed(thread, "comments");
+    let remarks: Vec<Remark> = replies
+        .iter()
+        .filter_map(|c| remark(c, "createdAt"))
+        .filter(|r| !r.body.is_empty())
+        .collect();
+    if remarks.is_empty() {
+        return None;
+    }
+    let total = thread.pointer("/comments/totalCount").and_then(Value::as_u64).unwrap_or(0);
+    let flag = |name: &str| thread.get(name).and_then(Value::as_bool).unwrap_or(false);
+    Some(Thread {
+        path: text(thread.get("path"))?,
+        line: thread.get("line").and_then(Value::as_u64),
+        side: match thread.get("diffSide").and_then(Value::as_str) {
+            Some("LEFT") => "left",
+            _ => "right",
+        },
+        resolved: flag("isResolved"),
+        outdated: flag("isOutdated"),
+        code: thread
+            .pointer("/hunk/nodes/0/diffHunk")
+            .and_then(Value::as_str)
+            .map(hunk_tail)
+            .unwrap_or_default(),
+        more: total.saturating_sub(replies.len() as u64),
+        remarks,
+    })
+}
+
+/// "@@ -12,9 +14,11 @@ fn x()" → (12, 14): where a hunk starts, old and new.
+fn hunk_starts(header: &str) -> Option<(u64, u64)> {
+    let mut parts = header.strip_prefix("@@ -")?.split(' ');
+    let old = parts.next()?.split(',').next()?.parse().ok()?;
+    let new = parts.next()?.strip_prefix('+')?.split(',').next()?.parse().ok()?;
+    Some((old, new))
+}
+
+/// The last lines of the hunk a thread was written on — the code it is about
+/// — each with its number in the file.
+fn hunk_tail(hunk: &str) -> Vec<CodeLine> {
+    let mut starts: Option<(u64, u64)> = None;
+    let mut lines = Vec::new();
+    for raw in hunk.lines() {
+        if let Some(found) = hunk_starts(raw) {
+            starts = Some(found);
+            continue;
+        }
+        let mut chars = raw.chars();
+        let sign = match chars.next() {
+            Some('+') => "+",
+            Some('-') => "-",
+            // "\ No newline at end of file", or nothing at all.
+            Some('\\') | None => continue,
+            _ => "",
+        };
+        let number = starts.as_mut().map(|(old, new)| {
+            let number = if sign == "-" { *old } else { *new };
+            if sign != "+" {
+                *old += 1;
+            }
+            if sign != "-" {
+                *new += 1;
+            }
+            number
+        });
+        lines.push(CodeLine { number, sign, text: chars.as_str().chars().take(MAX_CODE).collect() });
+    }
+    lines.split_off(lines.len().saturating_sub(CODE_LINES))
 }
 
 // ── Issue ─────────────────────────────────────────────────────────────────────
@@ -837,6 +1114,32 @@ fn plain(markdown: &str) -> String {
     out.replace(['*', '`', '_'], "")
 }
 
+/// What somebody wrote, as they wrote it — its lines kept, unlike an excerpt —
+/// with runs of blank lines closed up, cut at a word past MAX_REMARK
+/// characters. Says whether it was cut.
+fn passage(text: &str) -> (String, bool) {
+    let mut out = String::with_capacity(text.len().min(MAX_REMARK * 4));
+    let mut blank = false;
+    for line in text.trim().lines() {
+        let line = line.trim_end();
+        // One blank line parts two paragraphs; more is only air.
+        if line.is_empty() && blank {
+            continue;
+        }
+        blank = line.is_empty();
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    if out.chars().count() <= MAX_REMARK {
+        return (out, false);
+    }
+    let cut: String = out.chars().take(MAX_REMARK).collect();
+    let at_word = cut.rfind(char::is_whitespace).map_or(cut.as_str(), |i| &cut[..i]);
+    (format!("{}…", at_word.trim_end()), true)
+}
+
 /// One paragraph, whitespace collapsed, cut at a word near EXCERPT characters.
 fn excerpt(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -873,7 +1176,7 @@ mod tests {
             "additions": 320, "deletions": 40, "changedFiles": 9,
             "baseRefName": "main", "headRefName": "windows-github-panel", "reviewDecision": "APPROVED",
             "author": { "login": "edu" }, "mergedBy": { "login": "louis" },
-            "commits": { "totalCount": 5 }, "comments": { "totalCount": 3 },
+            "commits": { "totalCount": 5 }, "comments": { "totalCount": 3 }, "reviewThreads": { "totalCount": 2 },
             "latestReviews": { "nodes": [
                 { "state": "APPROVED", "author": { "login": "louis" } },
                 { "state": "PENDING", "author": { "login": "ghost" } },
@@ -883,7 +1186,7 @@ mod tests {
         let pr = parse_pull("edu/coucou", &node).unwrap();
         assert_eq!((pr.state, pr.review, pr.merged_by.as_deref()), ("merged", Some("approved"), Some("louis")));
         assert_eq!((pr.base.as_deref(), pr.head.as_deref()), (Some("main"), Some("windows-github-panel")));
-        assert_eq!((pr.commits, pr.comments, pr.changed_files), (5, 3, 9));
+        assert_eq!((pr.commits, pr.comments, pr.threads, pr.changed_files), (5, 3, 2, 9));
         assert_eq!(pr.reviewers, [Review { login: "louis".into(), state: "approved" }]);
         assert_eq!(pr.labels, [Label { name: "windows".into(), color: "#0e8a16".into() }]);
     }
@@ -1018,6 +1321,91 @@ mod tests {
     fn a_run_target_travels_by_its_id() {
         let target: Target = serde_json::from_value(json!({ "kind": "run", "repo": "edu/coucou", "id": 77 })).unwrap();
         assert_eq!(target, Target::Run { repo: "edu/coucou".into(), id: 77 });
+    }
+
+    /// A pull request as COMMENTS_QUERY gets it back.
+    fn talked_over() -> Value {
+        let said = |who: &str, at: &str, body: &str| json!({
+            "url": format!("https://github.com/edu/coucou/pull/12#{at}"), "bodyText": body,
+            "createdAt": at, "submittedAt": at, "author": { "login": who },
+        });
+        let mut approval = said("louis", "2026-09-30T12:00:00Z", "");
+        approval["state"] = json!("APPROVED");
+        let mut envelope = said("louis", "2026-09-30T10:30:00Z", "");
+        envelope["state"] = json!("COMMENTED");
+        let mut pending = said("edu", "2026-09-30T13:00:00Z", "Not sent yet");
+        pending["state"] = json!("PENDING");
+        json!({
+            "number": 12, "title": "Panel", "url": "https://github.com/edu/coucou/pull/12",
+            "bodyText": "Adds the panel.\n\n\n\nCloses #4.  ", "createdAt": "2026-09-30T09:00:00Z",
+            "author": { "login": "edu" },
+            "comments": { "totalCount": 31, "nodes": [
+                said("edu", "2026-09-30T11:00:00Z", "Fixed in the last commit."),
+                { "url": "https://github.com/edu/coucou/pull/12#ghost", "bodyText": "Nice.", "createdAt": "2026-09-30T08:00:00Z", "author": null },
+            ]},
+            "reviews": { "totalCount": 3, "nodes": [approval, envelope, pending] },
+            "reviewThreads": { "totalCount": 1, "nodes": [{
+                "isResolved": true, "isOutdated": false, "path": "windows/src/views/github.ts", "line": 14, "diffSide": "RIGHT",
+                "hunk": { "nodes": [{ "diffHunk": "@@ -10,4 +10,5 @@ function x() {\n a\n-b\n+c\n+d\n e" }] },
+                "comments": { "totalCount": 12, "nodes": [
+                    said("louis", "2026-09-30T10:30:00Z", "Why twice?"),
+                    said("edu", "2026-09-30T10:45:00Z", "Good catch."),
+                ]},
+            }]},
+        })
+    }
+
+    #[test]
+    fn a_conversation_reads_oldest_first_after_the_description() {
+        let c = parse_comments("edu/coucou", &talked_over()).unwrap();
+        let kinds: Vec<&str> = c.entries.iter().map(|e| match e {
+            Entry::Description(_) => "description",
+            Entry::Comment(_) => "comment",
+            Entry::Review(_) => "review",
+            Entry::Thread(_) => "thread",
+        }).collect();
+        // The empty "commented" review and the pending one are not said to anyone.
+        assert_eq!(kinds, ["description", "comment", "thread", "comment", "review"]);
+        assert!(c.earlier);
+        let Entry::Description(d) = &c.entries[0] else { panic!() };
+        assert_eq!((d.author.as_deref(), d.body.as_str(), d.cut), (Some("edu"), "Adds the panel.\n\nCloses #4.", false));
+        // An account that is gone still said what it said.
+        let Entry::Comment(ghost) = &c.entries[1] else { panic!() };
+        assert_eq!((ghost.author.as_deref(), ghost.body.as_str()), (None, "Nice."));
+        let Entry::Review(v) = &c.entries[4] else { panic!() };
+        assert_eq!((v.state, v.remark.body.as_str()), ("approved", ""));
+    }
+
+    #[test]
+    fn a_thread_carries_its_place_its_code_and_its_replies() {
+        let c = parse_comments("edu/coucou", &talked_over()).unwrap();
+        let Entry::Thread(t) = &c.entries[2] else { panic!() };
+        assert_eq!((t.path.as_str(), t.line, t.side, t.resolved, t.outdated), ("windows/src/views/github.ts", Some(14), "right", true, false));
+        assert_eq!((t.remarks.len(), t.more), (2, 10));
+        // The end of the hunk, numbered as in the file: old numbers for what went.
+        let code: Vec<(Option<u64>, &str, &str)> = t.code.iter().map(|l| (l.number, l.sign, l.text.as_str())).collect();
+        assert_eq!(code, [(Some(11), "-", "b"), (Some(11), "+", "c"), (Some(12), "+", "d"), (Some(13), "", "e")]);
+    }
+
+    #[test]
+    fn an_entry_travels_flat_under_its_kind() {
+        let c = parse_comments("edu/coucou", &talked_over()).unwrap();
+        let review = serde_json::to_value(&c.entries[4]).unwrap();
+        assert_eq!((review["kind"].as_str(), review["state"].as_str(), review["author"].as_str()), (Some("review"), Some("approved"), Some("louis")));
+        let thread = serde_json::to_value(&c.entries[2]).unwrap();
+        assert_eq!((thread["kind"].as_str(), thread["code"][0]["sign"].as_str()), (Some("thread"), Some("-")));
+        let target: Target = serde_json::from_value(json!({ "kind": "comments", "repo": "edu/coucou", "number": 12 })).unwrap();
+        assert_eq!(target, Target::Comments { repo: "edu/coucou".into(), number: 12 });
+    }
+
+    #[test]
+    fn a_long_comment_keeps_its_lines_and_is_cut_at_a_word() {
+        let (short, cut) = passage("  One.\r\n\r\n\r\nTwo.  \n");
+        assert_eq!((short.as_str(), cut), ("One.\n\nTwo.", false));
+        let (long, cut) = passage(&"word ".repeat(1000));
+        assert!(cut && long.ends_with("word…") && long.chars().count() <= MAX_REMARK + 1);
+        // A hunk whose header is missing still shows its lines, unnumbered.
+        assert_eq!(hunk_tail("+x\n\\ No newline at end of file"), [CodeLine { number: None, sign: "+", text: "x".into() }]);
     }
 
     #[test]

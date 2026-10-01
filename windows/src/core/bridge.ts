@@ -122,7 +122,8 @@ export type GithubTarget =
     }
   | { kind: "release"; repo: string; tag: string }
   | { kind: "project"; repo: string }
-  | { kind: "run"; repo: string; id: number };
+  | { kind: "run"; repo: string; id: number }
+  | { kind: "comments"; repo: string; number: number };
 
 export interface GithubFile {
   path: string;
@@ -157,6 +158,8 @@ export interface GithubPullDetail {
   changedFiles: number;
   commits: number;
   comments: number;
+  /** Threads of comments on the lines of code. */
+  threads: number;
   review: "approved" | "changes requested" | "review required" | null;
   reviewers: { login: string; state: "approved" | "changes requested" | "commented" | "dismissed" }[];
   labels: GithubLabel[];
@@ -263,6 +266,51 @@ export interface GithubRunDetail extends GithubTimed {
   moreJobs: number;
 }
 
+/** Something somebody wrote on a pull request. */
+export interface GithubRemark {
+  /** Null for an account that is gone. */
+  author: string | null;
+  /** Plain text, its lines kept; empty for a review that only gave a verdict. */
+  body: string;
+  /** The text was cut short; the whole of it is at `url`. */
+  cut: boolean;
+  at: string | null;
+  url: string;
+}
+
+/** Comments on one place in the code, and the replies under them. */
+export interface GithubThread {
+  path: string;
+  /** Null on a whole file, or once the code under it has changed. */
+  line: number | null;
+  /** "left" on a line that was removed. */
+  side: "left" | "right";
+  resolved: boolean;
+  outdated: boolean;
+  /** The lines it is about, numbered as in the file. */
+  code: { number: number | null; sign: "+" | "-" | ""; text: string }[];
+  remarks: GithubRemark[];
+  /** Replies beyond the ones carried. */
+  more: number;
+}
+
+export type GithubEntry =
+  | ({ kind: "description" | "comment" } & GithubRemark)
+  | ({ kind: "review"; state: "approved" | "changes requested" | "commented" | "dismissed" } & GithubRemark)
+  | ({ kind: "thread" } & GithubThread);
+
+/** What was said on a pull request, oldest first. To read only. */
+export interface GithubCommentsDetail {
+  kind: "comments";
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  entries: GithubEntry[];
+  /** Older ones than these are on GitHub. */
+  earlier: boolean;
+}
+
 /** A line's sheet, or the permission the token lacks to read it. */
 export type GithubDetail =
   | GithubPullDetail
@@ -270,6 +318,7 @@ export type GithubDetail =
   | GithubCommitsDetail
   | GithubReleaseDetail
   | GithubRunDetail
+  | GithubCommentsDetail
   | { kind: "locked"; permission: string };
 
 /** A clicked day of the contribution graph — the Day struct in github.rs. */

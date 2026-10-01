@@ -5,15 +5,16 @@
 // rather than from GitHub's look.
 
 import { h, svg, clear, dot } from "./dom";
-import { extBadge, fileKind, highlight } from "./code";
+import { extBadge, fileKind, highlight, type FileKind } from "./code";
 import { ICONS } from "./icons";
 import { ACTIVITY_STYLE, compact, githubData, repoName, timeAgo } from "./integrations";
 import {
   Bridge,
-  type GithubActivity, type GithubBuild, type GithubCommitsDetail, type GithubContributions, type GithubData, type GithubDay,
-  type GithubDeploy, type GithubDetail, type GithubFile, type GithubIssueDetail, type GithubJob, type GithubLabel,
-  type GithubProject, type GithubPull, type GithubPullDetail, type GithubReleaseDetail, type GithubRepo,
-  type GithubRunDetail, type GithubTarget, type GithubTimed, type IntegrationNews,
+  type GithubActivity, type GithubBuild, type GithubCommentsDetail, type GithubCommitsDetail, type GithubContributions,
+  type GithubData, type GithubDay, type GithubDeploy, type GithubDetail, type GithubEntry, type GithubFile,
+  type GithubIssueDetail, type GithubJob, type GithubLabel, type GithubProject, type GithubPull, type GithubPullDetail,
+  type GithubReleaseDetail, type GithubRemark, type GithubRepo, type GithubRunDetail, type GithubTarget,
+  type GithubThread, type GithubTimed, type IntegrationNews,
 } from "../core/bridge";
 import type { BotEmoteName, BotStateName } from "../core/layout";
 import { hexToRGB, type BotEngine } from "../mochi/engine";
@@ -83,6 +84,8 @@ interface DiffScreen {
   file: GithubFile;
   /** The GitHub page the diff belongs to. */
   url: string;
+  /** Opened from a thread of comments: the diff opens on its line, the thread under it. */
+  thread?: GithubThread;
 }
 
 /**
@@ -353,8 +356,34 @@ function openTarget(target: GithubTarget | null, label: string, url: string) {
   void loadDetail(screen, false);
 }
 
-function openDiff(file: GithubFile, url: string) {
-  push({ type: "diff", file, url });
+function openDiff(file: GithubFile, url: string, thread?: GithubThread) {
+  push({ type: "diff", file, url, thread });
+}
+
+/** What was said on a pull request, from its sheet. */
+function openComments(p: GithubPullDetail) {
+  openTarget({ kind: "comments", repo: p.repo, number: p.number }, `#${p.number}`, p.url);
+}
+
+/**
+ * A thread, in its file's diff. The diff comes from the pull request's sheet,
+ * the screen the comments were opened from; a file that sheet doesn't carry,
+ * or a thread whose line is gone, is read on GitHub.
+ */
+function threadFile(c: GithubCommentsDetail, thread: GithubThread): { file: GithubFile; url: string } | null {
+  for (const s of stack) {
+    const p = s.type === "detail" && s.data?.kind === "pull" ? s.data : null;
+    if (!p || p.repo !== c.repo || p.number !== c.number) continue;
+    const file = p.files.find((f) => f.path === thread.path);
+    if (file?.patch && threadRow(file.patch, thread) != null) return { file, url: p.url };
+  }
+  return null;
+}
+
+function openThread(c: GithubCommentsDetail, thread: GithubThread) {
+  const found = threadFile(c, thread);
+  if (found) openDiff(found.file, found.url, thread);
+  else void Bridge.openUrl(thread.remarks[0]?.url ?? c.url);
 }
 
 /** A run of Actions: its jobs and how long each took. */
@@ -1210,6 +1239,179 @@ function runBlock(build: GithubBuild | null, missing: string[], repo: string): H
   });
 }
 
+// ── What was said on a pull request ───────────────────────────────────────────
+//
+// The description, the comments, the reviews and the threads on the code, in
+// the order they were said. To read: Coucou's token cannot write, so there is
+// nothing to answer with; the way out to GitHub is in the panel's head.
+
+/** A review asked for your eyes, like a question: Mochi's `question` cyan. */
+const TALK_COLOR = "#22D3EE";
+
+const VERDICT: Record<string, { say: string; color: string; icon: () => SVGSVGElement }> = {
+  approved: { say: "approved", color: "#34D399", icon: () => svg(ICONS.check, 10, { stroke: 2.4 }) },
+  "changes requested": { say: "requested changes", color: "#F5A524", icon: () => svg(ICONS.bang, 10) },
+  commented: { say: "reviewed", color: TALK_COLOR, icon: () => svg(ICONS.comment, 10, { stroke: 2 }) },
+  dismissed: { say: "review dismissed", color: "#6B7079", icon: () => svg(ICONS.dash, 9, { stroke: 3 }) },
+};
+
+/** Who, what they did if it has a word, and when. */
+function remarkHead(r: GithubRemark, did?: { say: string; color?: string }): HTMLElement {
+  const word = did ? h("span", { class: "gh-say-did", text: did.say }) : null;
+  if (word && did?.color) word.style.color = did.color;
+  return h(
+    "div",
+    { class: "gh-say-head" },
+    h("b", { text: r.author ?? "ghost" }),
+    word,
+    h("span", { class: "int-ago", text: r.at ? timeAgo(r.at) : "" }),
+  );
+}
+
+/** What they wrote, as they wrote it; a text cut short ends on its way to GitHub. */
+function remarkBody(r: GithubRemark): (HTMLElement | null)[] {
+  return [
+    r.body ? h("div", { class: "gh-say-body", text: r.body }) : null,
+    r.cut ? h("button", { class: "gh-host", text: "The rest is on GitHub", onclick: () => void Bridge.openUrl(r.url) }) : null,
+  ];
+}
+
+/** A description, a comment or a review: a round mark, then who said what. */
+function sayRow(entry: Exclude<GithubEntry, { kind: "thread" }>): HTMLElement {
+  const verdict = entry.kind === "review" ? VERDICT[entry.state] : null;
+  const icon = verdict
+    ? roundIcon(verdict.color, verdict.icon())
+    : entry.kind === "description"
+      ? roundIcon("#9398A1", svg(ICONS.pullRequest, 10, { stroke: 2.2 }))
+      : roundIcon(TALK_COLOR, svg(ICONS.comment, 10, { stroke: 2 }));
+  const did = verdict ?? (entry.kind === "description" ? { say: "opened the pull request" } : undefined);
+  return h(
+    "div",
+    { class: "gh-block gh-say" },
+    icon,
+    h("div", { class: "gh-block-text" }, remarkHead(entry, did), ...remarkBody(entry)),
+  );
+}
+
+/** A line of a diff: its number, its sign, its code in an editor's colours. */
+function diffLine(number: number | null, sign: string, text: string, kind: FileKind): HTMLElement {
+  const change = sign === "+" ? "add" : sign === "-" ? "del" : "ctx";
+  return h(
+    "div",
+    { class: `gh-diff-line ${change}` },
+    h("span", { class: "n", text: number == null ? "" : String(number) }),
+    h("span", { class: "s", text: change === "ctx" ? "" : sign }),
+    // A line that is gone is only struck through — its words, not the
+    // indentation before them; the others are coloured.
+    change === "del"
+      ? h("span", { class: "t" }, text.slice(0, text.length - text.trimStart().length), h("span", { class: "gone", text: text.trimStart() }))
+      : h("span", { class: "t" }, ...highlight(text, kind)),
+  );
+}
+
+/**
+ * The lines a thread is about, without the indentation they all share: the
+ * panel is narrow, and what matters here is the line, not how deep it sits.
+ */
+function dedent(code: GithubThread["code"]): GithubThread["code"] {
+  const depths = code.filter((l) => l.text.trim()).map((l) => l.text.length - l.text.trimStart().length);
+  const shared = depths.length ? Math.min(...depths) : 0;
+  return shared > 0 ? code.map((l) => ({ ...l, text: l.text.slice(shared) })) : code;
+}
+
+/** The replies of a thread, one under the other. */
+function threadTalk(thread: GithubThread): HTMLElement {
+  const more = thread.more === 1 ? "1 more reply on GitHub" : `${thread.more} more replies on GitHub`;
+  const last = thread.remarks[thread.remarks.length - 1];
+  return h(
+    "div",
+    { class: "gh-thread-talk" },
+    ...thread.remarks.map((r) => h("div", { class: "gh-thread-say" }, remarkHead(r), ...remarkBody(r))),
+    thread.more > 0 && last
+      ? h("button", { class: "gh-host", text: more, onclick: () => void Bridge.openUrl(last.url) })
+      : null,
+  );
+}
+
+/**
+ * A thread on the code: the file and the line it sits on, the lines it is
+ * about, then what was said. Its head opens the file's diff on that line. A
+ * resolved thread is settled: it folds to its head and who took part.
+ */
+function threadBlock(c: GithubCommentsDetail, thread: GithubThread): HTMLElement {
+  const { dir, base } = splitPath(thread.path);
+  const state = thread.resolved ? "resolved" : thread.outdated ? "outdated" : null;
+  const head = h(
+    "button",
+    {
+      class: "gh-thread-head",
+      title: threadFile(c, thread) ? `Open ${base} on this line` : "Open this thread on GitHub",
+      onclick: () => openThread(c, thread),
+    },
+    h("i", { class: "gh-row-icon" }, extBadge(thread.path)),
+    h("span", { class: "gh-row-title", text: thread.line != null ? `${base}:${thread.line}` : base }),
+    h("span", { class: "gh-row-where", text: dir }),
+    state ? h("span", { class: "gh-file-status", text: state }) : null,
+  );
+  if (thread.resolved) {
+    const people = [...new Set(thread.remarks.map((r) => r.author ?? "ghost"))];
+    const count = thread.remarks.length + thread.more;
+    return h(
+      "div",
+      { class: "gh-thread resolved" },
+      head,
+      h("div", { class: "gh-thread-sum", text: `${people.join(", ")} · ${count === 1 ? "1 comment" : `${count} comments`}` }),
+    );
+  }
+  const kind = fileKind(thread.path);
+  return h(
+    "div",
+    { class: "gh-thread" },
+    head,
+    thread.code.length
+      ? h("div", { class: "gh-diff" }, ...dedent(thread.code).map((l) => diffLine(l.number, l.sign, l.text, kind)))
+      : null,
+    threadTalk(thread),
+  );
+}
+
+function commentsView(c: GithubCommentsDetail, login: string): HTMLElement {
+  const said = c.entries.filter((e) => e.kind !== "description" && e.kind !== "thread").length;
+  const threads = c.entries.filter((e) => e.kind === "thread");
+  const open = threads.filter((t) => t.kind === "thread" && !t.resolved).length;
+  return h(
+    "div",
+    { class: "gh-sheet" },
+    titleRow(`#${c.number} ${c.title}`),
+    facts(
+      c.repo, login,
+      said > 0 && (said === 1 ? "1 comment" : `${said} comments`),
+      threads.length > 0 && `${threads.length} on the code`,
+      threads.length > 0 && (open === 0 ? "all resolved" : `${open} to resolve`),
+    ),
+    c.earlier
+      ? h("button", { class: "gh-host", text: "Earlier ones are on GitHub", onclick: () => void Bridge.openUrl(c.url) })
+      : null,
+    ...c.entries.map((entry) => (entry.kind === "thread" ? threadBlock(c, entry) : sayRow(entry))),
+    said + threads.length === 0
+      ? h("div", { class: "int-empty", text: c.entries.length ? "Nobody has commented yet." : "No description, and nobody has commented yet." })
+      : null,
+  );
+}
+
+/** The way into what was said, from the pull request's sheet. */
+function commentsBlock(p: GithubPullDetail): HTMLElement {
+  const total = p.comments + p.threads;
+  return block({
+    icon: roundIcon(total > 0 ? TALK_COLOR : "#9398A1", svg(ICONS.comment, 10, { stroke: 2 })),
+    title: total === 0 ? "No comments yet" : total === 1 ? "1 comment" : `${total} comments`,
+    sub: total === 0
+      ? line("Its description is in here")
+      : line(p.comments > 0 && `${p.comments} in the conversation`, p.threads > 0 && `${p.threads} on the code`),
+    open: () => openComments(p),
+  });
+}
+
 const REVIEW_TITLE: Record<string, string> = {
   approved: "Approved",
   "changes requested": "Changes requested",
@@ -1258,7 +1460,6 @@ function pullView(p: GithubPullDetail, login: string, screen: DetailScreen): HTM
         ? `closed ${ago(p.closedAt)}`
         : p.createdAt && `opened ${ago(p.createdAt)}`;
   const commits = p.commits === 1 ? "1 commit" : `${p.commits} commits`;
-  const comments = p.comments === 1 ? "1 comment" : `${p.comments} comments`;
   return h(
     "div",
     { class: "gh-sheet" },
@@ -1268,11 +1469,12 @@ function pullView(p: GithubPullDetail, login: string, screen: DetailScreen): HTM
     runBlock(p.ci, p.missing, p.repo),
     ...ciJobs(screen),
     reviewBlock(p),
+    commentsBlock(p),
     block({
       icon: roundIcon("#9398A1", svg(ICONS.doc, 10)),
       title: `${p.changedFiles} file${p.changedFiles === 1 ? "" : "s"} changed`,
       right: plusMinus(p.additions, p.deletions),
-      sub: line(commits, p.comments > 0 && comments),
+      sub: line(commits),
     }),
     ...fileList(p.files, p.url, "Files"),
   );
@@ -1630,6 +1832,8 @@ function detailView(d: GithubDetail, login: string, screen: DetailScreen): HTMLE
       return releaseView(d, login);
     case "run":
       return runView(d, login, screen);
+    case "comments":
+      return commentsView(d, login);
     case "locked":
       return h(
         "div",
@@ -1653,6 +1857,7 @@ function detailMood(d: GithubDetail): BotEmoteName | null {
       return "proud";
     case "run":
       return d.state === "failure" ? "surprised" : d.state === "success" ? "proud" : null;
+    case "comments":
     case "locked":
       return null;
   }
@@ -1737,6 +1942,8 @@ function screenLook(screen: Screen): ScreenLook {
         color: d?.kind === "run" ? BUILD_STYLE[d.state].color : NEUTRAL,
         icon: () => svg(ICONS.timer, 11),
       };
+    case "comments":
+      return { label: "Comments", color: TALK_COLOR, icon: () => svg(ICONS.comment, 10, { stroke: 2.2 }) };
   }
 }
 
@@ -1756,7 +1963,16 @@ function detailHead(screen: DetailScreen): string {
     case "run":
       // The workflow's name: the line that opened it said it already.
       return screen.label;
+    case "comments":
+      return "Comments";
   }
+}
+
+/** Where a sheet sits, for the right of the panel's head. */
+function detailWhere(screen: DetailScreen, login: string): string {
+  const repo = repoName(screen.target.repo, login);
+  // The comments are a pull request's: say which.
+  return screen.target.kind === "comments" ? `#${screen.target.number} · ${repo}` : repo;
 }
 
 // ── A file's diff ─────────────────────────────────────────────────────────────
@@ -1769,7 +1985,37 @@ function detailHead(screen: DetailScreen): string {
 
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/;
 
-function diffView(file: GithubFile, url: string): HTMLElement {
+/**
+ * Which row of a patch a thread sits on — counting only the rows that are
+ * lines of code — or null when the patch doesn't reach that line. A thread on
+ * the left is on a line that was removed, numbered as in the old file.
+ */
+function threadRow(patch: string, thread: GithubThread): number | null {
+  if (thread.line == null || thread.outdated) return null;
+  let oldLine = 0;
+  let newLine = 0;
+  let row = 0;
+  for (const raw of patch.split("\n")) {
+    const hunk = HUNK.exec(raw);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      continue;
+    }
+    const sign = raw.charAt(0);
+    if (sign === "\\" || raw === "") continue;
+    const here = thread.side === "left"
+      ? sign !== "+" && oldLine === thread.line
+      : sign !== "-" && newLine === thread.line;
+    if (here) return row;
+    if (sign !== "+") oldLine++;
+    if (sign !== "-") newLine++;
+    row++;
+  }
+  return null;
+}
+
+function diffView(file: GithubFile, url: string, thread?: GithubThread): HTMLElement {
   if (!file.patch) {
     return h(
       "div",
@@ -1780,8 +2026,10 @@ function diffView(file: GithubFile, url: string): HTMLElement {
 
   const kind = fileKind(file.path);
   const diff = h("div", { class: "gh-diff" });
+  const noted = thread ? threadRow(file.patch, thread) : null;
   let oldLine = 0;
   let newLine = 0;
+  let row = 0;
   let first = true;
   for (const raw of file.patch.split("\n")) {
     const hunk = HUNK.exec(raw);
@@ -1802,32 +2050,23 @@ function diffView(file: GithubFile, url: string): HTMLElement {
     const sign = raw.charAt(0);
     // "\ No newline at end of file": true of the file, nothing to read.
     if (sign === "\\" || raw === "") continue;
-    const text = raw.slice(1);
-    let change = "ctx";
     let number: number;
     if (sign === "+") {
-      change = "add";
       number = newLine++;
     } else if (sign === "-") {
-      change = "del";
       number = oldLine++;
     } else {
       number = newLine++;
       oldLine++;
     }
-    diff.append(
-      h(
-        "div",
-        { class: `gh-diff-line ${change}` },
-        h("span", { class: "n", text: String(number) }),
-        h("span", { class: "s", text: change === "ctx" ? "" : sign }),
-        // A line that is gone is only struck through — its words, not the
-        // indentation before them; the others are coloured.
-        change === "del"
-          ? h("span", { class: "t" }, text.slice(0, text.length - text.trimStart().length), h("span", { class: "gone", text: text.trimStart() }))
-          : h("span", { class: "t" }, ...highlight(text, kind)),
-      ),
-    );
+    const line = diffLine(number, sign === "+" || sign === "-" ? sign : "", raw.slice(1), kind);
+    diff.append(line);
+    // The line a thread is about, and the thread under it, as on GitHub.
+    if (thread && row === noted) {
+      line.classList.add("noted");
+      diff.append(h("div", { class: "gh-diff-note" }, threadTalk(thread)));
+    }
+    row++;
   }
   return h(
     "div",
@@ -2164,12 +2403,15 @@ export function buildGithub(actions: ViewActions): ViewHost {
 
   /** The screen drawn last: drawn again (a refresh), it keeps its scroll. */
   let drawn: Screen | null = null;
+  /** Lines of code left above a thread's line when its diff opens on it, in px. */
+  const NOTE_LEAD = 52;
 
   /** A screen of the stack takes the list's place; the head names what it shows. */
   function drawScreen(screen: Screen, login: string) {
     clear(status);
     listTab = null;
-    const scroll = screen === drawn ? list.scrollTop : 0;
+    const fresh = screen !== drawn;
+    const scroll = fresh ? 0 : list.scrollTop;
     drawn = screen;
     clearList();
     const look = screenLook(screen);
@@ -2192,7 +2434,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       who.classList.add("file");
       aside.append(statusWord(screen.file), plusMinus(screen.file.additions, screen.file.deletions));
       list.classList.add("gh-edge");
-      list.append(diffView(screen.file, screen.url));
+      list.append(diffView(screen.file, screen.url, screen.thread));
     } else if (screen.type === "project") {
       who.textContent = repoName(screen.fullName, login);
       sub.textContent = kind(screen.data?.languages[0]?.name ?? "");
@@ -2206,7 +2448,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       }
     } else {
       who.textContent = detailHead(screen);
-      sub.textContent = kind(repoName(screen.target.repo, login));
+      sub.textContent = kind(detailWhere(screen, login));
       if (screen.error) status.append(dot(GITHUB_RED, 5), h("span", { text: screen.error }));
       if (screen.data) {
         const content = detailView(screen.data, login, screen);
@@ -2217,6 +2459,12 @@ export function buildGithub(actions: ViewActions): ViewHost {
       }
     }
     list.scrollTop = scroll;
+    // A diff opened from a thread opens on the thread's line, a little down
+    // from the top so the lines before it say where it sits.
+    const noted = fresh ? list.querySelector<HTMLElement>(".gh-diff-line.noted") : null;
+    if (noted) {
+      list.scrollTop = noted.getBoundingClientRect().top - list.getBoundingClientRect().top - NOTE_LEAD;
+    }
     updateFade();
   }
 

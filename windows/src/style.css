@@ -2562,6 +2562,146 @@ button.gh-step:hover {
 .gh-diff .hl-y { color: #ffcb6b; }
 .gh-diff .hl-m { color: #5c6370; font-style: italic; }
 
+/* ── GitHub panel: what was said on a pull request ──────────────────────── */
+
+/* Who, what they did, when: one line over what they wrote. */
+.gh-say-head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font: 400 10.5px var(--font);
+  color: var(--dim-2);
+}
+
+.gh-say-head b {
+  font: 600 11.5px var(--font);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.gh-say-did {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.gh-say-head .int-ago {
+  margin-left: auto;
+  padding-left: 6px;
+}
+
+/* The words as they were written: their lines kept, and free to be copied. */
+.gh-say-body {
+  font: 400 11.5px/1.45 var(--font);
+  color: #c5c8cd;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.gh-say .gh-host,
+.gh-thread-talk .gh-host {
+  align-self: flex-start;
+}
+
+/* A thread on the code: the block's tile, with the lines it is about let into
+   it on the panel's own ground, like a window onto the file. */
+.gh-thread {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card), #fff 3.5%);
+  overflow: hidden;
+}
+
+.gh-thread-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 9px 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background 0.12s ease-out;
+}
+
+.gh-thread-head:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* The badge in a column of its own, as in a list of files. */
+.gh-thread-head .gh-row-icon {
+  width: 24px;
+  justify-items: start;
+}
+
+.gh-thread-head .gh-row-title {
+  font: 400 11px var(--mono);
+}
+
+.gh-thread-head .gh-file-status {
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+.gh-thread > .gh-diff {
+  padding: 4px 0;
+  background: var(--card-flat);
+}
+
+.gh-thread-talk {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 9px;
+}
+
+.gh-thread-say {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* Settled: its head, who took part, and nothing more. */
+.gh-thread.resolved {
+  background: transparent;
+}
+
+.gh-thread.resolved .gh-row-title {
+  color: var(--dim-2);
+}
+
+.gh-thread-sum {
+  padding: 0 9px 6px 39px;
+  margin-top: -3px;
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In a file's diff: the line a thread is about wears the comments' cyan, and
+   the thread sits under it, in from the gutter. */
+.gh-diff-line.noted {
+  border-left-color: #22d3ee;
+  box-shadow: inset 0 -1px rgba(34, 211, 238, 0.35);
+}
+
+.gh-diff-note {
+  margin: 0 10px 6px 36px;
+  border-radius: 0 0 9px 9px;
+  background: color-mix(in srgb, var(--card), #fff 3.5%);
+  user-select: none;
+}
+
 /* ── GitHub panel: a project's sheet ────────────────────────────────────── */
 
 .gh-sheet {

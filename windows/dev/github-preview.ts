@@ -4,9 +4,9 @@
 
 import "../src/style.css";
 import {
-  Bridge, type GithubActivity, type GithubBuild, type GithubData, type GithubDay, type GithubDetail,
-  type GithubFile, type GithubJob, type GithubProject, type GithubPullDetail, type GithubRepo, type GithubRunDetail,
-  type GithubStep, type GithubTarget,
+  Bridge, type GithubActivity, type GithubBuild, type GithubCommentsDetail, type GithubData, type GithubDay,
+  type GithubDetail, type GithubFile, type GithubJob, type GithubProject, type GithubPullDetail, type GithubRemark,
+  type GithubRepo, type GithubRunDetail, type GithubStep, type GithubTarget,
 } from "../src/core/bridge";
 import { State } from "../src/core/state";
 import { Island } from "../src/island/island";
@@ -160,12 +160,59 @@ function playedRun(): GithubRunDetail {
   };
 }
 
+// What was said on the pull request: a description, a thread still open on a
+// line of the first file's diff, a review asking for changes, a thread settled,
+// one on code that has changed since, an answer, an approval.
+const said = (author: string | null, minutes: number, body: string, cut = false): GithubRemark => ({
+  author, body, cut, at: minutesAgo(minutes), url: "https://github.com",
+});
+const comments: GithubCommentsDetail = {
+  kind: "comments", repo: "mochi/coucou", number: 12, title: "GitHub panel for the Windows island", url: "https://github.com",
+  earlier: params.has("earlier"),
+  entries: params.has("quiet") ? [] : [
+    { kind: "description", ...said("mochi", 60 * 50, "Turns the GitHub pill into a panel: the year's activity, each project's sheet, and the sheet behind every line.\n\nEverything is fetched on the click, by the Rust side, with a read-only token.") },
+    {
+      kind: "thread", path: "windows/src/views/github.ts", line: 16, side: "right", resolved: false, outdated: false, more: 0,
+      code: [
+        { number: 13, sign: "+", text: "  if (day) stopSearching(day);" },
+        { number: 14, sign: "+", text: "  day = null;" },
+        { number: 15, sign: "+", text: "  clearStack();" },
+        { number: 16, sign: "+", text: "  touch();" },
+      ],
+      remarks: [
+        said("louis", 60 * 30, "Is this touch() needed? clearStack() already drops the sheets."),
+        said("mochi", 60 * 29, "It is: the view only redraws when its key changes, and a sheet dropped without a new stamp stayed on screen."),
+      ],
+    },
+    { kind: "review", state: "changes requested", ...said("louis", 60 * 28, "Nearly there. Two things on the code, and the panel should not poll while the island is hidden.") },
+    {
+      kind: "thread", path: "windows/src/style.css", line: 46, side: "right", resolved: true, outdated: false, more: 2,
+      code: [{ number: 46, sign: "+", text: "  // A line of activity opens its sheet; GitHub is the last resort." }],
+      remarks: [said("kirzen", 60 * 27, "Typo."), said("mochi", 60 * 26, "Fixed.")],
+    },
+    {
+      kind: "thread", path: "windows/src-tauri/src/github_detail.rs", line: null, side: "right", resolved: false, outdated: true, more: 0,
+      code: [
+        { number: 286, sign: "", text: "    if !force {" },
+        { number: 287, sign: "-", text: "        if let Some(cached) = CACHE.get(&key) {" },
+        { number: 287, sign: "+", text: "        if let Some((at, cached)) = CACHE.lock().unwrap().get(&key) {" },
+      ],
+      remarks: [said("louis", 60 * 26, "A minute of cache is fine here, but say so where the constant is.")],
+    },
+    { kind: "comment", ...said("mochi", 60 * 20, "Both fixed, and nothing is fetched on a timer any more: the sheets load on the click only.\n\nThe run under a pull request is the one exception, and only while the panel is open.") },
+    { kind: "comment", ...said(null, 60 * 12, "A very long comment, cut short by Coucou so the panel stays a panel…", true) },
+    { kind: "review", state: "approved", ...said("louis", 9, "") },
+  ],
+};
+
 const details: Record<GithubTarget["kind"], GithubDetail> = {
   run: runDetail,
+  comments,
   pull: {
     kind: "pull", repo: "mochi/coucou", number: 12, title: "GitHub panel for the Windows island", url: "https://github.com",
     state: "merged", author: "mochi", base: "main", head: "windows-github-panel",
-    additions: 1332, deletions: 64, changedFiles: 14, commits: 18, comments: 3, review: "approved",
+    additions: 1332, deletions: 64, changedFiles: 14, commits: 18,
+    comments: params.has("quiet") ? 0 : 3, threads: params.has("quiet") ? 0 : 3, review: "approved",
     reviewers: [{ login: "louis", state: "approved" }, { login: "kirzen", state: "commented" }],
     labels: [{ name: "windows", color: "#0e8a16" }, { name: "enhancement", color: "#a2eeef" }],
     files, createdAt: minutesAgo(60 * 50), mergedAt: minutesAgo(4), mergedBy: "louis", closedAt: minutesAgo(4),
@@ -363,12 +410,19 @@ if (params.get("tab") === "projects") {
   });
 }
 
-// `pr`: straight to the project's pull request, once its sheet is up.
+// `pr`: straight to the project's pull request, once its sheet is up. With
+// `talk`, on to what was said on it; `talk=code`, on to its first thread's line.
 if (params.has("pr")) {
-  const waitForSheet = window.setInterval(() => {
-    const pull = document.querySelectorAll<HTMLElement>(".gh-sheet .gh-block")[1];
-    if (!pull) return;
-    window.clearInterval(waitForSheet);
-    pull.click();
+  const steps = [
+    () => document.querySelectorAll<HTMLElement>(".gh-sheet .gh-block")[1],
+    ...(params.has("talk") ? [() => [...document.querySelectorAll<HTMLElement>(".gh-sheet button.gh-block")].find((b) => /in the conversation|No comments yet/.test(b.textContent ?? ""))] : []),
+    ...(params.get("talk") === "code" ? [() => document.querySelector<HTMLElement>(".gh-thread-head")] : []),
+  ];
+  const walk = window.setInterval(() => {
+    const next = steps[0]?.();
+    if (!next) return;
+    steps.shift();
+    next.click();
+    if (steps.length === 0) window.clearInterval(walk);
   }, 200);
 }
