@@ -18,7 +18,7 @@ import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { githubData } from "../views/integrations";
-import { dismissNews, followNews } from "./integrations";
+import { followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 
@@ -196,10 +196,6 @@ export class Island {
         State.notify();
       },
       followNews: () => followNews(this),
-      dismissNews: () => {
-        dismissNews();
-        this.collapse();
-      },
     };
 
     this.wakeStrip = h("div", { id: "wake-strip" });

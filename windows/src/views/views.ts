@@ -47,8 +47,6 @@ export interface ViewActions {
    * news any more: the pill goes back to rest. False when there was none.
    */
   followNews(): boolean;
-  /** The news at hand was read and needs nothing more: the island folds. */
-  dismissNews(): void;
 }
 
 export interface ViewHost {
@@ -389,7 +387,9 @@ function frontNews(): IntegrationNews | null {
 function newsActions(actions: ViewActions): HTMLElement {
   return h("div", { class: "actions" },
     btn("Open", "primary", () => actions.followNews()),
-    btn("OK", "secondary", () => actions.dismissNews()),
+    // OK only folds the island: the news stays on the pill until it is opened
+    // or gets old, in case it was closed too fast.
+    btn("OK", "secondary", () => actions.collapse()),
   );
 }
 

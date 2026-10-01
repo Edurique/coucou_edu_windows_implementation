@@ -48,9 +48,10 @@ function giveBack(id: string) {
 }
 
 /**
- * A pill's news is over — it got old, or it was seen, and news that was seen
- * is not news any more: the pill goes back to rest. Unless the user is being
- * taken to what it was about (`stay`), the front goes back to whoever had it.
+ * A pill's news is over — it got old, or it was opened, and news that was
+ * opened is not news any more: the pill goes back to rest. Unless the user is
+ * being taken to what it was about (`stay`), the front goes back to whoever
+ * had it.
  */
 function settle(id: string, stay = false) {
   const timer = clearTimers.get(id);
@@ -90,12 +91,6 @@ export function followNews(island: Island): boolean {
   settle(id, true);
   island.setView("github");
   return true;
-}
-
-/** The news was read and needs nothing more: OK on its card. */
-export function dismissNews() {
-  const id = newsId();
-  if (id) settle(id);
 }
 
 export function registerIntegrationHandlers(island: Island) {
