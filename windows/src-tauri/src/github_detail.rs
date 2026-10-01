@@ -8,15 +8,14 @@
 // travels through the island and back, so it is checked again here before any
 // of it reaches a URL or a query.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::github::{
-    build_state, first_line, flag, int, is_timestamp, parse_run, short_sha, split_full_name, text, unix_now, Build, Gh,
-    GhError, SHORT_SHA, UNTITLED, WEB, WORKFLOW,
+    build_state, first_line, flag, int, is_timestamp, nodes, parse_run, permission, pull_state, review_decision,
+    short_sha, split_full_name, text, unix_now, Build, Gh, GhError, Kept, SHORT_SHA, UNTITLED, WEB, WORKFLOW,
 };
 
 /// What a line of activity leads to.
@@ -122,7 +121,7 @@ pub struct PullDetail {
     pub closed_at: Option<String>,
     /// The newest Actions run on the pull request's last commit.
     pub ci: Option<Build>,
-    /// "actions" when the token may not read the runs.
+    /// The permission the token lacks to read the runs, when it does.
     pub missing: Vec<&'static str>,
 }
 
@@ -373,42 +372,54 @@ const MAX_REMARK: usize = 1600;
 const CODE_LINES: usize = 4;
 const MAX_CODE: usize = 240;
 
-static CACHE: LazyLock<Mutex<HashMap<String, (u64, Detail)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Reviewers and labels a pull request's sheet names; labels and assignees an issue's.
+const MAX_REVIEWERS: usize = 6;
+const MAX_LABELS: usize = 6;
+const MAX_ASSIGNEES: usize = 4;
+/// The newest comments, reviews and threads carried, of each kind, and the
+/// replies carried in a thread.
+const MAX_ENTRIES: usize = 30;
+const MAX_REPLIES: usize = 10;
 
-const PULL_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
+static CACHE: LazyLock<Kept<Detail>> = LazyLock::new(Kept::new);
+
+/// The token changed: what was read with the old one is not the new one's.
+pub(crate) fn forget() {
+    CACHE.clear();
+}
+
+const PULL_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $reviewers: Int!, $labels: Int!) { \
     repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
-    number title url state isDraft merged mergedAt createdAt closedAt \
+    number title url state isDraft mergedAt createdAt closedAt \
     additions deletions changedFiles baseRefName headRefName headRefOid reviewDecision \
     author { login } mergedBy { login } commits { totalCount } comments { totalCount } \
     reviewThreads { totalCount } \
-    latestReviews(first: 6) { nodes { state author { login } } } \
-    labels(first: 6) { nodes { name color } } } } }";
+    latestReviews(first: $reviewers) { nodes { state author { login } } } \
+    labels(first: $labels) { nodes { name color } } } } }";
 
-/// The newest thirty of each kind, and ten replies a thread. `hunk` is the
-/// code a thread was written on, which only its first comment needs to say.
-const COMMENTS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
+/// `hunk` is the code a thread was written on, which only its first comment
+/// needs to say.
+const COMMENTS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $entries: Int!, $replies: Int!) { \
     repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
     number title url bodyText createdAt author { login } \
-    comments(last: 30) { totalCount nodes { url bodyText createdAt author { login } } } \
-    reviews(last: 30) { totalCount nodes { url state bodyText submittedAt author { login } } } \
-    reviewThreads(last: 30) { totalCount nodes { isResolved isOutdated path line diffSide \
+    comments(last: $entries) { totalCount nodes { url bodyText createdAt author { login } } } \
+    reviews(last: $entries) { totalCount nodes { url state bodyText submittedAt author { login } } } \
+    reviewThreads(last: $entries) { totalCount nodes { isResolved isOutdated path line diffSide \
     hunk: comments(first: 1) { nodes { diffHunk } } \
-    comments(first: 10) { totalCount nodes { url bodyText createdAt author { login } } } } } } } }";
+    comments(first: $replies) { totalCount nodes { url bodyText createdAt author { login } } } } } } } }";
 
-const ISSUE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
+const ISSUE_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $labels: Int!, $assignees: Int!) { \
     repository(owner: $owner, name: $name) { issue(number: $number) { \
     number title url state stateReason createdAt closedAt bodyText author { login } \
-    comments { totalCount } labels(first: 6) { nodes { name color } } \
-    assignees(first: 4) { nodes { login } } } } }";
+    comments { totalCount } labels(first: $labels) { nodes { name color } } \
+    assignees(first: $assignees) { nodes { login } } } } }";
 
 pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
     let key = serde_json::to_string(&target).map_err(|e| e.to_string())?;
     let now = unix_now();
     if !force {
-        if let Some((at, cached)) = CACHE.lock().unwrap().get(&key) {
-            if now.saturating_sub(*at) < ttl(cached) {
-                return Ok(cached.clone());
-            }
+        if let Some(kept) = CACHE.fresh(&key, now, ttl) {
+            return Ok(kept);
         }
     }
 
@@ -425,7 +436,7 @@ pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
         Target::Project { .. } => Err(GhError::BadResponse),
     };
     let detail = fetched?;
-    CACHE.lock().unwrap().insert(key, (now, detail.clone()));
+    CACHE.keep(key, now, detail.clone());
     Ok(detail)
 }
 
@@ -446,7 +457,7 @@ async fn ci_for(gh: &Gh, repo: &str, sha: &str, missing: &mut Vec<&'static str>)
     match gh.get(&format!("/repos/{repo}/actions/runs?head_sha={sha}&per_page=1")).await {
         Ok(reply) => Ok(parse_run(&reply.json)),
         Err(GhError::Forbidden) => {
-            missing.push("actions");
+            missing.push(permission::ACTIONS);
             Ok(None)
         }
         Err(GhError::NotFound) => Ok(None),
@@ -454,17 +465,26 @@ async fn ci_for(gh: &Gh, repo: &str, sha: &str, missing: &mut Vec<&'static str>)
     }
 }
 
+/// A pull request or an issue (`field`) of a repository, by its number: its
+/// node in the answer, or None when the token may not read it. `sizes` are the
+/// query's own variables, on top of the three every such query takes.
+async fn numbered(gh: &Gh, query: &str, repo: &str, number: u64, field: &str, mut sizes: Value) -> Result<Option<Value>, GhError> {
+    let (owner, name) = owner_name(repo)?;
+    sizes["owner"] = json!(owner);
+    sizes["name"] = json!(name);
+    sizes["number"] = json!(number);
+    let (mut data, _) = gh.graphql_with(query, sizes).await.or_else(locked_on_refusal)?;
+    Ok(data.pointer_mut(&format!("/repository/{field}")).map(Value::take).filter(|n| !n.is_null()))
+}
+
 // ── Pull request ──────────────────────────────────────────────────────────────
 
 async fn pull(gh: &Gh, repo: &str, number: u64) -> Result<Detail, GhError> {
-    let (owner, name) = owner_name(repo)?;
-    let (data, _) = gh
-        .graphql_with(PULL_QUERY, json!({ "owner": owner, "name": name, "number": number }))
-        .await
-        .or_else(locked_on_refusal)?;
-    let Some(node) = data.pointer("/repository/pullRequest").filter(|n| !n.is_null()) else {
-        return Ok(Detail::Locked { permission: "Pull requests" });
+    let sizes = json!({ "reviewers": MAX_REVIEWERS, "labels": MAX_LABELS });
+    let Some(node) = numbered(gh, PULL_QUERY, repo, number, "pullRequest", sizes).await? else {
+        return Ok(Detail::Locked { permission: permission::PULL_REQUESTS });
     };
+    let node = &node;
     let mut detail = parse_pull(repo, node).ok_or(GhError::BadResponse)?;
     // The files with their diffs: GraphQL has no patch, the REST list does.
     match gh.get(&format!("/repos/{repo}/pulls/{number}/files?per_page={MAX_FILES}")).await {
@@ -488,20 +508,15 @@ fn locked_on_refusal(e: GhError) -> Result<(Value, Vec<Value>), GhError> {
 }
 
 fn labels(node: &Value) -> Vec<Label> {
-    node.pointer("/labels/nodes")
-        .and_then(Value::as_array)
-        .map(|labels| {
-            labels
-                .iter()
-                .filter_map(|l| {
-                    Some(Label {
-                        name: text(l.get("name"))?,
-                        color: format!("#{}", text(l.get("color")).unwrap_or_else(|| LABEL_GREY.into())),
-                    })
-                })
-                .collect()
+    nodes(node, "/labels/nodes")
+        .iter()
+        .filter_map(|l| {
+            Some(Label {
+                name: text(l.get("name"))?,
+                color: format!("#{}", text(l.get("color")).unwrap_or_else(|| LABEL_GREY.into())),
+            })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The `files` of a REST commit or pull request answer.
@@ -543,46 +558,30 @@ fn cut_patch(patch: String) -> (Option<String>, bool) {
     (Some(cut.to_string()), true)
 }
 
-fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
-    let merged = node.get("merged").and_then(Value::as_bool).unwrap_or(false);
-    let state = match (merged, node.get("state").and_then(Value::as_str)) {
-        (true, _) => "merged",
-        (false, Some("CLOSED")) => "closed",
-        _ if node.get("isDraft").and_then(Value::as_bool).unwrap_or(false) => "draft",
-        _ => "open",
-    };
-    let review = match node.get("reviewDecision").and_then(Value::as_str) {
-        Some("APPROVED") => Some("approved"),
-        Some("CHANGES_REQUESTED") => Some("changes requested"),
-        Some("REVIEW_REQUIRED") => Some("review required"),
+/// What a review said — approved, changes requested, commented or dismissed.
+/// None for one not sent yet (PENDING): only its author can see it.
+fn review_state(review: &Value) -> Option<&'static str> {
+    match review.get("state").and_then(Value::as_str)? {
+        "APPROVED" => Some("approved"),
+        "CHANGES_REQUESTED" => Some("changes requested"),
+        "COMMENTED" => Some("commented"),
+        "DISMISSED" => Some("dismissed"),
         _ => None,
-    };
-    let reviewers = node
-        .pointer("/latestReviews/nodes")
-        .and_then(Value::as_array)
-        .map(|reviews| {
-            reviews
-                .iter()
-                .filter_map(|r| {
-                    let state = match r.get("state").and_then(Value::as_str)? {
-                        "APPROVED" => "approved",
-                        "CHANGES_REQUESTED" => "changes requested",
-                        "COMMENTED" => "commented",
-                        "DISMISSED" => "dismissed",
-                        _ => return None,
-                    };
-                    Some(Review { login: text(r.pointer("/author/login"))?, state })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    }
+}
+
+fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
+    let reviewers = nodes(node, "/latestReviews/nodes")
+        .iter()
+        .filter_map(|r| Some(Review { login: text(r.pointer("/author/login"))?, state: review_state(r)? }))
+        .collect();
     let count = |path: &str| int(node, path);
     Some(PullDetail {
         repo: repo.to_string(),
         number: node.get("number")?.as_u64()?,
         title: text(node.get("title")).unwrap_or_else(|| UNTITLED.into()),
         url: text(node.get("url"))?,
-        state,
+        state: pull_state(node),
         author: text(node.pointer("/author/login")),
         base: text(node.get("baseRefName")),
         head: text(node.get("headRefName")),
@@ -592,7 +591,7 @@ fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
         commits: count("/commits/totalCount"),
         comments: count("/comments/totalCount"),
         threads: count("/reviewThreads/totalCount"),
-        review,
+        review: review_decision(node),
         reviewers,
         labels: labels(node),
         files: Vec::new(),
@@ -608,25 +607,18 @@ fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
 // ── What was said on a pull request ───────────────────────────────────────────
 
 async fn comments(gh: &Gh, repo: &str, number: u64) -> Result<Detail, GhError> {
-    let (owner, name) = owner_name(repo)?;
-    let (data, _) = gh
-        .graphql_with(COMMENTS_QUERY, json!({ "owner": owner, "name": name, "number": number }))
-        .await
-        .or_else(locked_on_refusal)?;
-    let Some(node) = data.pointer("/repository/pullRequest").filter(|n| !n.is_null()) else {
-        return Ok(Detail::Locked { permission: "Pull requests" });
+    let sizes = json!({ "entries": MAX_ENTRIES, "replies": MAX_REPLIES });
+    let Some(node) = numbered(gh, COMMENTS_QUERY, repo, number, "pullRequest", sizes).await? else {
+        return Ok(Detail::Locked { permission: permission::PULL_REQUESTS });
     };
-    parse_comments(repo, node).map(Detail::Comments).ok_or(GhError::BadResponse)
+    parse_comments(repo, &node).map(Detail::Comments).ok_or(GhError::BadResponse)
 }
 
 /// The nodes of one of a pull request's lists, and whether GitHub has more.
 fn listed<'a>(node: &'a Value, list: &str) -> (&'a [Value], bool) {
-    let nodes = node
-        .pointer(&format!("/{list}/nodes"))
-        .and_then(Value::as_array)
-        .map_or(&[][..], Vec::as_slice);
+    let carried = nodes(node, &format!("/{list}/nodes"));
     let total = node.pointer(&format!("/{list}/totalCount")).and_then(Value::as_u64).unwrap_or(0);
-    (nodes, total > nodes.len() as u64)
+    (carried, total > carried.len() as u64)
 }
 
 /// What a node says, by whom and when; `when` is the name of its date.
@@ -655,14 +647,7 @@ fn parse_comments(repo: &str, node: &Value) -> Option<CommentsDetail> {
 
     let (reviews, more_reviews) = listed(node, "reviews");
     entries.extend(reviews.iter().filter_map(|r| {
-        let state = match r.get("state").and_then(Value::as_str)? {
-            "APPROVED" => "approved",
-            "CHANGES_REQUESTED" => "changes requested",
-            "COMMENTED" => "commented",
-            "DISMISSED" => "dismissed",
-            // PENDING: not sent yet, and only its author can see it.
-            _ => return None,
-        };
+        let state = review_state(r)?;
         let remark = remark(r, "submittedAt")?;
         // A review that only commented, without a word of its own, is the
         // envelope of its comments on the code: the threads say it all.
@@ -767,15 +752,11 @@ fn hunk_tail(hunk: &str) -> Vec<CodeLine> {
 // ── Issue ─────────────────────────────────────────────────────────────────────
 
 async fn issue(gh: &Gh, repo: &str, number: u64) -> Result<Detail, GhError> {
-    let (owner, name) = owner_name(repo)?;
-    let (data, _) = gh
-        .graphql_with(ISSUE_QUERY, json!({ "owner": owner, "name": name, "number": number }))
-        .await
-        .or_else(locked_on_refusal)?;
-    let Some(node) = data.pointer("/repository/issue").filter(|n| !n.is_null()) else {
-        return Ok(Detail::Locked { permission: "Issues" });
+    let sizes = json!({ "labels": MAX_LABELS, "assignees": MAX_ASSIGNEES });
+    let Some(node) = numbered(gh, ISSUE_QUERY, repo, number, "issue", sizes).await? else {
+        return Ok(Detail::Locked { permission: permission::ISSUES });
     };
-    parse_issue(repo, node).map(Detail::Issue).ok_or(GhError::BadResponse)
+    parse_issue(repo, &node).map(Detail::Issue).ok_or(GhError::BadResponse)
 }
 
 fn parse_issue(repo: &str, node: &Value) -> Option<IssueDetail> {
@@ -794,11 +775,7 @@ fn parse_issue(repo: &str, node: &Value) -> Option<IssueDetail> {
         author: text(node.pointer("/author/login")),
         body: text(node.get("bodyText")).map(|b| excerpt(&b)),
         labels: labels(node),
-        assignees: node
-            .pointer("/assignees/nodes")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|n| text(n.get("login"))).collect())
-            .unwrap_or_default(),
+        assignees: nodes(node, "/assignees/nodes").iter().filter_map(|n| text(n.get("login"))).collect(),
         comments: int(node, "/comments/totalCount"),
         created_at: text(node.get("createdAt")),
         closed_at: text(node.get("closedAt")),
@@ -854,7 +831,9 @@ async fn commits(
         Ok(reply) => reply.json,
         // A private repository's commits need Contents; GitHub answers 404 as
         // often as 403 for what a token may not see.
-        Err(GhError::Forbidden) | Err(GhError::NotFound) => return Ok(Detail::Locked { permission: "Contents" }),
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => {
+            return Ok(Detail::Locked { permission: permission::CONTENTS })
+        }
         Err(e) => return Err(e),
     };
     let lines = parse_commit_lines(&list);
@@ -874,7 +853,7 @@ async fn commits(
 
     // What the newest one changed, and whether it built.
     if let Some(newest) = list.pointer("/0/sha").and_then(Value::as_str).map(str::to_string) {
-        if let Ok(reply) = gh.get(&format!("/repos/{repo}/commits/{newest}")).await {
+        if let Ok(reply) = gh.get(&format!("/repos/{repo}/commits/{newest}?per_page={MAX_FILES}")).await {
             detail.additions = reply.json.pointer("/stats/additions").and_then(Value::as_i64);
             detail.deletions = reply.json.pointer("/stats/deletions").and_then(Value::as_i64);
             detail.files = files(reply.json.get("files"));
@@ -919,7 +898,7 @@ async fn release(gh: &Gh, repo: &str, tag: &str) -> Result<Detail, GhError> {
     let path_tag = tag.replace('/', "%2F").replace('+', "%2B");
     match gh.get(&format!("/repos/{repo}/releases/tags/{path_tag}")).await {
         Ok(reply) => parse_release(repo, tag, &reply.json).map(Detail::Release).ok_or(GhError::BadResponse),
-        Err(GhError::Forbidden) | Err(GhError::NotFound) => Ok(Detail::Locked { permission: "Contents" }),
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => Ok(Detail::Locked { permission: permission::CONTENTS }),
         Err(e) => Err(e),
     }
 }
@@ -965,7 +944,9 @@ async fn run(gh: &Gh, repo: &str, id: u64) -> Result<Detail, GhError> {
         Ok(reply) => reply.json,
         // A private repository's runs need Actions; GitHub answers 404 as often
         // as 403 for what a token may not see.
-        Err(GhError::Forbidden) | Err(GhError::NotFound) => return Ok(Detail::Locked { permission: "Actions" }),
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => {
+            return Ok(Detail::Locked { permission: permission::ACTIONS })
+        }
         Err(e) => return Err(e),
     };
     let jobs = match gh.get(&format!("/repos/{repo}/actions/runs/{id}/jobs?per_page={MAX_JOBS}")).await {

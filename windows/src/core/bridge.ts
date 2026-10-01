@@ -351,7 +351,7 @@ export interface GithubProject {
   runs: GithubRun[];
   pull: GithubPull | null;
   deploy: GithubDeploy | null;
-  /** What the token may not read here: "actions", "deployments", "pull requests". */
+  /** The permissions the token lacks to read some of this, as GitHub names them. */
   missing: string[];
 }
 

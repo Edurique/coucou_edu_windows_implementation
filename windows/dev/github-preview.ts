@@ -340,7 +340,7 @@ const sheet: GithubProject = {
     environment: "Production", state: "success", url: "https://coucou.example.com",
     creator: "vercel", sha: "a1b2c3d", at: minutesAgo(58),
   },
-  missing: params.has("locked") ? ["deployments"] : [],
+  missing: params.has("locked") ? ["Deployments"] : [],
 };
 // `slow` stands in for a real network, long enough to watch Mochi search.
 Bridge.githubProject = async () => {

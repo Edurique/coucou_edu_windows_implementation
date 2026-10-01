@@ -36,7 +36,7 @@ pub(crate) const WEB: &str = "https://github.com";
 /// Pinned so a change of default on GitHub's side can't reshape the answers.
 const API_VERSION: &str = "2022-11-28";
 const TIMEOUT: Duration = Duration::from_secs(10);
-const TOKEN_KEY: &str = "github-token";
+pub(crate) const TOKEN_KEY: &str = "github-token";
 /// The wait GitHub's documentation asks for when it gives no length: a minute.
 const MINUTE: u64 = 60;
 /// How much of GitHub's own words about a failed query the log keeps.
@@ -69,6 +69,74 @@ pub(crate) fn int(node: &Value, pointer: &str) -> i64 {
 /// A yes or no GitHub gave, or no.
 pub(crate) fn flag(node: &Value, key: &str) -> bool {
     node.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// The entries of a list in an answer: `pointer` leads to the array.
+pub(crate) fn nodes<'a>(value: &'a Value, pointer: &str) -> &'a [Value] {
+    value.pointer(pointer).and_then(Value::as_array).map_or(&[], Vec::as_slice)
+}
+
+/// The token's permissions, by the names GitHub's settings page gives them:
+/// what a sheet says it is missing, and what the connection test checks.
+pub(crate) mod permission {
+    pub const ACTIONS: &str = "Actions";
+    pub const CONTENTS: &str = "Contents";
+    pub const DEPLOYMENTS: &str = "Deployments";
+    pub const ISSUES: &str = "Issues";
+    pub const PULL_REQUESTS: &str = "Pull requests";
+}
+
+/// Where a pull request stands — open, draft, merged or closed.
+pub(crate) fn pull_state(node: &Value) -> &'static str {
+    match node.get("state").and_then(Value::as_str) {
+        Some("MERGED") => "merged",
+        Some("CLOSED") => "closed",
+        _ if flag(node, "isDraft") => "draft",
+        _ => "open",
+    }
+}
+
+/// What its reviews add up to — approved, changes requested or review
+/// required; None when no review was asked for.
+pub(crate) fn review_decision(node: &Value) -> Option<&'static str> {
+    match node.get("reviewDecision").and_then(Value::as_str) {
+        Some("APPROVED") => Some("approved"),
+        Some("CHANGES_REQUESTED") => Some("changes requested"),
+        Some("REVIEW_REQUIRED") => Some("review required"),
+        _ => None,
+    }
+}
+
+/// Answers kept for a while under a key: asked for again soon enough, the
+/// kept one is given back. What has outlived every use is dropped as new
+/// answers come in, so the map holds what was looked at lately, not
+/// everything ever opened.
+pub(crate) struct Kept<T>(Mutex<HashMap<String, (u64, T)>>);
+
+/// Past this no kept answer is still good: the longest any of them is trusted.
+const KEPT_AT_MOST: u64 = PAST_DAY_TTL;
+
+impl<T: Clone> Kept<T> {
+    pub(crate) fn new() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+
+    /// The answer under `key`, if it is younger than `ttl` says it may be.
+    pub(crate) fn fresh(&self, key: &str, now: u64, ttl: impl FnOnce(&T) -> u64) -> Option<T> {
+        let kept = self.0.lock().unwrap();
+        let (at, value) = kept.get(key)?;
+        (now.saturating_sub(*at) < ttl(value)).then(|| value.clone())
+    }
+
+    pub(crate) fn keep(&self, key: String, now: u64, value: T) {
+        let mut kept = self.0.lock().unwrap();
+        kept.retain(|_, (at, _)| now.saturating_sub(*at) < KEPT_AT_MOST);
+        kept.insert(key, (now, value));
+    }
+
+    pub(crate) fn clear(&self) {
+        self.0.lock().unwrap().clear();
+    }
 }
 
 /// "owner/name" → "name".
@@ -200,25 +268,23 @@ pub struct Reply {
 }
 
 pub struct Gh {
-    http: reqwest::Client,
     token: String,
 }
+
+/// One client for every call, so a connection to GitHub opened for one is
+/// there for the next: the token is what changes, and it rides in a header.
+static HTTP: LazyLock<reqwest::Client> =
+    LazyLock::new(|| reqwest::Client::builder().timeout(TIMEOUT).build().unwrap_or_default());
 
 impl Gh {
     /// Reads the token from the Credential Manager, each time something is
     /// asked: a token changed in the settings window is the one used next.
     pub fn from_store() -> Result<Self, GhError> {
-        let token = secrets::get(TOKEN_KEY).ok_or(GhError::NoToken)?;
-        let http = reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .build()
-            .unwrap_or_default();
-        Ok(Self { http, token })
+        Ok(Self { token: secrets::get(TOKEN_KEY).ok_or(GhError::NoToken)? })
     }
 
     fn request(&self, method: Method, url: &str) -> RequestBuilder {
-        self.http
-            .request(method, url)
+        HTTP.request(method, url)
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
@@ -256,28 +322,26 @@ impl Gh {
         let request = self
             .request(Method::POST, &format!("{API}/graphql"))
             .json(&json!({ "query": query, "variables": variables }));
-        let reply = self.send(request, "/graphql").await?.ok_or(GhError::BadResponse)?;
-        let errors = reply
-            .json
-            .get("errors")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        match reply.json.get("data") {
-            Some(data) if !data.is_null() => Ok((data.clone(), errors)),
+        let mut reply = self.send(request, "/graphql").await?.ok_or(GhError::BadResponse)?;
+        let errors = match reply.json.get_mut("errors").map(Value::take) {
+            Some(Value::Array(errors)) => errors,
+            _ => Vec::new(),
+        };
+        match reply.json.get_mut("data").map(Value::take) {
+            Some(data) if !data.is_null() => Ok((data, errors)),
             _ => {
                 // An HTTP 200 that failed: `send` logged nothing. Only GitHub's
                 // own words about the query — no data, no token.
-                let message: String = reply
-                    .json
-                    .pointer("/errors/0/message")
+                let message: String = errors
+                    .first()
+                    .and_then(|e| e.get("message"))
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .chars()
                     .take(LOG_CHARS)
                     .collect();
                 log::line(format!("github /graphql → {message}"));
-                Err(graphql_error(&reply.json))
+                Err(graphql_error(&errors))
             }
         }
     }
@@ -294,7 +358,7 @@ impl Gh {
         let headers = response.headers().clone();
         let body = response.text().await.map_err(|_| GhError::Offline)?;
 
-        let says_rate_limit = body.to_lowercase().contains("rate limit");
+        let says_rate_limit = matches!(status, 403 | 429) && body.to_lowercase().contains("rate limit");
         if let Some(until) = rate_block(
             status,
             header_u64(&headers, "x-ratelimit-remaining"),
@@ -332,12 +396,8 @@ impl Gh {
 
 /// A GraphQL answer comes back as HTTP 200 even when it failed; the reason is
 /// in `errors[].type`.
-fn graphql_error(json: &Value) -> GhError {
-    let first = json
-        .get("errors")
-        .and_then(Value::as_array)
-        .and_then(|errors| errors.first());
-    let kind = first.and_then(|e| e.get("type")).and_then(Value::as_str).unwrap_or("");
+fn graphql_error(errors: &[Value]) -> GhError {
+    let kind = errors.first().and_then(|e| e.get("type")).and_then(Value::as_str).unwrap_or("");
     match kind {
         "RATE_LIMITED" => {
             let until = unix_now() + MINUTE;
@@ -453,9 +513,11 @@ struct Cache {
     events_not_before: u64,
     /// Per Actions URL: the ETag of the last answer and what it said.
     runs: HashMap<String, (String, Option<Build>)>,
-    /// The merged pull requests already known, so each is announced once.
+    /// Per Actions URL the token was refused: not asked again before this.
+    no_runs: HashMap<String, u64>,
+    /// When the latest merge known happened, so only a later one is news.
     /// None until the first refresh, which announces nothing.
-    merged: Option<Vec<String>>,
+    merged: Option<String>,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
@@ -465,6 +527,13 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::defaul
 static BUSY: AtomicBool = AtomicBool::new(false);
 
 struct BusyGuard;
+
+impl BusyGuard {
+    /// None while another refresh is under way.
+    fn take() -> Option<Self> {
+        (!BUSY.swap(true, Ordering::SeqCst)).then_some(BusyGuard)
+    }
+}
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
@@ -480,10 +549,10 @@ const LIVE_SECS: u64 = 20;
 
 /// The two-minute tick is fine for news, not for watching a run: a build that
 /// takes three minutes would be seen starting and never seen ending. While
-/// any project's newest run is going, the refresh comes every twenty seconds
-/// instead, island open or not, and falls back to the tick the moment none
-/// is. It asks nothing on its own while everything is at rest, and nothing
-/// at all while Coucou is paused or GitHub is switched off.
+/// any project's newest run is going, the runs are asked about every twenty
+/// seconds instead, island open or not, until none is. It asks nothing on its
+/// own while everything is at rest, and nothing at all while Coucou is paused
+/// or GitHub is switched off.
 pub fn watch_live(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -497,7 +566,7 @@ pub fn watch_live(app: AppHandle) {
             if !going || crate::integrations::PAUSED.load(Ordering::Relaxed) || !crate::integrations::enabled(&app, ID) {
                 continue;
             }
-            refresh(app.clone()).await;
+            refresh_builds(app.clone()).await;
         }
     });
 }
@@ -551,83 +620,76 @@ pub fn watch_demo(app: AppHandle) {
 }
 
 /// A pull request of yours that went in.
-#[derive(Clone, Debug, PartialEq)]
 struct Merged {
-    /// "owner/name#12".
-    key: String,
     repo: String,
     number: u64,
     title: String,
     url: String,
-    /// Who merged it, and its size: what the island's card says about it.
-    merged_by: Option<String>,
-    additions: i64,
-    deletions: i64,
-    files: i64,
+    /// ISO 8601 in UTC, as GitHub sends it: these sort as text.
+    at: String,
 }
 
 fn parse_merged(viewer: &Value) -> Vec<Merged> {
-    viewer
-        .pointer("/merged/nodes")
-        .and_then(Value::as_array)
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|n| {
-                    let number = n.get("number")?.as_u64()?;
-                    let repo = text(n.pointer("/repository/nameWithOwner"))?;
-                    Some(Merged {
-                        key: format!("{repo}#{number}"),
-                        number,
-                        title: text(n.get("title")).unwrap_or_default(),
-                        url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{repo}/pull/{number}")),
-                        merged_by: text(n.pointer("/mergedBy/login")),
-                        additions: n.get("additions").and_then(Value::as_i64).unwrap_or(0),
-                        deletions: n.get("deletions").and_then(Value::as_i64).unwrap_or(0),
-                        files: n.get("changedFiles").and_then(Value::as_i64).unwrap_or(0),
-                        repo,
-                    })
-                })
-                .collect()
+    nodes(viewer, "/merged/nodes")
+        .iter()
+        .filter_map(|n| {
+            let number = n.get("number")?.as_u64()?;
+            let repo = text(n.pointer("/repository/nameWithOwner"))?;
+            Some(Merged {
+                number,
+                title: text(n.get("title")).unwrap_or_default(),
+                url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{repo}/pull/{number}")),
+                at: text(n.get("mergedAt"))?,
+                repo,
+            })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-/// What changed since the last refresh that the pill should say: a build that
-/// broke, else a pull request that went in. Nothing on the first refresh —
-/// it only learns how things stand — and nothing for a failure already told.
-fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, merged: &[Merged]) -> Option<IntegrationEvent> {
-    let before = before?;
-    let broke = now.repos.iter().find_map(|repo| {
+/// A piece of news, and what to ask GitHub about to say more of it on the card.
+type News = (IntegrationEvent, Target);
+
+/// A build that broke since the last look. Nothing for a failure already told,
+/// nor for a project that just entered the list: it has no "before".
+fn broke(before: &[Repo], now: &[Repo]) -> Option<News> {
+    now.iter().find_map(|repo| {
         let build = repo.build.as_ref().filter(|b| b.state == "failure")?;
-        // A project that just entered the list has no "before" to compare with.
-        let was = before.repos.iter().find(|r| r.full_name == repo.full_name)?;
+        let was = before.iter().find(|r| r.full_name == repo.full_name)?;
         let told = was.build.as_ref().is_some_and(|b| b.id == build.id && b.state == "failure");
-        (!told).then(|| IntegrationEvent {
+        if told {
+            return None;
+        }
+        let target = Target::Run { repo: repo.full_name.clone(), id: build.id };
+        let event = IntegrationEvent {
             success: false,
             label: format!("{} failed on {}", build.workflow, short_name(&repo.full_name)),
             detail: build.branch.clone(),
-            // The card's title and facts are filled in by `tell_failure`, which
-            // asks GitHub which job and which step broke.
-            open: Some(json!({ "target": Target::Run { repo: repo.full_name.clone(), id: build.id }, "label": build.workflow, "url": build.url })),
-        })
-    });
-    broke.or_else(|| {
-        let known = known?;
-        let pull = merged.iter().find(|m| !known.contains(&m.key))?;
-        Some(IntegrationEvent {
-            success: true,
-            label: format!("#{} merged", pull.number),
-            detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
-            open: Some(json!({
-                "target": Target::Pull { repo: pull.repo.clone(), number: pull.number },
-                "label": format!("#{}", pull.number),
-                "url": pull.url,
-                "title": format!("#{} {}", pull.number, pull.title),
-                "facts": merge_facts(pull),
-            })),
-        })
+            open: Some(json!({ "target": target, "label": build.workflow, "url": build.url })),
+        };
+        Some((event, target))
     })
+}
+
+/// A pull request merged since the last look: later than the latest merge
+/// known (`seen`), which is None on the first refresh — it only learns how
+/// things stand. An old pull request that comes back up the list because
+/// somebody commented on it was merged when it was merged: not news.
+fn went_in(seen: Option<&str>, merged: &[Merged]) -> Option<News> {
+    let seen = seen?;
+    let pull = merged.iter().filter(|m| m.at.as_str() > seen).max_by(|a, b| a.at.cmp(&b.at))?;
+    let target = Target::Pull { repo: pull.repo.clone(), number: pull.number };
+    let event = IntegrationEvent {
+        success: true,
+        label: format!("#{} merged", pull.number),
+        detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
+        open: Some(json!({
+            "target": target,
+            "label": format!("#{}", pull.number),
+            "url": pull.url,
+            "title": format!("#{} {}", pull.number, pull.title),
+        })),
+    };
+    Some((event, target))
 }
 
 /// What the card says under a merged pull request: where, by whom, how big.
@@ -635,13 +697,14 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
 /// Each fact says what it is (`kind`), so the island can draw it as what it
 /// is — a name, a size in green and red, a branch — rather than as one grey
 /// sentence.
-fn merge_facts(pull: &Merged) -> Vec<Value> {
+fn merge_facts(pull: &crate::github_detail::PullDetail) -> Vec<Value> {
     let mut facts = vec![json!({ "kind": "repo", "text": short_name(&pull.repo) })];
     if let Some(who) = &pull.merged_by {
         facts.push(json!({ "kind": "by", "verb": "merged by", "text": who }));
     }
     facts.push(json!({ "kind": "diff", "additions": pull.additions, "deletions": pull.deletions }));
-    facts.push(json!({ "kind": "files", "text": if pull.files == 1 { "1 file".to_string() } else { format!("{} files", pull.files) } }));
+    let files = pull.changed_files;
+    facts.push(json!({ "kind": "files", "text": if files == 1 { "1 file".to_string() } else { format!("{files} files") } }));
     facts
 }
 
@@ -668,17 +731,42 @@ fn failure_facts(run: &crate::github_detail::RunDetail) -> Vec<Value> {
     facts
 }
 
-/// A build broke: one more question to GitHub — which job, which step — so
-/// the card can say more than "it failed". Asked only then, and the answer
-/// stays in the sheets' cache for the click that opens the run. If it can't
-/// be had, the news goes out as it is.
-async fn tell_failure(event: &mut IntegrationEvent) {
-    let Some(open) = event.open.as_mut().filter(|_| !event.success) else { return };
-    let Some(target) = open.get("target").cloned().and_then(|t| serde_json::from_value::<Target>(t).ok()) else { return };
-    if let Ok(crate::github_detail::Detail::Run(run)) = crate::github_detail::detail(target, false).await {
-        open["title"] = json!(event.label);
-        open["facts"] = json!(failure_facts(&run));
+/// News is worth one more question to GitHub — which job and which step
+/// broke, or who merged and how much — so the card can say more than "it
+/// failed" or "it went in". Asked only then, and the answer stays in the
+/// sheets' cache for the click that opens it. If it can't be had, the news
+/// goes out as it is.
+async fn tell(event: &mut IntegrationEvent, target: Target) {
+    use crate::github_detail::{detail, Detail};
+    let Some(open) = event.open.as_mut() else { return };
+    match detail(target, false).await {
+        Ok(Detail::Run(run)) => {
+            open["title"] = json!(event.label);
+            open["facts"] = json!(failure_facts(&run));
+        }
+        Ok(Detail::Pull(pull)) => open["facts"] = json!(merge_facts(&pull)),
+        _ => {}
     }
+}
+
+/// The panel gets its data at once; the news follows on its own, once GitHub
+/// has said the little more the card tells about it.
+async fn publish(app: &AppHandle, data: Value, news: Option<News>) {
+    emit(app, IntegrationUpdate { id: ID, data, error: None, event: None });
+    let Some((mut event, target)) = news else { return };
+    log::line(format!("github news: {} ({})", event.label, if event.success { "good" } else { "bad" }));
+    tell(&mut event, target).await;
+    // No data: the island keeps what it shows and only takes the news.
+    emit(app, IntegrationUpdate { id: ID, data: json!({}), error: None, event: Some(event) });
+}
+
+/// The token changed or went: nothing kept under the old one may show under
+/// the new — not its projects, not its days, not its merges as fresh news.
+pub fn forget() {
+    *CACHE.lock().unwrap() = Cache::default();
+    PROJECTS.clear();
+    DAYS.clear();
+    crate::github_detail::forget();
 }
 
 /// Everything the panel shows. The tick, the Refresh button, opening the panel
@@ -690,10 +778,7 @@ async fn tell_failure(event: &mut IntegrationEvent) {
 /// and the Actions and events calls answer 304, which GitHub doesn't count,
 /// as long as nothing happened.
 pub async fn refresh(app: AppHandle) {
-    if BUSY.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let _busy = BusyGuard;
+    let Some(_busy) = BusyGuard::take() else { return };
 
     match fetch().await {
         Ok((snapshot, merged)) => {
@@ -705,25 +790,24 @@ pub async fn refresh(app: AppHandle) {
                 snapshot.contributions.as_ref().map_or(0, |c| c.counts.len()),
             ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
-            let event = {
+            let news = {
                 let mut cache = CACHE.lock().unwrap();
-                let event = news(cache.snapshot.as_ref(), &snapshot, cache.merged.as_deref(), &merged);
+                let news = cache
+                    .snapshot
+                    .as_ref()
+                    .and_then(|before| broke(&before.repos, &snapshot.repos))
+                    .or_else(|| went_in(cache.merged.as_deref(), &merged));
+                let newest = merged.iter().map(|m| m.at.as_str()).max().unwrap_or_default();
+                let seen = cache.merged.take().filter(|seen| seen.as_str() >= newest);
+                cache.merged = Some(seen.unwrap_or_else(|| newest.to_string()));
                 cache.snapshot = Some(snapshot);
-                cache.merged = Some(merged.into_iter().map(|m| m.key).collect());
-                event
+                news
             };
-            let mut event = event;
-            if let Some(e) = &mut event {
-                log::line(format!("github news: {} ({})", e.label, if e.success { "good" } else { "bad" }));
-                tell_failure(e).await;
-            }
-            emit(&app, IntegrationUpdate { id: ID, data, error: None, event });
+            publish(&app, data, news).await;
         }
         // No token: the pill says "Key not configured" on its own. Forget what a
         // previous token showed, so a removed token doesn't leave its data up.
-        Err(GhError::NoToken) => {
-            *CACHE.lock().unwrap() = Cache::default();
-        }
+        Err(GhError::NoToken) => forget(),
         // Keep what we had: the panel shows it with the reason it's not fresh.
         Err(e) => {
             let data = CACHE
@@ -738,48 +822,73 @@ pub async fn refresh(app: AppHandle) {
     }
 }
 
+/// While a run is going, only the runs can have changed: they alone are asked
+/// about again — a request per project, most of them answered 304 — not the
+/// whole profile with its year of contributions. Whatever goes wrong here is
+/// left for the tick to say.
+async fn refresh_builds(app: AppHandle) {
+    let Some(_busy) = BusyGuard::take() else { return };
+    let Some(mut repos) = CACHE.lock().unwrap().snapshot.as_ref().map(|s| s.repos.clone()) else { return };
+    let Ok(gh) = Gh::from_store() else { return };
+    for repo in &mut repos {
+        let Ok(build) = latest_build(&gh, &repo.full_name).await else { return };
+        repo.build = build;
+    }
+    let (data, news) = {
+        let mut cache = CACHE.lock().unwrap();
+        let Some(snapshot) = cache.snapshot.as_mut() else { return };
+        let news = broke(&snapshot.repos, &repos);
+        snapshot.repos = repos;
+        snapshot.fetched_at = unix_now() * 1000;
+        (serde_json::to_value(&*snapshot).unwrap_or_else(|_| json!({})), news)
+    };
+    publish(&app, data, news).await;
+}
+
+/// Repositories the star count is added up over: the hundred most recently
+/// pushed, like the macOS poller.
+const STAR_REPOS: usize = 100;
+/// Repositories contributed to that are asked for: twice what is shown, since
+/// the archived ones among them are only dropped afterwards.
+const CONTRIBUTED_REPOS: usize = MAX_REPOS * 2;
+/// Merged pull requests looked at for news.
+const MERGED_PULLS: usize = 5;
+/// How long a project whose runs the token may not read is left alone.
+const REFUSED_FOR: u64 = 3600;
+
 /// Profile, star count and projects in one request, both lists sorted by last
-/// push. The star count and the repository count stay about what you own, as
-/// on macOS; the Projects tab also takes what you contributed to elsewhere —
-/// as far as the token can see, which for a fine-grained token means your own
-/// repositories, organisations it was made for, and public ones.
-const PROFILE_QUERY: &str = "query { viewer { login name url \
+/// push. The star count stays about what you own, as on macOS, and needs only
+/// that one number from each repository; the Projects tab also takes what you
+/// contributed to elsewhere — as far as the token can see, which for a
+/// fine-grained token means your own repositories, organisations it was made
+/// for, and public ones — and asks for no more of them than it shows.
+const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!) { viewer { login url \
     contributionsCollection { contributionCalendar { totalContributions \
-    weeks { contributionDays { date contributionCount contributionLevel } } } } \
-    repositories(ownerAffiliations: OWNER, first: 100, orderBy: {field: PUSHED_AT, direction: DESC}) { \
-    totalCount nodes { ...Project } } \
-    repositoriesContributedTo(first: 25, includeUserRepositories: true, \
+    weeks { firstDay contributionDays { contributionCount contributionLevel } } } } \
+    starred: repositories(ownerAffiliations: OWNER, first: $stars, orderBy: {field: PUSHED_AT, direction: DESC}) { \
+    nodes { stargazerCount } } \
+    repositories(ownerAffiliations: OWNER, isArchived: false, first: $owned, \
     orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } \
-    merged: pullRequests(states: MERGED, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) { \
-    nodes { number title url additions deletions changedFiles mergedBy { login } repository { nameWithOwner } } } } } \
-    fragment Project on Repository { name nameWithOwner url isPrivate isArchived pushedAt \
+    repositoriesContributedTo(first: $contributed, includeUserRepositories: true, \
+    orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } \
+    merged: pullRequests(states: MERGED, first: $merged, orderBy: {field: UPDATED_AT, direction: DESC}) { \
+    nodes { number title url mergedAt repository { nameWithOwner } } } } } \
+    fragment Project on Repository { nameWithOwner url isPrivate isArchived pushedAt \
     stargazerCount primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } }";
 
 async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
     let gh = Gh::from_store()?;
-    let data = gh.graphql(PROFILE_QUERY).await?;
+    let sizes = json!({ "stars": STAR_REPOS, "owned": MAX_REPOS, "contributed": CONTRIBUTED_REPOS, "merged": MERGED_PULLS });
+    let (data, _) = gh.graphql_with(PROFILE_QUERY, sizes).await?;
     let viewer = data.get("viewer").ok_or(GhError::BadResponse)?;
 
     let login = text(viewer.get("login")).ok_or(GhError::BadResponse)?;
-    let nodes = viewer
-        .pointer("/repositories/nodes")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    // Over the hundred most recently pushed, like the macOS poller.
-    let total_stars = nodes
-        .iter()
-        .filter_map(|n| n.get("stargazerCount").and_then(Value::as_i64))
-        .sum();
+    let total_stars = nodes(viewer, "/starred/nodes").iter().map(|n| int(n, "/stargazerCount")).sum();
 
     let activity = fetch_activity(&gh, &login).await?;
 
-    let contributed = viewer
-        .pointer("/repositoriesContributedTo/nodes")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let mut repos = parse_repos(nodes, contributed);
+    let mut repos = parse_repos(nodes(viewer, "/repositories/nodes"), nodes(viewer, "/repositoriesContributedTo/nodes"));
+    // One after the other, as GitHub asks of its API: not all at once.
     for repo in &mut repos {
         repo.build = latest_build(&gh, &repo.full_name).await?;
     }
@@ -798,14 +907,14 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
 
 fn parse_contributions(calendar: Option<&Value>) -> Option<Contributions> {
     let calendar = calendar?;
-    let days: Vec<&Value> = calendar
-        .get("weeks")?
-        .as_array()?
+    let weeks = calendar.get("weeks")?.as_array()?;
+    // The first week says where the year starts; the days need no date each.
+    let start = text(weeks.first()?.get("firstDay"))?;
+    let days: Vec<&Value> = weeks
         .iter()
         .filter_map(|w| w.get("contributionDays")?.as_array())
         .flatten()
         .collect();
-    let start = text(days.first()?.get("date"))?;
     let counts = days
         .iter()
         .map(|d| d.get("contributionCount").and_then(Value::as_u64).unwrap_or(0) as u32)
@@ -866,12 +975,20 @@ fn parse_repos(owned: &[Value], contributed: &[Value]) -> Vec<Repo> {
 /// ETag of the last answer.
 ///
 /// A repository the token can't read Actions for, or that has no workflow, has
-/// no build — the connection test is where a missing permission gets named.
+/// no build — the connection test is where a missing permission gets named —
+/// and is not asked about again for an hour.
 /// Anything that concerns every request (rate limit, bad token, no network)
 /// stops the refresh instead.
 async fn latest_build(gh: &Gh, repo: &str) -> Result<Option<Build>, GhError> {
     let path = format!("/repos/{repo}/actions/runs?per_page=1");
-    let cached = CACHE.lock().unwrap().runs.get(&path).cloned();
+    let now = unix_now();
+    let cached = {
+        let cache = CACHE.lock().unwrap();
+        if cache.no_runs.get(&path).is_some_and(|until| now < *until) {
+            return Ok(None);
+        }
+        cache.runs.get(&path).cloned()
+    };
     let etag = cached.as_ref().map(|(tag, _)| tag.as_str());
 
     match gh.get_if_changed(&path, etag).await {
@@ -883,7 +1000,12 @@ async fn latest_build(gh: &Gh, repo: &str) -> Result<Option<Build>, GhError> {
             }
             Ok(build)
         }
-        Err(GhError::Forbidden) | Err(GhError::NotFound) => Ok(None),
+        // Refused, or no Actions there: left alone for a while rather than asked
+        // — and counted, and logged — again at every refresh.
+        Err(GhError::Forbidden) | Err(GhError::NotFound) => {
+            CACHE.lock().unwrap().no_runs.insert(path, now + REFUSED_FOR);
+            Ok(None)
+        }
         Err(e) => Err(e),
     }
 }
@@ -1124,8 +1246,9 @@ pub struct Project {
     /// The pull request touched most recently, whoever opened it.
     pub pull: Option<Pull>,
     pub deploy: Option<Deploy>,
-    /// Sections the token may not read for this repository: "actions",
-    /// "deployments", "pull requests". The sheet says so rather than looking empty.
+    /// Sections the token may not read for this repository, by the name of
+    /// the permission that would open them. The sheet says so rather than
+    /// looking empty.
     pub missing: Vec<&'static str>,
 }
 
@@ -1185,12 +1308,12 @@ pub struct Deploy {
     pub at: String,
 }
 
-const PROJECT_QUERY: &str = "query($owner: String!, $name: String!) { \
+const PROJECT_QUERY: &str = "query($owner: String!, $name: String!, $languages: Int!) { \
     repository(owner: $owner, name: $name) { \
     nameWithOwner url description homepageUrl isPrivate createdAt stargazerCount forkCount \
-    languages(first: 6, orderBy: {field: SIZE, direction: DESC}) { totalSize edges { size node { name color } } } \
+    languages(first: $languages, orderBy: {field: SIZE, direction: DESC}) { totalSize edges { size node { name color } } } \
     pullRequests(first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { \
-    number title url state isDraft merged mergedAt updatedAt additions deletions changedFiles \
+    number title url state isDraft mergedAt updatedAt additions deletions changedFiles \
     reviewDecision author { login } comments { totalCount } } } \
     deployments(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { \
     environment createdAt commitOid creator { login } latestStatus { state environmentUrl createdAt } } } } }";
@@ -1203,8 +1326,7 @@ const MAX_LANGUAGES: usize = 4;
 /// Shares that add up to this are the whole: under half a percent is rounding.
 const WHOLE: f64 = 0.995;
 
-static PROJECTS: LazyLock<Mutex<HashMap<String, (u64, Project)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PROJECTS: LazyLock<Kept<Project>> = LazyLock::new(Kept::new);
 
 /// "owner/name" with nothing else in it: the name ends up in a URL path.
 pub(crate) fn split_full_name(full_name: &str) -> Option<(&str, &str)> {
@@ -1231,30 +1353,28 @@ pub async fn project(full_name: &str, force: bool) -> Result<Project, String> {
     let (owner, name) = split_full_name(full_name).ok_or("Unknown repository")?;
     let now = unix_now();
     if !force {
-        if let Some((at, cached)) = PROJECTS.lock().unwrap().get(full_name) {
-            if now.saturating_sub(*at) < PROJECT_TTL {
-                return Ok(cached.clone());
-            }
+        if let Some(kept) = PROJECTS.fresh(full_name, now, |_| PROJECT_TTL) {
+            return Ok(kept);
         }
     }
 
     let gh = Gh::from_store()?;
     let (data, errors) = gh
-        .graphql_with(PROJECT_QUERY, json!({ "owner": owner, "name": name }))
+        .graphql_with(PROJECT_QUERY, json!({ "owner": owner, "name": name, "languages": MAX_LANGUAGES }))
         .await?;
     let repo = data.get("repository").filter(|r| !r.is_null()).ok_or(GhError::NotFound)?;
 
     let mut missing = Vec::new();
     if refused(&errors, "pullRequests") {
-        missing.push("pull requests");
+        missing.push(permission::PULL_REQUESTS);
     }
     if refused(&errors, "deployments") {
-        missing.push("deployments");
+        missing.push(permission::DEPLOYMENTS);
     }
     let runs = match gh.get(&format!("/repos/{owner}/{name}/actions/runs?per_page={STREAK}")).await {
         Ok(reply) => parse_runs(&reply.json),
         Err(GhError::Forbidden) => {
-            missing.push("actions");
+            missing.push(permission::ACTIONS);
             Vec::new()
         }
         // Actions switched off for this repository.
@@ -1263,10 +1383,7 @@ pub async fn project(full_name: &str, force: bool) -> Result<Project, String> {
     };
 
     let project = parse_project(repo, runs, missing).ok_or(GhError::BadResponse)?;
-    PROJECTS
-        .lock()
-        .unwrap()
-        .insert(full_name.to_string(), (now, project.clone()));
+    PROJECTS.keep(full_name.to_string(), now, project.clone());
     Ok(project)
 }
 
@@ -1305,6 +1422,7 @@ fn parse_languages(languages: Option<&Value>) -> Vec<LanguageShare> {
     if total <= 0.0 {
         return Vec::new();
     }
+    // As many as the bar names: the query asks for no more.
     let mut shares: Vec<LanguageShare> = edges
         .iter()
         .filter_map(|edge| {
@@ -1315,37 +1433,17 @@ fn parse_languages(languages: Option<&Value>) -> Vec<LanguageShare> {
             })
         })
         .collect();
-    if shares.len() > MAX_LANGUAGES {
-        let rest: f64 = shares.drain(MAX_LANGUAGES..).map(|l| l.share).sum();
-        shares.push(LanguageShare { name: OTHER.into(), color: None, share: rest });
-    }
-    // What the languages asked for don't cover also counts as "Other" — once
-    // it is more than a rounding's worth.
+    // What they don't cover is "Other" — once it is more than a rounding's worth.
     let covered: f64 = shares.iter().map(|l| l.share).sum();
     if covered < WHOLE {
-        match shares.last_mut().filter(|l| l.name == OTHER) {
-            Some(other) => other.share += 1.0 - covered,
-            None => shares.push(LanguageShare { name: OTHER.into(), color: None, share: 1.0 - covered }),
-        }
+        shares.push(LanguageShare { name: OTHER.into(), color: None, share: 1.0 - covered });
     }
     shares
 }
 
 fn parse_pull(node: &Value) -> Option<Pull> {
-    let merged = node.get("merged").and_then(Value::as_bool).unwrap_or(false);
-    let state = match (merged, node.get("state").and_then(Value::as_str)?) {
-        (true, _) => "merged",
-        (false, "CLOSED") => "closed",
-        _ if node.get("isDraft").and_then(Value::as_bool).unwrap_or(false) => "draft",
-        _ => "open",
-    };
-    let review = match node.get("reviewDecision").and_then(Value::as_str) {
-        Some("APPROVED") => Some("approved"),
-        Some("CHANGES_REQUESTED") => Some("changes requested"),
-        Some("REVIEW_REQUIRED") => Some("review required"),
-        _ => None,
-    };
-    let merged_at = if merged { text(node.get("mergedAt")) } else { None };
+    let state = pull_state(node);
+    let merged_at = if state == "merged" { text(node.get("mergedAt")) } else { None };
     let at = merged_at.or_else(|| text(node.get("updatedAt")))?;
     Some(Pull {
         number: node.get("number")?.as_u64()?,
@@ -1356,7 +1454,7 @@ fn parse_pull(node: &Value) -> Option<Pull> {
         additions: int(node, "/additions"),
         deletions: int(node, "/deletions"),
         changed_files: int(node, "/changedFiles"),
-        review,
+        review: review_decision(node),
         comments: int(node, "/comments/totalCount"),
         at,
     })
@@ -1427,19 +1525,23 @@ pub struct DayItem {
     pub target: Option<Target>,
 }
 
-const DAY_QUERY: &str = "query($from: DateTime!, $to: DateTime!) { viewer { login \
+const DAY_QUERY: &str = "query($from: DateTime!, $to: DateTime!, $each: Int!) { viewer { login \
     contributionsCollection(from: $from, to: $to) { restrictedContributionsCount \
-    commitContributionsByRepository(maxRepositories: 10) { repository { nameWithOwner url } contributions { totalCount } } \
-    pullRequestContributions(first: 10) { nodes { pullRequest { number title url merged repository { nameWithOwner } } } } \
-    pullRequestReviewContributions(first: 10) { nodes { pullRequest { number title url repository { nameWithOwner } } } } \
-    issueContributions(first: 10) { nodes { issue { number title url repository { nameWithOwner } } } } \
-    repositoryContributions(first: 10) { nodes { repository { nameWithOwner url } } } } } }";
+    commitContributionsByRepository(maxRepositories: $each) { repository { nameWithOwner url } contributions { totalCount } } \
+    pullRequestContributions(first: $each) { nodes { pullRequest { number title url merged repository { nameWithOwner } } } } \
+    pullRequestReviewContributions(first: $each) { nodes { pullRequest { number title url repository { nameWithOwner } } } } \
+    issueContributions(first: $each) { nodes { issue { number title url repository { nameWithOwner } } } } \
+    repositoryContributions(first: $each) { nodes { repository { nameWithOwner url } } } } } }";
+
+/// Lines of each kind a day lists: its commits by repository, its pull
+/// requests, its reviews, its issues, its new repositories.
+const DAY_EACH: usize = 10;
 
 /// A day that's over doesn't change; today still can.
 const PAST_DAY_TTL: u64 = 3600;
 const TODAY_TTL: u64 = 60;
 
-static DAYS: LazyLock<Mutex<HashMap<String, (u64, Day)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static DAYS: LazyLock<Kept<Day>> = LazyLock::new(Kept::new);
 
 /// An ISO 8601 timestamp and nothing else: it goes to GitHub as a variable.
 pub(crate) fn is_timestamp(s: &str) -> bool {
@@ -1455,28 +1557,17 @@ pub async fn day(from: &str, to: &str, today: bool) -> Result<Day, String> {
     let key = format!("{from}/{to}");
     let now = unix_now();
     let ttl = if today { TODAY_TTL } else { PAST_DAY_TTL };
-    if let Some((at, cached)) = DAYS.lock().unwrap().get(&key) {
-        if now.saturating_sub(*at) < ttl {
-            return Ok(cached.clone());
-        }
+    if let Some(kept) = DAYS.fresh(&key, now, |_| ttl) {
+        return Ok(kept);
     }
 
     let gh = Gh::from_store()?;
-    let (data, _) = gh.graphql_with(DAY_QUERY, json!({ "from": from, "to": to })).await?;
+    let (data, _) = gh.graphql_with(DAY_QUERY, json!({ "from": from, "to": to, "each": DAY_EACH })).await?;
     let collection = data.pointer("/viewer/contributionsCollection").ok_or(GhError::BadResponse)?;
     let login = text(data.pointer("/viewer/login"));
     let day = parse_day(collection, login.as_deref(), from, to);
-    DAYS.lock().unwrap().insert(key, (now, day.clone()));
+    DAYS.keep(key, now, day.clone());
     Ok(day)
-}
-
-fn nodes<'a>(collection: &'a Value, field: &str) -> impl Iterator<Item = &'a Value> {
-    collection
-        .pointer(&format!("/{field}/nodes"))
-        .and_then(Value::as_array)
-        .map(|a| a.as_slice())
-        .unwrap_or_default()
-        .iter()
 }
 
 /// `login`, `from` and `to` go into the commits' target, so their sheet lists
@@ -1485,12 +1576,7 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
     let mut items = Vec::new();
 
     // Commits come grouped by repository, as on the profile page.
-    for group in collection
-        .get("commitContributionsByRepository")
-        .and_then(Value::as_array)
-        .map(|a| a.as_slice())
-        .unwrap_or_default()
-    {
+    for group in nodes(collection, "/commitContributionsByRepository") {
         let (Some(repo), Some(count)) = (
             text(group.pointer("/repository/nameWithOwner")),
             group.pointer("/contributions/totalCount").and_then(Value::as_i64),
@@ -1513,7 +1599,7 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
 
     let pull = |node: &Value, kind_for: &dyn Fn(bool) -> &'static str| -> Option<DayItem> {
         let pr = node.get("pullRequest")?;
-        let merged = pr.get("merged").and_then(Value::as_bool).unwrap_or(false);
+        let merged = flag(pr, "merged");
         let number = pr.get("number")?.as_u64()?;
         let repo = text(pr.pointer("/repository/nameWithOwner"))?;
         Some(DayItem {
@@ -1525,12 +1611,12 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
             url: text(pr.get("url"))?,
         })
     };
-    items.extend(nodes(collection, "pullRequestContributions").filter_map(|n| {
+    items.extend(nodes(collection, "/pullRequestContributions/nodes").iter().filter_map(|n| {
         pull(n, &|merged| if merged { "pr_merged" } else { "pr_opened" })
     }));
-    items.extend(nodes(collection, "pullRequestReviewContributions").filter_map(|n| pull(n, &|_| "review")));
+    items.extend(nodes(collection, "/pullRequestReviewContributions/nodes").iter().filter_map(|n| pull(n, &|_| "review")));
 
-    items.extend(nodes(collection, "issueContributions").filter_map(|n| {
+    items.extend(nodes(collection, "/issueContributions/nodes").iter().filter_map(|n| {
         let issue = n.get("issue")?;
         let number = issue.get("number")?.as_u64()?;
         let repo = text(issue.pointer("/repository/nameWithOwner"))?;
@@ -1544,7 +1630,7 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
         })
     }));
 
-    items.extend(nodes(collection, "repositoryContributions").filter_map(|n| {
+    items.extend(nodes(collection, "/repositoryContributions/nodes").iter().filter_map(|n| {
         let repo = text(n.pointer("/repository/nameWithOwner"))?;
         Some(DayItem {
             kind: "create",
@@ -1627,16 +1713,16 @@ pub async fn test() -> Result<Account, String> {
     }
     if let Some(repo) = &sample {
         let pulls = gh.get(&format!("/repos/{repo}/pulls?per_page=1")).await.map(|_| ());
-        checks.push(check("Pull requests", pulls));
+        checks.push(check(permission::PULL_REQUESTS, pulls));
         let runs = gh.get(&format!("/repos/{repo}/actions/runs?per_page=1")).await.map(|_| ());
-        checks.push(check("Actions", runs));
+        checks.push(check(permission::ACTIONS, runs));
         let deployments = gh.get(&format!("/repos/{repo}/deployments?per_page=1")).await.map(|_| ());
-        checks.push(check("Deployments", deployments));
+        checks.push(check(permission::DEPLOYMENTS, deployments));
         // Commits, their diffs and releases.
         let contents = gh.get(&format!("/repos/{repo}/commits?per_page=1")).await.map(|_| ());
-        checks.push(check("Contents", contents));
+        checks.push(check(permission::CONTENTS, contents));
         let issues = gh.get(&format!("/repos/{repo}/issues?per_page=1")).await.map(|_| ());
-        checks.push(check("Issues", issues));
+        checks.push(check(permission::ISSUES, issues));
     }
 
     let events = gh.get(&format!("/users/{login}/events?per_page=1")).await.map(|_| ());
@@ -1686,41 +1772,41 @@ mod tests {
 
     #[test]
     fn the_pill_hears_of_a_build_once_it_breaks_and_only_once() {
-        let green = snapshot_with(&[("coucou", Some((1, "success")))]);
-        let running = snapshot_with(&[("coucou", Some((2, "running")))]);
-        let red = snapshot_with(&[("coucou", Some((2, "failure")))]);
+        let green = snapshot_with(&[("coucou", Some((1, "success")))]).repos;
+        let running = snapshot_with(&[("coucou", Some((2, "running")))]).repos;
+        let red = snapshot_with(&[("coucou", Some((2, "failure")))]).repos;
 
-        // The first refresh only learns how things stand, broken or not.
-        assert!(news(None, &red, None, &[]).is_none());
         // A new run that failed, and a run that was going and ended badly.
-        let event = news(Some(&green), &red, Some(&[]), &[]).unwrap();
+        let (event, target) = broke(&green, &red).unwrap();
         assert_eq!((event.success, event.label.as_str(), event.detail.as_deref()), (false, "CI failed on coucou", Some("main")));
-        assert!(news(Some(&running), &red, Some(&[]), &[]).is_some());
+        assert_eq!(target, Target::Run { repo: "edu/coucou".into(), id: 2 });
+        assert!(broke(&running, &red).is_some());
         // Still the same failure on the next refresh: already told.
-        assert!(news(Some(&red), &red, Some(&[]), &[]).is_none());
+        assert!(broke(&red, &red).is_none());
         // A project that just entered the list has nothing to compare with.
-        assert!(news(Some(&snapshot_with(&[])), &red, Some(&[]), &[]).is_none());
+        assert!(broke(&[], &red).is_none());
     }
 
     #[test]
-    fn the_pill_hears_of_a_merged_pull_request_once() {
-        let calm = snapshot_with(&[("coucou", Some((1, "success")))]);
+    fn the_pill_hears_of_a_pull_request_merged_since_the_last_look() {
         let merged = parse_merged(&json!({ "merged": { "nodes": [
-            { "number": 12, "title": "Panel", "repository": { "nameWithOwner": "edu/coucou" } },
-            { "number": 3, "title": "Older", "repository": { "nameWithOwner": "edu/notes" } },
+            // Merged long ago, back up the list because somebody commented on it.
+            { "number": 3, "title": "Older", "mergedAt": "2026-06-01T10:00:00Z", "repository": { "nameWithOwner": "edu/notes" } },
+            { "number": 12, "title": "Panel", "mergedAt": "2026-09-30T18:00:00Z", "repository": { "nameWithOwner": "edu/coucou" } },
+            { "number": 9, "title": "No date", "repository": { "nameWithOwner": "edu/coucou" } },
         ]}}));
-        assert_eq!(merged[0].key, "edu/coucou#12");
+        assert_eq!(merged.len(), 2);
 
-        // Nothing known yet: the first refresh announces none of them.
-        assert!(news(Some(&calm), &calm, None, &merged).is_none());
-        let known = vec!["edu/notes#3".to_string()];
-        let event = news(Some(&calm), &calm, Some(&known), &merged).unwrap();
+        // The first refresh only learns how things stand.
+        assert!(went_in(None, &merged).is_none());
+        // Merged after the latest one known: news, and it opens that pull request.
+        let (event, target) = went_in(Some("2026-09-30T17:00:00Z"), &merged).unwrap();
         assert_eq!((event.success, event.label.as_str(), event.detail.as_deref()), (true, "#12 merged", Some("Panel")));
-        let all = vec!["edu/notes#3".to_string(), "edu/coucou#12".to_string()];
-        assert!(news(Some(&calm), &calm, Some(&all), &merged).is_none());
-        // A build that broke comes before a merge.
-        let red = snapshot_with(&[("coucou", Some((2, "failure")))]);
-        assert!(!news(Some(&calm), &red, Some(&known), &merged).unwrap().success);
+        assert_eq!(target, Target::Pull { repo: "edu/coucou".into(), number: 12 });
+        // Nothing merged since: the old one coming back up is not news.
+        assert!(went_in(Some("2026-09-30T18:00:00Z"), &merged).is_none());
+        // An account with no merge yet hears of its first.
+        assert!(went_in(Some(""), &merged).is_some());
     }
 
     const NOW: u64 = 1_000_000;
@@ -1964,15 +2050,15 @@ mod tests {
 
     #[test]
     fn the_calendar_flattens_into_days_from_its_first_date() {
-        let day = |date: &str, count: u64, level: &str| {
-            json!({ "date": date, "contributionCount": count, "contributionLevel": level })
+        let day = |count: u64, level: &str| {
+            json!({ "contributionCount": count, "contributionLevel": level })
         };
         let calendar = json!({
             "totalContributions": 9,
             "weeks": [
                 // A first week that starts mid-week, as GitHub's does.
-                { "contributionDays": [day("2025-10-01", 0, "NONE"), day("2025-10-02", 1, "FIRST_QUARTILE")] },
-                { "contributionDays": [day("2025-10-03", 8, "FOURTH_QUARTILE"), day("2025-10-04", 0, "NONE")] },
+                { "firstDay": "2025-10-01", "contributionDays": [day(0, "NONE"), day(1, "FIRST_QUARTILE")] },
+                { "firstDay": "2025-10-03", "contributionDays": [day(8, "FOURTH_QUARTILE"), day(0, "NONE")] },
             ],
         });
         let c = parse_contributions(Some(&calendar)).unwrap();
@@ -2057,19 +2143,18 @@ mod tests {
     }
 
     #[test]
-    fn languages_keep_four_and_fold_the_rest() {
+    fn languages_asked_for_are_named_and_the_rest_is_other() {
+        // Four are asked for; the repository's total counts them all.
         let langs = json!({ "totalSize": 1000, "edges": [
             { "size": 500, "node": { "name": "Rust", "color": "#dea584" } },
             { "size": 200, "node": { "name": "TypeScript", "color": "#3178c6" } },
             { "size": 100, "node": { "name": "CSS", "color": "#663399" } },
-            { "size": 80, "node": { "name": "HTML", "color": "#e34c26" } },
-            { "size": 60, "node": { "name": "Shell", "color": "#89e051" } },
-            { "size": 40, "node": { "name": "Nix", "color": null } },
+            { "size": 80, "node": { "name": "HTML", "color": null } },
         ]});
         let shares = parse_languages(Some(&langs));
         let names: Vec<&str> = shares.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["Rust", "TypeScript", "CSS", "HTML", "Other"]);
-        // Shell + Nix + the 2 % the languages listed didn't cover.
+        // The 12 % the four largest don't cover.
         assert!((shares[4].share - 0.12).abs() < 1e-9);
         assert!((shares.iter().map(|l| l.share).sum::<f64>() - 1.0).abs() < 1e-9);
     }
@@ -2131,11 +2216,9 @@ mod tests {
 
     #[test]
     fn graphql_errors_map_to_something_a_person_can_act_on() {
-        let forbidden = json!({ "data": null, "errors": [{ "type": "FORBIDDEN" }] });
-        assert_eq!(graphql_error(&forbidden), GhError::Forbidden);
-        let scopes = json!({ "errors": [{ "type": "INSUFFICIENT_SCOPES" }] });
-        assert_eq!(graphql_error(&scopes), GhError::Forbidden);
-        let odd = json!({ "errors": [{ "message": "boom" }] });
-        assert_eq!(graphql_error(&odd), GhError::BadResponse);
+        assert_eq!(graphql_error(&[json!({ "type": "FORBIDDEN" })]), GhError::Forbidden);
+        assert_eq!(graphql_error(&[json!({ "type": "INSUFFICIENT_SCOPES" })]), GhError::Forbidden);
+        assert_eq!(graphql_error(&[json!({ "message": "boom" })]), GhError::BadResponse);
+        assert_eq!(graphql_error(&[]), GhError::BadResponse);
     }
 }

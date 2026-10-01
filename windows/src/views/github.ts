@@ -913,8 +913,18 @@ function block(parts: BlockParts): HTMLElement {
     : h("div", { class: "gh-block" }, parts.icon, text);
 }
 
-/** A section the token may not read here: say which permission would open it. */
-function notGranted(what: string, permission: string): HTMLElement {
+/**
+ * The token's permissions a sheet can be missing, by the names GitHub's
+ * settings page gives them — the same words Rust sends (`permission` in
+ * github.rs).
+ */
+const PERMISSION = { actions: "Actions", pulls: "Pull requests", deployments: "Deployments" } as const;
+
+/**
+ * A section the token may not read here: say which permission would open it.
+ * `what` is the section's own name when the permission's doesn't say it.
+ */
+function notGranted(permission: string, what = permission): HTMLElement {
   return h(
     "div",
     { class: "gh-block muted" },
@@ -947,7 +957,7 @@ const RUN_VERB: Record<GithubBuild["state"], string> = {
 };
 
 function ciBlock(p: GithubProject): HTMLElement {
-  if (p.missing.includes("actions")) return notGranted("Actions", "Actions");
+  if (p.missing.includes(PERMISSION.actions)) return notGranted(PERMISSION.actions);
   const run = p.runs[0];
   if (!run) {
     return block({
@@ -996,7 +1006,7 @@ const REVIEW_COLOR: Record<NonNullable<GithubPull["review"]>, string> = {
 };
 
 function pullBlock(p: GithubProject): HTMLElement {
-  if (p.missing.includes("pull requests")) return notGranted("Pull requests", "Pull requests");
+  if (p.missing.includes(PERMISSION.pulls)) return notGranted(PERMISSION.pulls);
   const pr = p.pull;
   if (!pr) {
     return block({
@@ -1033,7 +1043,7 @@ const DEPLOY_STYLE: Record<GithubDeploy["state"], { color: string; say: (env: st
 
 /** Nothing at all for a repository that never deploys: most don't. */
 function deployBlock(p: GithubProject): HTMLElement | null {
-  if (p.missing.includes("deployments")) return notGranted("Deployments", "Deployments");
+  if (p.missing.includes(PERMISSION.deployments)) return notGranted(PERMISSION.deployments);
   const d = p.deploy;
   if (!d) return null;
   const style = DEPLOY_STYLE[d.state];
@@ -1235,7 +1245,7 @@ function fileList(files: GithubFile[], url: string, title: string): Node[] {
 
 /** A run of Actions on a commit or a pull request, as a block that opens the run. */
 function runBlock(build: GithubBuild | null, missing: string[], repo: string): HTMLElement | null {
-  if (missing.includes("actions")) return notGranted("Actions", "Actions");
+  if (missing.includes(PERMISSION.actions)) return notGranted(PERMISSION.actions);
   if (!build) return null;
   const style = BUILD_STYLE[build.state];
   return block({
@@ -1824,9 +1834,8 @@ function jobView(job: GithubJob, run: GithubRunDetail): HTMLElement {
   );
 }
 
+/** What a whole sheet is called when its permission's name doesn't say it. */
 const LOCKED_WHAT: Record<string, string> = {
-  "Pull requests": "Pull requests",
-  Issues: "Issues",
   Contents: "Commits and releases",
   Actions: "Actions runs",
 };
@@ -1849,7 +1858,7 @@ function detailView(d: GithubDetail, login: string, screen: DetailScreen): HTMLE
       return h(
         "div",
         { class: "gh-sheet" },
-        notGranted(LOCKED_WHAT[d.permission] ?? d.permission, d.permission),
+        notGranted(d.permission, LOCKED_WHAT[d.permission]),
         h("button", { class: "gh-host", text: "Open it on GitHub instead", onclick: () => void Bridge.openUrl(screen.url) }),
       );
   }

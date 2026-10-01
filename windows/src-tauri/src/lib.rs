@@ -274,21 +274,25 @@ fn secret_present(key: String) -> bool {
 #[tauri::command]
 fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
     secrets::set(&key, &value)?;
-    secrets_changed(&app);
+    secrets_changed(&app, &key);
     Ok(())
 }
 
 #[tauri::command]
 fn secret_clear(app: AppHandle, key: String) -> Result<(), String> {
     secrets::clear(&key)?;
-    secrets_changed(&app);
+    secrets_changed(&app, &key);
     Ok(())
 }
 
 /// The island only learns which keys exist by asking, and used to ask once at
 /// launch: a key saved in the settings window left its pill saying "Key not
-/// configured" until a restart. This tells it to ask again.
-fn secrets_changed(app: &AppHandle) {
+/// configured" until a restart. This tells it to ask again. A new GitHub token
+/// may be another account's: what the old one fetched is forgotten first.
+fn secrets_changed(app: &AppHandle, key: &str) {
+    if key == github::TOKEN_KEY {
+        github::forget();
+    }
     let _ = app.emit_to(island::WINDOW_LABEL, "secrets-changed", ());
 }
 
