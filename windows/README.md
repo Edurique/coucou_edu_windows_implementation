@@ -240,6 +240,53 @@ Rust side.
 - A sheet is fetched **when you open it**, and kept for a minute.
 - Nothing while Coucou is paused or GitHub is switched off.
 
+## Spotify
+
+<img src="screenshots/spotify-card.png" width="640" alt="Spotify's card: the cover, the song, who plays it, the album, and the player's keys">
+
+A pill that needs no key and no account. Switch it on in **Settings… →
+Integrations**, like the others — four pills at most show next to Mochi.
+
+Its card shows the cover of what plays, the song, who plays it and the album it
+is from, with previous, play/pause and next. A title too long for its line runs
+across it. The cover stands where Mochi does on the other cards: he steps out
+of this one.
+
+<img src="screenshots/spotify-folded.png" width="288" alt="The folded island with the cover in Mochi's place">
+
+With Spotify's pill in front, the folded island shows the cover too, in Mochi's
+place, and unfolding carries it to the card.
+
+<img src="screenshots/spotify-announce.png" width="640" alt="A new song being announced: a green glow behind the cover">
+
+When the song changes, the island unfolds on that card for a few seconds and
+folds back, under a light that says why it opened: a green glow behind the
+cover, and a sheen across it. No sound — there is music playing. It never opens
+over something that waits for you, nor while the island is already open, and a
+mouse on the island keeps it there. **Settings… → Integrations → Spotify** has a
+switch to keep it folded.
+
+### Where it comes from
+
+Windows already knows what every player plays — it is what the volume flyout
+shows — and says when it changes. The pill asks Windows: the song, the artist,
+the album, the cover, whether it plays or is paused. Nothing is asked of
+Spotify and nothing touches the network; the keys go to Spotify's own session,
+never to another player.
+
+That is also where it stops:
+
+- Only the Spotify desktop app is seen. Spotify in a browser tab is the
+  browser's.
+- Until something has been played since the app was opened, Windows has nothing
+  to say about it, and neither has the card.
+- Windows is told one artist and the album. Featured artists show only when
+  the song's title names them, and the playlist a song is played from is not
+  something a player tells the system.
+
+The idea of a keyless Spotify pill comes from corefusiion's pull request on the
+main repository (Louis-CFM/coucou#80).
+
 ## Build it yourself
 
 You need [Rust](https://rustup.rs), [Node 20+](https://nodejs.org), and the
@@ -319,5 +366,6 @@ problems. It stays on your machine.
   attach it as context, and jumping to a specific terminal window — "Open
   terminal" opens the working folder in VS Code when `code` is on your `PATH`.
 - Cal.com shows the next bookings as a list rather than the Mac's calendar.
+- The [Spotify](#spotify) pill is Windows-only for now.
 - GitHub goes further than the Mac's card: the [panel](#github), the news of a
   broken build or a merged pull request, and comments are Windows-only for now.
