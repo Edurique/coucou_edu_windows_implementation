@@ -849,7 +849,7 @@ function newsActions(actions: ViewActions): HTMLElement {
  * with it — the step that broke, who merged, how big.
  */
 function tellNews(news: IntegrationNews, who: HTMLElement, title: HTMLElement, facts: HTMLElement) {
-  who.append(agentWho(State.focusTask, news.success ? "pull request merged" : "a build broke"));
+  who.append(agentWho(State.focusTask, news.open?.says ?? (news.success ? "pull request merged" : "a build broke")));
   title.textContent = news.open?.title ?? news.label;
   clear(facts);
   facts.append(...newsFacts(news));
