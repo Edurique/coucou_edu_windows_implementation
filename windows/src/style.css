@@ -1765,11 +1765,7 @@ button.gh-step:hover {
 .gh-notice > span {
   flex: 1 1 0;
   min-width: 0;
-  color: var(--dim);
   font-weight: 400;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .gh-notice > em {
@@ -1779,13 +1775,86 @@ button.gh-step:hover {
   font-weight: 600;
 }
 
-/* A result card telling an integration's news: the facts under the title, on
-   one line, quieter than a session's detail. */
-.news-facts {
-  font-size: 12px;
-  white-space: nowrap;
+/* The facts of a piece of news, each one a thing of its own: a mark, then
+   what it is. Grey for what frames it, clear for what is named. */
+.nfs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
   overflow: hidden;
+}
+
+.nf {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-width: 0;
+  font: 400 12px var(--font);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.nf > svg {
+  flex: 0 0 auto;
+  color: var(--dim-3);
+}
+
+.nf b,
+.nf.strong {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.nf .gh-pm {
+  font-size: 11.5px;
+}
+
+.nf-branch {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink-2);
+  font-size: 10.5px;
+}
+
+.nf.bad,
+.nf.bad > svg {
+  color: var(--red-text);
+  font-weight: 500;
+}
+
+/* The longest of them — a commit's title — is the one that gives way. */
+.nf.quote {
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.nf.quote {
   text-overflow: ellipsis;
+  display: inline-block;
+}
+
+.nf.quote > svg {
+  vertical-align: -1px;
+  margin-right: 5px;
+}
+
+/* On a result card the facts stand half-way between the title and the
+   buttons, 10 px from each: on the stack's own 5 px gap they read as stuck
+   to the buttons, which are taller than a line. */
+.news-facts {
+  margin: 5px 0;
+}
+
+/* In the panel's notice they ride on one line beside the title, a size down. */
+.gh-notice .nfs {
+  gap: 10px;
+}
+
+.gh-notice .nf {
+  font-size: 11px;
 }
 
 .gh-status:empty {

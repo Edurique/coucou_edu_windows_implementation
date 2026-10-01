@@ -457,7 +457,12 @@ pub fn watch_demo(app: AppHandle) {
                     detail: Some("main".into()),
                     open: Some(json!({
                         "title": "CI failed on coucou",
-                        "facts": ["test \u{203a} cargo test", "main", "\u{201c}Keep the last snapshot through an error\u{201d}", "by mochi", "after 2m 16s"],
+                        "facts": [
+                            { "kind": "step", "text": "test \u{203a} cargo test" },
+                            { "kind": "branch", "text": "main" },
+                            { "kind": "commit", "text": "Keep the last snapshot through an error" },
+                            { "kind": "by", "verb": "by", "text": "mochi" },
+                        ],
                     })),
                 },
                 "merge" => IntegrationEvent {
@@ -466,7 +471,12 @@ pub fn watch_demo(app: AppHandle) {
                     detail: Some("GitHub panel for the Windows island".into()),
                     open: Some(json!({
                         "title": "#12 GitHub panel for the Windows island",
-                        "facts": ["coucou", "merged by louis", "+1332 \u{2212}64", "14 files"],
+                        "facts": [
+                            { "kind": "repo", "text": "coucou" },
+                            { "kind": "by", "verb": "merged by", "text": "louis" },
+                            { "kind": "diff", "additions": 1332, "deletions": 64 },
+                            { "kind": "files", "text": "14 files" },
+                        ],
                     })),
                 },
                 _ => continue,
@@ -558,34 +568,39 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
 }
 
 /// What the card says under a merged pull request: where, by whom, how big.
-fn merge_facts(pull: &Merged) -> Vec<String> {
-    let mut facts = vec![pull.repo.rsplit('/').next().unwrap_or(&pull.repo).to_string()];
+///
+/// Each fact says what it is (`kind`), so the island can draw it as what it
+/// is — a name, a size in green and red, a branch — rather than as one grey
+/// sentence.
+fn merge_facts(pull: &Merged) -> Vec<Value> {
+    let mut facts = vec![json!({ "kind": "repo", "text": pull.repo.rsplit('/').next().unwrap_or(&pull.repo) })];
     if let Some(who) = &pull.merged_by {
-        facts.push(format!("merged by {who}"));
+        facts.push(json!({ "kind": "by", "verb": "merged by", "text": who }));
     }
-    facts.push(format!("+{} \u{2212}{}", pull.additions, pull.deletions));
-    facts.push(if pull.files == 1 { "1 file".to_string() } else { format!("{} files", pull.files) });
+    facts.push(json!({ "kind": "diff", "additions": pull.additions, "deletions": pull.deletions }));
+    facts.push(json!({ "kind": "files", "text": if pull.files == 1 { "1 file".to_string() } else { format!("{} files", pull.files) } }));
     facts
 }
 
 /// What the card says under a build that broke: the job and the step it broke
 /// at, the branch, the commit it ran for, who started it, how long it lasted.
-fn failure_facts(run: &crate::github_detail::RunDetail) -> Vec<String> {
+fn failure_facts(run: &crate::github_detail::RunDetail) -> Vec<Value> {
     let mut facts = Vec::new();
     if let Some(job) = run.jobs.iter().find(|j| j.state == "failure") {
-        facts.push(match job.steps.iter().find(|s| s.state == "failure") {
+        let at = match job.steps.iter().find(|s| s.state == "failure") {
             Some(step) => format!("{} \u{203a} {}", job.name, step.name),
             None => job.name.clone(),
-        });
+        };
+        facts.push(json!({ "kind": "step", "text": at }));
     }
     if let Some(branch) = &run.branch {
-        facts.push(branch.clone());
+        facts.push(json!({ "kind": "branch", "text": branch }));
     }
     if let Some(title) = &run.title {
-        facts.push(format!("\u{201c}{title}\u{201d}"));
+        facts.push(json!({ "kind": "commit", "text": title }));
     }
     if let Some(actor) = &run.actor {
-        facts.push(format!("by {actor}"));
+        facts.push(json!({ "kind": "by", "verb": "by", "text": actor }));
     }
     facts
 }

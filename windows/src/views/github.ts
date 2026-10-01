@@ -1063,6 +1063,34 @@ function statusWord(file: GithubFile): HTMLElement {
 }
 
 /**
+ * The facts of a piece of news, each drawn as what it is, the way the panel
+ * draws them in its sheets: the project and who did it in clear, the size in
+ * green and red, a branch in the code face, the step that broke in red.
+ */
+export function newsFacts(news: IntegrationNews): Node[] {
+  const facts = news.open?.facts;
+  if (!facts) return news.detail ? [h("span", { class: "nf", text: news.detail })] : [];
+  return facts.map((f) => {
+    switch (f.kind) {
+      case "repo":
+        return h("span", { class: "nf strong" }, svg(ICONS.stack, 10), f.text ?? "");
+      case "by":
+        return h("span", { class: "nf" }, `${f.verb ?? "by"} `, h("b", { text: f.text ?? "" }));
+      case "diff":
+        return h("span", { class: "nf" }, plusMinus(f.additions ?? 0, f.deletions ?? 0));
+      case "files":
+        return h("span", { class: "nf" }, svg(ICONS.doc, 10), f.text ?? "");
+      case "branch":
+        return h("span", { class: "nf" }, h("span", { class: "gh-sha nf-branch", text: f.text ?? "" }));
+      case "step":
+        return h("span", { class: "nf bad" }, svg(ICONS.xmark, 9), f.text ?? "");
+      case "commit":
+        return h("span", { class: "nf quote" }, svg(ICONS.commit, 11, { stroke: 2 }), f.text ?? "");
+    }
+  });
+}
+
+/**
  * From the island's finished or error card: into the panel, straight to what
  * the news is about.
  */
@@ -1727,7 +1755,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       },
       h("i", {}, svg(news.success ? ICONS.merge : ICONS.xmark, 11, news.success ? { stroke: 2.2 } : {})),
       h("b", { text: open?.title ?? news.label }),
-      h("span", { text: (open?.facts ?? (news.detail ? [news.detail] : [])).join("  ·  ") }),
+      h("span", { class: "nfs" }, ...newsFacts(news)),
       h("em", { text: open?.target ? "Open" : "Dismiss" }),
     );
     line.style.setProperty("--c", color);

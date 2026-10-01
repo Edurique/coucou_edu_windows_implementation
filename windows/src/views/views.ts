@@ -11,7 +11,7 @@ import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
-import { buildGithub, enterGithubPanel, openGithubNews } from "./github";
+import { buildGithub, enterGithubPanel, newsFacts, openGithubNews } from "./github";
 import type { IntegrationNews } from "../core/bridge";
 
 export interface ViewActions {
@@ -385,8 +385,8 @@ function newsActions(actions: ViewActions): HTMLElement {
 function tellNews(news: IntegrationNews, who: HTMLElement, title: HTMLElement, facts: HTMLElement) {
   who.append(agentWho(State.focusTask, news.success ? "pull request merged" : "a build broke"));
   title.textContent = news.open?.title ?? news.label;
-  const said = news.open?.facts ?? (news.detail ? [news.detail] : []);
-  facts.textContent = said.join("  ·  ");
+  clear(facts);
+  facts.append(...newsFacts(news));
 }
 
 function buildError(actions: ViewActions): ViewHost {
@@ -397,7 +397,7 @@ function buildError(actions: ViewActions): ViewHost {
     btn("Retry", "primary", () => actions.setView(State.defaultView())),
     btn("Open in n8n", "secondary", () => actions.openUrl("")),
   );
-  const facts = h("div", { class: "sub news-facts" });
+  const facts = h("div", { class: "nfs news-facts" });
   const newsRow = newsActions(actions);
   const el = h("div", { class: "view" }, card("red", stack(116, 16, who, title, detail, facts, row, newsRow)));
   return {
@@ -430,7 +430,7 @@ function buildFinished(actions: ViewActions): ViewHost {
     btn("Open terminal", "primary", () => actions.openTerminal()),
     btn("OK", "secondary", () => actions.collapse()),
   );
-  const facts = h("div", { class: "sub news-facts" });
+  const facts = h("div", { class: "nfs news-facts" });
   const newsRow = newsActions(actions);
   const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, facts, row, newsRow)));
   return {

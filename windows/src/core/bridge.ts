@@ -427,6 +427,19 @@ export interface GithubAccount {
   checks: { label: string; ok: boolean; note: string | null }[];
 }
 
+/**
+ * One thing a news card says under its title, with what it is, so it is drawn
+ * as that: a project, who did it (`verb`: "merged by"), a size in lines, a
+ * count of files, a branch, the step a build broke at, a commit's title.
+ */
+export interface NewsFact {
+  kind: "repo" | "by" | "diff" | "files" | "branch" | "step" | "commit";
+  text?: string;
+  verb?: string;
+  additions?: number;
+  deletions?: number;
+}
+
 /** Something that just happened in an integration: the pill's badge and sound. */
 export interface IntegrationNews {
   success: boolean;
@@ -437,7 +450,7 @@ export interface IntegrationNews {
    * facts for the card — the step that broke, who merged — and the run or
    * the pull request to go to.
    */
-  open?: { target?: GithubTarget; label?: string; url?: string; title?: string; facts?: string[] };
+  open?: { target?: GithubTarget; label?: string; url?: string; title?: string; facts?: NewsFact[] };
 }
 
 export interface IntegrationUpdate {

@@ -105,10 +105,11 @@ export function chatPromptHeight(messageCount: number): number {
 
 /**
  * A result card that tells an integration's news has one line more than a
- * session's — the facts under the title. The island grows by that line, so
- * the card keeps the same room above and below its words.
+ * session's — the facts under the title, with air on both sides of it. The
+ * island grows by that much, so the card keeps the same room above and below
+ * its words.
  */
-export const NEWS_LINE = 20;
+export const NEWS_LINE = 28;
 
 export function islandSize(
   mode: IslandMode,
