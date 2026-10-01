@@ -12,7 +12,7 @@
 import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
 import {
-  CLAUDE_ID, SESSION_UNNAMED, State, TURN_DONE, newSession,
+  CLAUDE_ID, QUESTION_TOOL, SESSION_UNNAMED, State, TURN_DONE, newSession, newStep,
   type ChangedFile, type ClaudeClient, type ClaudeSession, type Question, type StepKind, type StepResult,
 } from "../core/state";
 import type { IslandViewName } from "../core/layout";
@@ -45,6 +45,8 @@ export interface HookPayload {
   result?: StepResult;
   /** On a PostToolUseFailure: what went wrong. */
   error?: string;
+  /** What was picked for each question of Claude's question tool — added by coucou-hook to PostToolUse. */
+  answers?: Record<string, string>;
   /** What an edit asking for permission would do — added by coucou-hook to PermissionRequest. */
   proposal?: { patch: string; additions: number; deletions: number; truncated: boolean; created: boolean };
   /** The conversation's title, read by coucou-hook from the session's transcript. */
@@ -53,16 +55,13 @@ export interface HookPayload {
   last_message?: string;
 }
 
-/** The tool Claude asks its questions with. */
-const QUESTION_TOOL = "AskUserQuestion";
-
 /** Sessions followed at once: as many as the island has tabs for. */
 const MAX_SESSIONS = 4;
 /** Files kept for a session, and edits kept for a file. */
 const MAX_FILES = 40;
 const MAX_EDITS = 30;
-/** Steps kept for the turn under way; the session panel shows the last few. */
-const MAX_STEPS = 12;
+/** Lines kept of a session's journal: past that the oldest go. */
+const MAX_STEPS = 120;
 /** Lines kept of what a session did; past that the older half goes. */
 const MAX_LINES = 200;
 /** Such a line is this long at most. */
@@ -93,29 +92,41 @@ function stepTarget(input: Record<string, unknown>, cwd: string): string | null 
   return null;
 }
 
+/** One more line in the session's journal. */
+function log(session: ClaudeSession, step: ReturnType<typeof newStep>) {
+  session.steps.push(step);
+  if (session.steps.length > MAX_STEPS) session.steps.shift();
+  return step;
+}
+
+/** The step of a tool still going, the last one started. */
+function goingStep(session: ClaudeSession, tool: string) {
+  return [...session.steps].reverse().find((s) => s.tool === tool && s.state === "running") ?? null;
+}
+
 /** A tool starts: one more step, going. */
 function startStep(session: ClaudeSession, tool: string, input: Record<string, unknown>, cwd: string) {
-  session.steps.push({
-    tool, kind: STEP_KINDS[tool] ?? "other", state: "running",
-    target: stepTarget(input, cwd), result: null, patch: null,
-  });
-  if (session.steps.length > MAX_STEPS) session.steps.shift();
+  const step = log(session, newStep(tool, STEP_KINDS[tool] ?? "other", stepTarget(input, cwd)));
+  if (tool === QUESTION_TOOL) step.questions = questionsOf(input);
 }
 
 /** A tool ends: its last step still going takes the outcome, and what the tool gave back. */
 function endStep(session: ClaudeSession, payload: HookPayload, state: "done" | "failed") {
-  const tool = payload.tool_name ?? "Tool";
-  const step = [...session.steps].reverse().find((s) => s.tool === tool && s.state === "running");
+  const step = goingStep(session, payload.tool_name ?? "Tool");
   if (!step) return;
   step.state = state;
+  step.at = Date.now();
   step.patch = payload.change?.patch ?? null;
   step.result = payload.result ?? (payload.error ? { text: payload.error, start: null, truncated: false, tail: false } : null);
+  if (payload.answers) step.answers = payload.answers;
+  // It ran, so whoever was asked said yes — here or in Claude Code.
+  if (step.permission === "asked") step.permission = state === "done" ? "allowed" : "denied";
 }
 
-/** The turn ends: nothing is going any more, and the column says so. */
-function closeSteps(session: ClaudeSession) {
+/** The turn ends: nothing is going any more, and the journal closes on what Claude said. */
+function closeSteps(session: ClaudeSession, answer: string | null) {
   for (const step of session.steps) if (step.state === "running") step.state = "done";
-  session.steps.push({ tool: TURN_DONE, kind: "other", state: "done", target: null, result: null, patch: null });
+  log(session, newStep(TURN_DONE, "reply", answer));
 }
 
 /** One more line of what the session did. */
@@ -439,7 +450,6 @@ export function handleHook(island: Island, payload: HookPayload) {
 
     case "UserPromptSubmit": {
       session.state = "thinking";
-      session.steps = [];
       // The field is `prompt`; reading `message` meant this step was always blank.
       const asked = payload.prompt ?? payload.message;
       // What Claude Code feeds itself as a prompt — a task's notification, a
@@ -447,6 +457,7 @@ export function handleHook(island: Island, payload: HookPayload) {
       if (asked && !asked.trimStart().startsWith("<")) {
         session.asked = asked;
         session.answer = null;
+        log(session, newStep("Prompt", "prompt", asked));
         say(session, asked.slice(0, LINE_CHARS));
       }
       surface("overview", false);
@@ -486,15 +497,16 @@ export function handleHook(island: Island, payload: HookPayload) {
         session.state = "question";
         say(session, message);
       }
+      if (message) log(session, newStep("Notification", "note", message));
       break;
     }
 
     case "Stop":
-      closeSteps(session);
       if (payload.last_message) {
         session.answer = payload.last_message;
         session.answeredAt = Date.now();
       }
+      closeSteps(session, payload.last_message ?? null);
       session.state = "finished";
       if (payload.message) say(session, payload.message.slice(0, LINE_CHARS));
       Sound.play("finish");
@@ -508,6 +520,7 @@ export function handleHook(island: Island, payload: HookPayload) {
       break;
 
     case "StopFailure":
+      log(session, newStep("Error", "note", "The session stopped on an error.")).state = "failed";
       session.state = "error";
       Sound.play("error");
       tell("error");
@@ -515,10 +528,12 @@ export function handleHook(island: Island, payload: HookPayload) {
 
     case "SubagentStart":
       say(session, "+ subagent");
+      log(session, newStep("Subagent", "note", "A subagent started."));
       break;
 
     case "SubagentStop":
       say(session, "• subagent done");
+      log(session, newStep("Subagent", "note", "A subagent finished."));
       break;
 
     case "PermissionRequest": {
@@ -544,6 +559,9 @@ export function handleHook(island: Island, payload: HookPayload) {
           payload.proposal && typeof file === "string" ? { path: sessionPath(file, cwd), ...payload.proposal } : null;
         session.approval = { requestId, sessionId: session.id, tool, command: approvalTarget(tool, input), proposal };
       }
+      // The journal says the tool had to ask, and later what it was told.
+      const asking = goingStep(session, tool);
+      if (asking) asking.permission = "asked";
       // The relay's short ack window closes in 800 ms; everything below this
       // line is synchronous, so the card really is up by the time it lands.
       if (requestId) void Bridge.approvalAck(requestId);

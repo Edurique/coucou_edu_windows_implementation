@@ -81,21 +81,33 @@ diff of its edit, the command it ran with the end of what that printed. Once the
 turn is over the card says **Done**, with Claude's first words and what its last
 command printed.
 
-<img src="screenshots/claude-session.png" width="640" alt="The session panel: the session's steps on the left, a file being written on the right, the last command under it">
+<img src="screenshots/claude-session.png" width="640" alt="The session panel: the session's steps on the left, its journal on the right, an edit being typed">
 
-Click the card for the **session panel**:
+Click the card for the **session panel**. On the left, Mochi's column: the
+session's name and its last steps, each going, done or failed. On the right, the
+session's **journal**, read like a conversation, in the order things happened:
 
-| What | Where |
+| A line of the journal | What it shows |
 |---|---|
-| The steps of the turn — each tool going, done or failed | Mochi's column, on the left |
-| The file Claude is at: read, or being written, the old line struck and the new ones typed under it | The panel, while Claude works |
-| The last command and the end of what it printed | Under the file, as a terminal sits under an editor |
-| Every file the session changed, and each one's whole diff | **N files**, at the top right |
-| What Claude said to end its turn, as it wrote it | The panel, once the turn is over — or **Read reply** on the finished card |
+| What you asked | Your words, as you sent them |
+| A file read | Its first lines, numbered |
+| An edit | Its diff, the old line struck and the new ones typed under it |
+| A command | The command, then the end of what it printed |
+| A search | What it found |
+| A question from Claude | Its options, and the ones that were picked — on the island or in Claude Code |
+| A tool that had to ask first | **needs permission**, then **allowed** or **denied** |
+| The end of the turn | What Claude said, as it wrote it — also behind **Read reply** on the finished card |
+
+The journal follows the session while you are at its end, and stays where you
+scrolled otherwise. **N files**, at the top right, lists every file the session
+changed, each with its whole diff.
+
+<img src="screenshots/claude-journal.png" width="640" alt="The journal further up: a question with the option picked, a command that was allowed">
 
 An edit is shown the moment Claude Code reports it, so the typing is a replay of
-it, about a second behind. The island only watches: to write to Claude, there is
-Claude Code.
+it, about a second behind. Nothing changes at a stroke: a new line rises into
+place, a state's colour fades to the next. The island only watches: to write to
+Claude, there is Claude Code.
 
 ### Several sessions at once
 
@@ -132,7 +144,9 @@ person — a review run by a plugin, a script using the SDK — are left alone.
 Everything comes from the hooks Claude Code already sends — nothing is asked of
 Anthropic, and nothing leaves your machine. Of what a tool gives back, the relay
 forwards a few lines and no more: the diff of an edit, the first lines of a file
-that was read, the last lines a command printed, the names a search found. Two
+that was read, the last lines a command printed, the names a search found, the
+answers to a question. A session's journal is kept in memory, its last 120
+lines, and is gone with the session. Two
 things are read from disk by the relay, and only then: the file an edit asks permission for (to show its diff —
 it is never written), and the end of the session's transcript at the start and
 end of a turn (for the conversation's title and Claude's last message). That

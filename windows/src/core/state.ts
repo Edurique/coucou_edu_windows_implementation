@@ -103,23 +103,60 @@ export interface StepResult {
   tail: boolean;
 }
 
+/** The tool Claude asks its questions with. */
+export const QUESTION_TOOL = "AskUserQuestion";
+
 /** The step that closes a turn, in the place of a tool's name. */
 export const TURN_DONE = "Done";
 
-/** What a tool does, as far as showing it goes. */
-export type StepKind = "read" | "edit" | "command" | "search" | "other";
+/**
+ * What a line of a session's journal is: a tool, by what it does as far as
+ * showing it goes — or something said: what the user asked (`prompt`), what
+ * Claude answered to end its turn (`reply`), a word from Claude Code (`note`).
+ */
+export type StepKind = "read" | "edit" | "command" | "search" | "other" | "prompt" | "reply" | "note";
 
-/** One tool of the turn under way, by its own name: going, done, or failed. */
+/** The kinds of step that are words, not a tool at work. */
+const SAID: ReadonlySet<StepKind> = new Set<StepKind>(["prompt", "reply", "note"]);
+
+/**
+ * One line of a session's journal, in the order things happened: a tool by
+ * its own name — going, done, or failed — or something that was said.
+ */
 export interface SessionStep {
   tool: string;
   kind: StepKind;
   state: "running" | "done" | "failed";
-  /** What it is at: a file by its path in the session's folder, a command, what is looked for. */
+  /**
+   * What a tool is at: a file by its path in the session's folder, a command,
+   * what is looked for. For something said: the words.
+   */
   target: string | null;
   /** What it gave back, once it is done. */
   result: StepResult | null;
   /** For an edit: the diff it made. */
   patch: string | null;
+  /** For Claude's question tool: what it asks, and once answered, what was picked for each. */
+  questions: Question[] | null;
+  answers: Record<string, string> | null;
+  /** For a tool that had to ask first: where its permission request stands. */
+  permission: "asked" | "allowed" | "denied" | null;
+  /** When it started; once it has ended, when it ended. */
+  at: number;
+}
+
+/** A step with nothing in it yet but what it is. */
+export function newStep(tool: string, kind: StepKind, target: string | null): SessionStep {
+  return {
+    tool, kind, state: kind === "prompt" || kind === "reply" || kind === "note" ? "done" : "running",
+    target, result: null, patch: null, questions: null, answers: null, permission: null, at: Date.now(),
+  };
+}
+
+/** The tools of the turn under way: what the session did since it was last asked something. */
+export function turnSteps(session: ClaudeSession): SessionStep[] {
+  const asked = session.steps.map((step) => step.kind).lastIndexOf("prompt");
+  return session.steps.slice(asked + 1).filter((step) => !SAID.has(step.kind));
 }
 
 /**
@@ -138,7 +175,7 @@ export interface ClaudeSession {
   state: BotStateName;
   /** What it did, a line per step, oldest first: what a card falls back on. */
   lines: string[];
-  /** The tools of the turn under way, oldest first; "Done" closes a turn. */
+  /** Its journal, oldest first: what was asked, each tool, what Claude said; "Done" closes a turn. */
   steps: SessionStep[];
   /** What the user asked last, and what Claude said to end its turn. */
   asked: string | null;

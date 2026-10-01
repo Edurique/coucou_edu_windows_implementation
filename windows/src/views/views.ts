@@ -2,9 +2,9 @@
 // colours and wording are copied from the Swift views so both platforms read
 // identically.
 
-import { h, svg, clear, dot } from "./dom";
+import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
-import { CLAUDE_ID, State, TURN_DONE, type AgentTask, type ClaudeSession, type SessionStep } from "../core/state";
+import { CLAUDE_ID, State, TURN_DONE, turnSteps, type AgentTask, type ClaudeSession, type SessionStep } from "../core/state";
 import { VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
@@ -95,7 +95,7 @@ interface Now {
 }
 
 function nowOf(session: ClaudeSession): Now {
-  const steps = session.steps.filter((step) => step.tool !== TURN_DONE);
+  const steps = turnSteps(session);
   const last = steps.at(-1) ?? null;
   const shown = [...steps].reverse().find(hasPreview) ?? null;
   const oneLine = (text: string | null) => text?.split("\n")[0] ?? "";
@@ -273,7 +273,8 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
   let lastFocus: string | null = null;
   let mode: "session" | "card" | null = null;
   let cardKey = "";
-  let nowKey = "";
+  let lineKey = "";
+  let boxKey = "";
 
   const hooks: IntegrationCardHooks = {
     get detailOpen() {
@@ -302,25 +303,34 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
   function syncNow(session: ClaudeSession) {
     const now = nowOf(session);
     const step = now.step;
-    const next = [
-      session.id, now.label, now.detail, step?.tool, step?.target, step?.state,
+    // The line and the box each come in when what they show changes — and
+    // only then: a step that goes from one file to the next moves the line,
+    // not the box still showing the last result.
+    const nextLine = [session.id, now.label, now.detail].join("~");
+    if (nextLine !== lineKey) {
+      lineKey = nextLine;
+      clear(nowLine);
+      const label = h("b", { text: now.label });
+      const icon = h("i", {}, now.icon);
+      if (now.color) {
+        label.style.color = now.color;
+        icon.style.color = now.color;
+      }
+      nowLine.append(icon, label, h("span", { class: now.color ? "said" : "at", text: now.detail, title: now.detail }));
+      replay(nowLine, "now-in");
+    }
+    const nextBox = [
+      session.id, step?.tool, step?.target, step?.at, step?.state,
       step?.result?.text.length, step?.patch?.length, step ? "" : now.words,
     ].join("~");
-    if (next === nowKey) return;
-    nowKey = next;
-    clear(nowLine);
-    const label = h("b", { text: now.label });
-    const icon = h("i", {}, now.icon);
-    if (now.color) {
-      label.style.color = now.color;
-      icon.style.color = now.color;
-    }
-    nowLine.append(icon, label, h("span", { class: now.color ? "said" : "at", text: now.detail, title: now.detail }));
+    if (nextBox === boxKey) return;
+    boxKey = nextBox;
     clear(nowBox);
     const preview = step ? stepPreview(step, NOW_LINES) : null;
     if (preview) nowBox.append(preview);
     else if (now.words) nowBox.append(h("div", { class: "now-words", text: now.words.trim() }));
     nowBox.style.display = nowBox.firstChild ? "" : "none";
+    if (nowBox.firstElementChild) replay(nowBox.firstElementChild as HTMLElement, "now-in");
   }
 
   return {

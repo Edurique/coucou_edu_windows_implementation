@@ -31,11 +31,15 @@ const STEP_ICONS: Record<SessionStep["kind"], { path: string; stroke: number }> 
   command: { path: ICONS.terminal, stroke: 2.2 },
   search: { path: ICONS.search, stroke: 2.2 },
   other: { path: ICONS.pulse, stroke: 2 },
+  prompt: { path: ICONS.bubble, stroke: 0 },
+  reply: { path: ICONS.check, stroke: 3 },
+  note: { path: ICONS.bang, stroke: 0 },
 };
 
 /** The mark of what a step does: a page read, a pencil, a prompt, a lens. */
 export function stepIcon(step: SessionStep, size = 12): SVGSVGElement {
-  const icon = STEP_ICONS[step.kind];
+  // A question is something said, whatever its tool is filed under.
+  const icon = step.questions ? STEP_ICONS.prompt : STEP_ICONS[step.kind];
   return svg(icon.path, size, icon.stroke ? { stroke: icon.stroke } : {});
 }
 
@@ -50,6 +54,13 @@ function oneLine(command: string): string {
   return lines.length > 1 ? `${lines[0]} …` : lines[0];
 }
 
+/** A line still to be typed: its row, empty for now, and what goes in it. */
+export interface ToType {
+  row: HTMLElement;
+  number: number | null;
+  text: string;
+}
+
 /** True when the step has something to look at. */
 export function hasPreview(step: SessionStep): boolean {
   return step.patch != null || step.result != null || (step.kind === "command" && step.target != null);
@@ -58,9 +69,10 @@ export function hasPreview(step: SessionStep): boolean {
 /**
  * What a step did, to look at. With `limit`, only that many lines, and the
  * ones that say the most: an edit from its first changed line, a file from
- * its top, a command with the end of what it printed.
+ * its top, a command with the end of what it printed. With `typed`, an
+ * edit's new lines come out empty and hidden, and are handed back to be typed.
  */
-export function stepPreview(step: SessionStep, limit?: number): HTMLElement | null {
+export function stepPreview(step: SessionStep, limit?: number, typed?: ToType[]): HTMLElement | null {
   const rows: HTMLElement[] = [];
   const result = step.result?.text.split("\n") ?? [];
 
@@ -69,9 +81,17 @@ export function stepPreview(step: SessionStep, limit?: number): HTMLElement | nu
     const lines = [...readPatch(step.patch)].flatMap((line) => ("hunk" in line ? [] : [line]));
     // A line of context above the first change, when there is one.
     const first = Math.max(0, lines.findIndex((line) => line.sign !== "") - 1);
-    for (const line of limit ? lines.slice(first, first + limit) : lines) {
-      rows.push(diffLine(line.new ?? line.old, line.sign, line.text, kind));
+    const shown = limit ? lines.slice(first, first + limit) : lines;
+    for (const line of shown) {
+      const number = line.new ?? line.old;
+      const row = diffLine(number, line.sign, typed && line.sign === "+" ? "" : line.text, kind);
+      if (typed && line.sign === "+") {
+        row.classList.add("untyped");
+        typed.push({ row, number, text: line.text });
+      }
+      rows.push(row);
     }
+    if (shown.length < lines.length - first) rows.push(termLine(`… ${lines.length - first - shown.length} more lines`));
   } else if (step.kind === "command") {
     if (step.target) rows.push(termLine(oneLine(step.target), true));
     // Short of room, an empty line is one line less of what was printed.

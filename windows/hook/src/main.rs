@@ -493,6 +493,14 @@ fn read_event() -> Option<Event> {
         .then(|| map.get("tool_response").and_then(|response| result_of(&tool, response)))
         .flatten();
     let tool_input = (tool == QUESTION_TOOL).then(|| map.get("tool_input").cloned()).flatten();
+    // A question that got its answers, wherever they were picked: the island's
+    // journal shows them under the question.
+    let answers = (event == "PostToolUse" && tool == QUESTION_TOOL)
+        .then(|| map.get("tool_response").and_then(|response| response.get("answers")).filter(|v| v.is_object()).cloned())
+        .flatten();
+    if let Some(answers) = answers {
+        map.insert("answers".into(), answers);
+    }
     // An edit asking for permission: what it would do, to look at before allowing.
     let proposal = (event == "PermissionRequest" && EDIT_TOOLS.contains(&tool.as_str()))
         .then(|| map.get("tool_input").and_then(|input| proposal_of(&tool, input)))

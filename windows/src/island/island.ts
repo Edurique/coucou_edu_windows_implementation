@@ -10,7 +10,7 @@ import {
   type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { CLAUDE_ID, State } from "../core/state";
+import { CLAUDE_ID, QUESTION_TOOL, State, type SessionStep } from "../core/state";
 import { BotEngine, hexToRGB, type RGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
@@ -163,6 +163,7 @@ export class Island {
         if (!req) return;
         Sound.play(d === "deny" ? "blip" : "approve");
         void Bridge.approvalDecision(req.requestId, d);
+        this.noteOutcome(req.tool, (step) => (step.permission = d === "deny" ? "denied" : "allowed"));
         this.settleRequest();
       },
       answer: (answers) => {
@@ -170,6 +171,7 @@ export class Island {
         if (!req) return;
         Sound.play("approve");
         void Bridge.approvalAnswer(req.requestId, answers);
+        this.noteOutcome(QUESTION_TOOL, (step) => (step.answers = answers));
         this.settleRequest();
       },
       skipQuestion: () => {
@@ -177,6 +179,7 @@ export class Island {
         if (!req) return;
         Sound.play("blip");
         void Bridge.approvalDecision(req.requestId, "skip");
+        this.noteOutcome(QUESTION_TOOL, (step) => (step.state = "failed"));
         this.settleRequest();
       },
       passQuestion: () => {
@@ -373,6 +376,12 @@ export class Island {
     State.lastActivity = performance.now();
     this.animateGeometry(!grew);
     State.notify();
+  }
+
+  /** Writes what was decided on the island in the journal, on the step that was waiting for it. */
+  private noteOutcome(tool: string, write: (step: SessionStep) => void) {
+    const step = [...State.session.steps].reverse().find((s) => s.tool === tool && s.state === "running");
+    if (step) write(step);
   }
 
   /** The request on the card got its answer: its session is back at work. */

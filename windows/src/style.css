@@ -3647,7 +3647,6 @@ button.gh-block:hover {
   color: var(--dim);
   font: 500 10.5px var(--font);
   cursor: default;
-  transition: color 0.12s ease-out, background 0.12s ease-out;
 }
 
 .sess-tab > .dot {
@@ -3814,16 +3813,209 @@ button.gh-block:hover {
   color: var(--red-text);
 }
 
-/* In the session panel: the last command under the file, as a terminal sits
-   under an editor. */
-.sess-term {
-  flex: 0 0 auto;
-  padding: 6px 0 7px;
-  border-top: 1px solid var(--gh-edge);
+/* The session's journal: what was asked, each thing Claude did, what it said —
+   one under the other, in the order they happened. */
+.sess-journal {
+  gap: 9px;
+  padding: 9px 9px 12px;
+  user-select: text;
 }
 
-.sess-term .term-line .t {
-  white-space: pre;
+.jr {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.jr-asked {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.jr-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 2px 4px;
+}
+
+/* A word from Claude Code between two steps: a subagent, a notification. */
+.jr-note {
+  padding: 0 4px;
+  font: 400 11px var(--font);
+  color: var(--dim-3);
+}
+
+.jr-note.failed {
+  color: var(--red-text);
+}
+
+/* A step: its icon, its name and what it is at, then what it did. */
+.jr-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+}
+
+.jr-head > i {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--dim);
+}
+
+.jr-head > b {
+  flex: 0 0 auto;
+  font: 600 12px var(--font);
+  color: var(--ink);
+}
+
+.jr-head > .at {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 10.5px var(--mono);
+  color: var(--dim-2);
+}
+
+.jr-head > .grow {
+  flex: 1 1 0;
+}
+
+.jr-time {
+  flex: 0 0 auto;
+  font: 400 10px var(--font);
+  color: var(--dim-4);
+}
+
+.jr-chip {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font: 500 10px var(--font);
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+}
+
+.jr-body {
+  margin-top: 4px;
+  padding: 4px 0;
+  border-radius: 8px;
+  border: 1px solid var(--gh-edge);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.jr-step.failed .jr-body {
+  border-color: color-mix(in srgb, var(--red) 35%, transparent);
+}
+
+/* A question Claude asked: its words, its options, the ones picked lit. */
+.jr-asks {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 22%, transparent);
+  background: color-mix(in srgb, var(--cyan) 6%, transparent);
+}
+
+.jr-q {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.jr-q-title {
+  font: 500 12px/1.35 var(--font);
+  color: var(--ink-2);
+}
+
+.jr-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.jr-option {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--gh-edge);
+  font: 500 10.5px var(--font);
+  color: var(--dim-3);
+}
+
+.jr-option.on {
+  color: var(--on-light);
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
+.jr-option.typed {
+  border-radius: 8px;
+}
+
+.jr-waiting {
+  font: 400 11px var(--font);
+  color: var(--dim-3);
+}
+
+/* ── How a session's states come and go ─────────────────────────────────────
+   Nothing a session shows changes at a stroke. What is new comes in the way a
+   view of the island does — a short rise with the same overshoot — and what
+   changes colour takes a moment to. All of it runs once and stops. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px) scale(0.985);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+/* The overview's step and what it did: the next one rises into place. */
+.now-in {
+  animation: rise-in 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+/* A line of the journal that is new; in one that got something more — what a
+   tool gave back, what was decided — only that. */
+.jr.in,
+.jr.more > .jr-body,
+.jr.more > .jr-asks,
+.sess-step.in {
+  animation: rise-in 0.32s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+.jr.more .jr-chip,
+.jr.more .jr-option.on,
+.sess-mark.in,
+.sess-tab.in {
+  animation: pop-in 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
+}
+
+/* A tab's dot, and the tab around it, go from one state's colour to the next. */
+.sess-tab,
+.sess-tab > .dot {
+  transition: color 0.3s ease-out, background 0.3s ease-out, border-color 0.3s ease-out;
+}
+
+/* A step that ends dims where it stands. */
+.sess-step {
+  transition: color 0.3s ease-out;
+}
+
+.jr-body,
+.jr-asks {
+  transition: border-color 0.3s ease-out;
 }

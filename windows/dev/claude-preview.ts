@@ -156,7 +156,20 @@ const more = [
   },
 ];
 
+// `asked`: earlier in the turn, a question that was answered and a command that had to ask first.
+if (params.has("asked")) {
+  const ask = { tool_name: "AskUserQuestion", tool_input: { questions: [more[0]] } };
+  hook({ hook_event_name: "PreToolUse", ...ask });
+  hook({ hook_event_name: "PostToolUse", ...ask, answers: { [more[0].question]: "Titles and descriptions" } });
+  const push = { tool_name: "Bash", tool_input: { command: "git push origin windows-claude-desktop" } };
+  hook({ hook_event_name: "PreToolUse", ...push });
+  hook({ hook_event_name: "PermissionRequest", request_id: "preview-0", ...push });
+  hook({ hook_event_name: "PostToolUse", ...push, result: { text: ["To github.com:mochi/coucou.git", "   11bd082..848ca62  windows-claude-desktop -> windows-claude-desktop"].join("\n"), start: null, truncated: false, tail: true } });
+  hook({ hook_event_name: "SubagentStart" });
+}
+
 if (view === "question") {
+  hook({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_input: { questions: params.has("many") ? [engine, ...more] : [engine] } });
   hook({
     hook_event_name: "PermissionRequest", request_id: "preview-1", tool_name: "AskUserQuestion",
     tool_input: { questions: params.has("many") ? [engine, ...more] : [engine] },
