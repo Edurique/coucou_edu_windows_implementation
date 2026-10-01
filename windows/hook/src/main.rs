@@ -32,11 +32,18 @@ const DECISION_BUDGET: Duration = Duration::from_secs(110);
 const ERROR_PIPE_BUSY: i32 = 231;
 
 /// Fields that are pointless to forward and can be enormous (a whole file read,
-/// a full command output). The island never shows them.
+/// a full command output). The island shows a few lines of them at most, and
+/// those are taken out first.
 const DROPPED_FIELDS: &[&str] = &["tool_response", "transcript_path"];
 /// The tools that leave a file changed. What they did to it is the one part of
 /// a tool's response the island shows.
 const EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+/// The tools that run a command: what it printed is what they have to show.
+const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+/// Lines of a tool's result forwarded — the end of what a command printed, the
+/// start of a file that was read — and the longest of them, in characters.
+const MAX_RESULT_LINES: usize = 40;
+const MAX_RESULT_LINE: usize = 240;
 /// The tool Claude asks its questions with. Its input goes back whole, with the
 /// answers added, so it is kept as it came.
 const QUESTION_TOOL: &str = "AskUserQuestion";
@@ -239,6 +246,66 @@ fn change_of(response: &serde_json::Value) -> Option<serde_json::Value> {
     Some(patch.json(created))
 }
 
+/// A few lines of what a tool gave back, for the island to show under the
+/// step: the end of what a command printed, the start of a file that was read,
+/// what a search found. Nothing else of a tool's response leaves the relay.
+fn result_of(tool: &str, response: &serde_json::Value) -> Option<serde_json::Value> {
+    let text = |key: &str| response.get(key).and_then(|v| v.as_str()).unwrap_or_default();
+    let names = || {
+        let files = response.get("filenames").and_then(|v| v.as_array());
+        files.into_iter().flatten().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n")
+    };
+    match tool {
+        _ if COMMAND_TOOLS.contains(&tool) => {
+            let printed = [text("stdout"), text("stderr")].iter().filter(|s| !s.trim().is_empty()).cloned().collect::<Vec<_>>().join("\n");
+            excerpt(&plain(&printed), None, true)
+        }
+        "Read" => {
+            let file = response.get("file")?;
+            let start = file.get("startLine").and_then(|v| v.as_u64()).unwrap_or(1);
+            excerpt(file.get("content")?.as_str()?, Some(start), false)
+        }
+        "Grep" if !text("content").trim().is_empty() => excerpt(text("content"), None, false),
+        "Grep" | "Glob" => excerpt(&names(), None, false),
+        _ => None,
+    }
+}
+
+/// The first lines of a text, or its last when `tail` — what a command ends
+/// on is what it has to say. `start` is the number of the first line, for a file.
+fn excerpt(text: &str, start: Option<u64>, tail: bool) -> Option<serde_json::Value> {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    if lines.iter().all(|line| line.trim().is_empty()) {
+        return None;
+    }
+    let truncated = lines.len() > MAX_RESULT_LINES;
+    let kept = if tail { &lines[lines.len().saturating_sub(MAX_RESULT_LINES)..] } else { &lines[..lines.len().min(MAX_RESULT_LINES)] };
+    let kept: Vec<String> = kept.iter().map(|line| clip(line.trim_end(), MAX_RESULT_LINE)).collect();
+    Some(serde_json::json!({ "text": kept.join("\n"), "start": start, "truncated": truncated, "tail": tail }))
+}
+
+/// What a command printed without the escape sequences that colour it in a terminal.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // ESC [ … up to the letter that ends the sequence; a lone ESC just goes.
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The file as Claude Code reads it: text, with Unix line ends. None when it
 /// is not there, or too large to be worth showing a diff of.
 fn read_text(path: &str) -> Option<String> {
@@ -421,6 +488,10 @@ fn read_event() -> Option<Event> {
     let change = (event == "PostToolUse" && EDIT_TOOLS.contains(&tool.as_str()))
         .then(|| map.get("tool_response").and_then(change_of))
         .flatten();
+    // A few lines of what the tool gave back, to show under its step.
+    let result = (event == "PostToolUse")
+        .then(|| map.get("tool_response").and_then(|response| result_of(&tool, response)))
+        .flatten();
     let tool_input = (tool == QUESTION_TOOL).then(|| map.get("tool_input").cloned()).flatten();
     // An edit asking for permission: what it would do, to look at before allowing.
     let proposal = (event == "PermissionRequest" && EDIT_TOOLS.contains(&tool.as_str()))
@@ -487,6 +558,9 @@ fn read_event() -> Option<Event> {
     }
     if let Some(proposal) = proposal {
         payload["proposal"] = proposal;
+    }
+    if let Some(result) = result {
+        payload["result"] = result;
     }
     if let Some(title) = title {
         payload["session_title"] = serde_json::Value::String(title);
@@ -714,6 +788,34 @@ mod tests {
         assert!(last_message_of(r#"{"type":"user","message":{"content":"hello"}}"#).is_none());
         assert_eq!(clip("héllo", 3), "hél…");
         assert_eq!(clip("hey", 3), "hey");
+    }
+
+    #[test]
+    fn a_command_shows_the_end_of_what_it_printed_without_its_colours() {
+        let printed = (1..=60).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let response = serde_json::json!({ "stdout": format!("{printed}\n\u{1b}[32mPASS\u{1b}[0m tests\n"), "stderr": "" });
+        let result = result_of("Bash", &response).unwrap();
+        let text = result["text"].as_str().unwrap();
+        assert_eq!(text.lines().count(), MAX_RESULT_LINES);
+        assert!(text.ends_with("PASS tests"));
+        assert!(!text.contains("line 21\n"));
+        assert_eq!(result["truncated"], true);
+        assert_eq!(result["tail"], true);
+        // A command that printed nothing has nothing to show.
+        assert!(result_of("PowerShell", &serde_json::json!({ "stdout": "\n", "stderr": "" })).is_none());
+    }
+
+    #[test]
+    fn a_file_read_shows_its_first_lines_with_their_numbers() {
+        let response = serde_json::json!({ "type": "text", "file": { "content": "fn a() {}\nfn b() {}\n", "startLine": 12 } });
+        let result = result_of("Read", &response).unwrap();
+        assert_eq!(result["text"], "fn a() {}\nfn b() {}");
+        assert_eq!(result["start"], 12);
+        assert_eq!(result["tail"], false);
+        // A search shows what it found; a tool with nothing to show, nothing.
+        let found = result_of("Glob", &serde_json::json!({ "filenames": ["a.rs", "b.rs"] })).unwrap();
+        assert_eq!(found["text"], "a.rs\nb.rs");
+        assert!(result_of("WebFetch", &serde_json::json!({ "result": "…" })).is_none());
     }
 
     #[test]
