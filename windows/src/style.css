@@ -4229,3 +4229,77 @@ button.gh-block:hover {
   background: var(--ink);
   color: var(--on-light);
 }
+
+/* ── A song being announced ─────────────────────────────────────────────────
+   The island opened on its own: light says why. A wash of Spotify's green
+   breathes behind the cover, a line of light along the card's foot runs down
+   the time left before the island folds back, a sheen passes over the cover
+   and it glows. Each plays once. */
+.media-card.announce::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 140% at 12% 50%, rgba(29, 185, 84, 0.34), rgba(29, 185, 84, 0) 62%);
+  animation: announce-wash var(--announce, 4.5s) ease-in-out both;
+}
+
+@keyframes announce-wash {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  45% { opacity: 0.55; }
+  70% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+
+.media-card.announce::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  border-radius: 2px;
+  background: #1db954;
+  box-shadow: 0 0 10px 1px rgba(29, 185, 84, 0.8);
+  transform-origin: left center;
+  animation: announce-line var(--announce, 4.5s) linear both;
+}
+
+@keyframes announce-line {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+/* The words of the card stay above its light. */
+.media-card > * {
+  position: relative;
+}
+
+.media-card > .media-cover {
+  position: absolute;
+}
+
+#island-cover.shine {
+  animation: cover-glow 1.6s ease-out both;
+}
+
+@keyframes cover-glow {
+  0% { box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(29, 185, 84, 0.9); }
+  35% { box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 22px 5px rgba(29, 185, 84, 0.65); }
+  100% { box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(29, 185, 84, 0); }
+}
+
+/* The sheen: a band of light that crosses the cover once. */
+#island-cover.shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.55) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: cover-sheen 0.9s 0.25s ease-in-out both;
+}
+
+@keyframes cover-sheen {
+  to { transform: translateX(120%); }
+}

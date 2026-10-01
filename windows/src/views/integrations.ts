@@ -335,6 +335,22 @@ function buildSpotifyCard(): { el: HTMLElement; sync(): void } {
 }
 
 let spotify: ReturnType<typeof buildSpotifyCard> | null = null;
+let announced: number | null = null;
+
+/**
+ * The card says it is here on purpose: a new song is being announced. For as
+ * long as the island stays open on it (`ms`), a wash of Spotify's green
+ * breathes behind the cover and a line of light along the card's foot runs
+ * down, the time left before the island folds back.
+ */
+export function announceOnCard(ms: number) {
+  spotify ??= buildSpotifyCard();
+  const { el } = spotify;
+  el.style.setProperty("--announce", `${ms}ms`);
+  replay(el, "announce");
+  if (announced != null) window.clearTimeout(announced);
+  announced = window.setTimeout(() => el.classList.remove("announce"), ms);
+}
 
 function spotifyCard(): HTMLElement {
   spotify ??= buildSpotifyCard();

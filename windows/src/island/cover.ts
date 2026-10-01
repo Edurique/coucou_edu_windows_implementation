@@ -5,7 +5,7 @@
 // song fades in over the one before.
 
 import { Spring } from "../core/anim";
-import { h } from "../views/dom";
+import { h, replay } from "../views/dom";
 
 /** How long a new cover takes to fade in over the last; the last is dropped after it. */
 const FADE_MS = 450;
@@ -49,6 +49,11 @@ export class FloatingCover {
     const before = [...this.el.children];
     this.el.append(h("img", { src: url, alt: "" }));
     window.setTimeout(() => before.forEach((old) => old.remove()), FADE_MS);
+  }
+
+  /** A new song is being shown: a light passes over the cover, and it glows for a moment. */
+  shine() {
+    replay(this.el, "shine");
   }
 
   /**

@@ -97,6 +97,11 @@ export class Island {
   private collapseTimer: number | null = null;
   private wasInIsland = false;
 
+  /** The cover's light, for a song that is being announced. */
+  shineCover() {
+    this.cover.shine();
+  }
+
   /** True while the mouse is on the island: whoever opened it for a moment leaves it open. */
   get hovered(): boolean {
     return this.wasInIsland;

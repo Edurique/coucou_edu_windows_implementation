@@ -6,7 +6,7 @@ import { onEvent, Bridge, type GithubData, type IntegrationUpdate } from "../cor
 import { Sound } from "../core/sound";
 import { CLAUDE_ID, State } from "../core/state";
 import { enterGithubPanel, sawRunEnd } from "../views/github";
-import { nowPlaying } from "../views/integrations";
+import { announceOnCard, nowPlaying } from "../views/integrations";
 import type { Island } from "./island";
 
 /** Which Credential Manager key backs each pill. */
@@ -55,7 +55,7 @@ let announceTimer: number | null = null;
 
 /**
  * A new song: the island unfolds on Spotify's card for a moment — the cover,
- * the song, who plays it — and folds back, the front going back to whoever
+ * the song, who plays it, under a light that says why it opened — and folds back, the front going back to whoever
  * had it. No sound: there is music playing. Only while the island is away or
  * folded, and never over something that waits for the user: open, it is
  * showing what the user is reading.
@@ -66,6 +66,9 @@ function announceSong(island: Island) {
   if (State.focusId !== SPOTIFY && State.focusId && !borrowedFrom.has(SPOTIFY)) borrowedFrom.set(SPOTIFY, State.focusId);
   if (State.focusId !== SPOTIFY) State.setFocus(SPOTIFY);
   island.alert("overview");
+  // Light, so it reads as news and not as an island that opened by accident.
+  announceOnCard(ANNOUNCE_MS);
+  island.shineCover();
 
   if (announceTimer != null) window.clearTimeout(announceTimer);
   announceTimer = window.setTimeout(() => {

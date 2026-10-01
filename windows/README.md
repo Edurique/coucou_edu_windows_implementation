@@ -254,7 +254,9 @@ what the volume flyout shows: nothing is asked of Spotify, and nothing touches
 the network. The buttons go to Spotify's own session, never to another player.
 
 When the song changes, the island unfolds on that card for a few seconds and
-folds back — without a sound, and never over something that waits for you or
+folds back, under a light that says why it opened: a green glow behind the
+cover, and a line along the card's foot that runs down the time left — without
+a sound, and never over something that waits for you or
 while the island is already open. **Settings… → Integrations → Spotify** has a
 switch to keep it folded.
 
