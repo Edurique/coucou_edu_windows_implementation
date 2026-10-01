@@ -21,7 +21,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Method, RequestBuilder};
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::github_detail::Target;
 use crate::integrations::{emit, IntegrationEvent, IntegrationUpdate};
@@ -641,10 +641,18 @@ fn parse_opened(viewer: &Value) -> Vec<Opened> {
 /// A piece of news, and what to ask GitHub about to say more of it on the card.
 type News = (IntegrationEvent, Target);
 
+/// The projects the user asked not to hear about (Settings.github_muted).
+fn muted(app: &AppHandle) -> Vec<String> {
+    app.try_state::<crate::Shared>()
+        .map(|shared| shared.settings.lock().unwrap().github_muted.clone())
+        .unwrap_or_default()
+}
+
 /// A build that broke since the last look. Nothing for a failure already told,
-/// nor for a project that just entered the list: it has no "before".
-fn broke(before: &[Repo], now: &[Repo]) -> Option<News> {
-    now.iter().find_map(|repo| {
+/// nor for a project that just entered the list: it has no "before" — nor for
+/// a project that is muted.
+fn broke(before: &[Repo], now: &[Repo], muted: &[String]) -> Option<News> {
+    now.iter().filter(|repo| !muted.contains(&repo.full_name)).find_map(|repo| {
         let build = repo.build.as_ref().filter(|b| b.state == "failure")?;
         let was = before.iter().find(|r| r.full_name == repo.full_name)?;
         let told = was.build.as_ref().is_some_and(|b| b.id == build.id && b.state == "failure");
@@ -812,7 +820,7 @@ pub async fn refresh(app: AppHandle) {
     let Some(_busy) = BusyGuard::take() else { return };
 
     match fetch().await {
-        Ok((snapshot, merged, opened)) => {
+        Ok((snapshot, mut merged, mut opened)) => {
             log::line(format!(
                 "github refresh: {} events, {} projects, {} with a build, {} contribution days",
                 snapshot.activity.len(),
@@ -821,20 +829,25 @@ pub async fn refresh(app: AppHandle) {
                 snapshot.contributions.as_ref().map_or(0, |c| c.counts.len()),
             ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
+            let muted = muted(&app);
             let news = {
                 let mut cache = CACHE.lock().unwrap();
+                // How things stand is learnt from every project, muted or not:
+                // one that is unmuted later does not tell what happened meanwhile.
+                let newest_merge = merged.iter().map(|m| m.at.clone()).max().unwrap_or_default();
+                let newest_pull = opened.iter().map(|p| p.at.clone()).max().unwrap_or_default();
+                merged.retain(|m| !muted.contains(&m.repo));
+                opened.retain(|p| !muted.contains(&p.repo));
                 let news = cache
                     .snapshot
                     .as_ref()
-                    .and_then(|before| broke(&before.repos, &snapshot.repos))
+                    .and_then(|before| broke(&before.repos, &snapshot.repos, &muted))
                     .or_else(|| went_in(cache.merged.as_deref(), &merged))
                     .or_else(|| came_in(cache.opened.as_deref(), &opened, &snapshot.login));
-                let newest = merged.iter().map(|m| m.at.as_str()).max().unwrap_or_default();
-                let seen = cache.merged.take().filter(|seen| seen.as_str() >= newest);
-                cache.merged = Some(seen.unwrap_or_else(|| newest.to_string()));
-                let newest = opened.iter().map(|p| p.at.as_str()).max().unwrap_or_default();
-                let seen = cache.opened.take().filter(|seen| seen.as_str() >= newest);
-                cache.opened = Some(seen.unwrap_or_else(|| newest.to_string()));
+                let seen = cache.merged.take().filter(|seen| *seen >= newest_merge);
+                cache.merged = Some(seen.unwrap_or(newest_merge));
+                let seen = cache.opened.take().filter(|seen| *seen >= newest_pull);
+                cache.opened = Some(seen.unwrap_or(newest_pull));
                 cache.snapshot = Some(snapshot);
                 news
             };
@@ -869,10 +882,11 @@ async fn refresh_builds(app: AppHandle) {
         let Ok(build) = latest_build(&gh, &repo.full_name).await else { return };
         repo.build = build;
     }
+    let muted = muted(&app);
     let (data, news) = {
         let mut cache = CACHE.lock().unwrap();
         let Some(snapshot) = cache.snapshot.as_mut() else { return };
-        let news = broke(&snapshot.repos, &repos);
+        let news = broke(&snapshot.repos, &repos, &muted);
         snapshot.repos = repos;
         snapshot.fetched_at = unix_now() * 1000;
         (serde_json::to_value(&*snapshot).unwrap_or_else(|_| json!({})), news)
@@ -1820,14 +1834,16 @@ mod tests {
         let red = snapshot_with(&[("coucou", Some((2, "failure")))]).repos;
 
         // A new run that failed, and a run that was going and ended badly.
-        let (event, target) = broke(&green, &red).unwrap();
+        let (event, target) = broke(&green, &red, &[]).unwrap();
         assert_eq!((event.success, event.label.as_str(), event.detail.as_deref()), (false, "CI failed on coucou", Some("main")));
         assert_eq!(target, Target::Run { repo: "edu/coucou".into(), id: 2 });
-        assert!(broke(&running, &red).is_some());
+        assert!(broke(&running, &red, &[]).is_some());
         // Still the same failure on the next refresh: already told.
-        assert!(broke(&red, &red).is_none());
+        assert!(broke(&red, &red, &[]).is_none());
         // A project that just entered the list has nothing to compare with.
-        assert!(broke(&[], &red).is_none());
+        assert!(broke(&[], &red, &[]).is_none());
+        // A project that is muted keeps its broken build to itself.
+        assert!(broke(&green, &red, &[red[0].full_name.clone()]).is_none());
     }
 
     #[test]
