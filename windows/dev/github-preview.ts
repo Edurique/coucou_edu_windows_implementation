@@ -298,7 +298,8 @@ const data: GithubData = {
   profileUrl: "https://github.com",
   totalRepos: 23,
   totalStars: 1284,
-  activity: params.has("empty") ? [] : activity,
+  // `pushed`: pushes GitHub gave no message for come first, as they often do.
+  activity: params.has("empty") ? [] : params.has("pushed") ? [{ ...activity[8], at: minutesAgo(14) }, { ...activity[8], id: "10", at: minutesAgo(31) }, ...activity] : activity,
   repos: params.has("empty") ? [] : repos,
   contributions: {
     total: counts.reduce((a, b) => a + b, 0),

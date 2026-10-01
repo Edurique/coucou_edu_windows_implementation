@@ -1266,20 +1266,33 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--ink);
 }
 
-/* The title takes what room is left and is the one cut short; what follows it
-   — a number, a project — keeps its own, up to half the line. */
+/* Read from the left, like a line of the panel: the title, what goes with it
+   right after, and only the time at the far end. A fact — "#12" — keeps its
+   room and the title is cut short; a project's name shares the cut with it. */
 .int-go .int-name {
-  flex: 1 1 0;
+  flex: 0 1 auto;
 }
 
 .int-go .int-amount {
   font: 500 10.5px var(--mono);
-  max-width: 50%;
-  margin-left: 0;
-  padding-left: 4px;
+  margin-left: 2px;
+  white-space: nowrap;
+}
+
+.int-where {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 2px;
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.int-go .int-ago {
+  margin-left: auto;
+  padding-left: 6px;
 }
 
 .int-page {

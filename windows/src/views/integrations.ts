@@ -249,11 +249,14 @@ export interface GithubOpening {
   url?: string;
 }
 
-/** What a line of the card says after its title: a number, a tag, or where it happened. */
-function activityWhere(a: GithubData["activity"][number], login: string): string {
+/**
+ * What a line of the card says after its title: a fact of its own — "#12",
+ * "v0.3.0", "3 commits" — or, failing one, the project it happened in. A
+ * push's branch says less than its project.
+ */
+function activityWhere(a: GithubData["activity"][number], login: string): { text: string; fact: boolean } {
   const first = a.detail?.split(" · ")[0] ?? "";
-  // "#12", "v0.3.0": the thing itself. A push's branch says less than its project.
-  return /^(#\d+|v?\d)/.test(first) ? first : repoName(a.repo, login);
+  return /^(#\d+|v?\d)/.test(first) ? { text: first, fact: true } : { text: repoName(a.repo, login), fact: false };
 }
 
 /**
@@ -286,17 +289,22 @@ function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
   const rows = h("div", { class: "int-rows tight" });
   for (const a of d.activity.slice(0, 4)) {
     const style = ACTIVITY_STYLE[a.kind];
+    const where = activityWhere(a, d.login);
     rows.append(
       h(
         "button",
         {
           class: "int-row int-go",
-          title: a.title,
+          // The whole of what the line cuts short.
+          title: [a.title, repoName(a.repo, d.login), a.detail].filter(Boolean).join(" · "),
           onclick: () => onPanel({ target: a.target ?? undefined, label: a.title, url: a.url }),
         },
         dot(style.color, 5),
         h("span", { class: "int-name", text: a.title }),
-        h("span", { class: "int-amount", style: `color:${style.color}`, text: activityWhere(a, d.login) }),
+        // A fact wears the line's colour, like an amount; a project is where, in grey.
+        where.fact
+          ? h("span", { class: "int-amount", style: `color:${style.color}`, text: where.text })
+          : h("span", { class: "int-where", text: where.text }),
         h("span", { class: "int-ago", text: timeAgo(a.at) }),
       ),
     );
