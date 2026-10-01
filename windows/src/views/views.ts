@@ -77,11 +77,20 @@ function firstWords(text: string | null): string | null {
   return text?.split("\n").find((line) => line.trim())?.replace(/^#{1,6}\s+|\*\*|`/g, "").trim() ?? null;
 }
 
+/** A reply as plain words, for a few lines of it: what marks headings, bold, code and lists goes. */
+function plainWords(text: string | null): string | null {
+  const words = text
+    ?.split("\n")
+    .map((line) => line.replace(/^\s*(#{1,6}|[-*+]|\d+[.)])\s+|\*\*|`/g, "").trim())
+    .filter((line) => line && !/^\|?[\s:|-]+\|?$/.test(line))
+    .join(" ");
+  return words || null;
+}
+
 /**
  * What a session is doing now, in the two lines the overview gives it: the
  * step by its icon and its name with what it is at, and a look at what it did
- * — or, the turn over, "Done" with Claude's first words and what its last
- * command printed.
+ * — or, the turn over, "Done" and the first lines of what Claude replied.
  */
 interface Now {
   icon: Element;
@@ -109,13 +118,17 @@ function nowOf(session: ClaudeSession): Now {
   if (session.state === "error") {
     return { icon: svg(ICONS.xmark, 11), label: "Stopped", color: COLOR.red, detail: "on an error", step: shown, words: session.lines.at(-1) ?? null };
   }
-  const over = session.steps.at(-1)?.tool === TURN_DONE || session.state === "finished";
-  if (over) {
-    // What the turn ended on: its last command's output says more than its last edit.
-    const ran = [...steps].reverse().find((step) => step.kind === "command" && step.result != null) ?? null;
+  // The turn is over when the journal's last line is Claude's reply — a word
+  // from Claude Code after it (a notification that it is waiting, a subagent
+  // winding down) does not put the session back to work.
+  const ended = [...session.steps].reverse().find((step) => step.kind !== "note")?.tool === TURN_DONE;
+  if (ended || session.state === "finished") {
+    // What matters then is that Claude is done and has answered: its words
+    // take the place of the last thing it ran. With no words, that stays.
+    const said = plainWords(session.answer);
     return {
       icon: svg(ICONS.check, 12, { stroke: 3 }), label: "Done", color: COLOR.green,
-      detail: firstWords(session.answer) ?? "", step: ran ?? shown, words: session.answer,
+      detail: said ? "Claude replied" : "", step: said ? null : shown, words: said,
     };
   }
   if (last) {

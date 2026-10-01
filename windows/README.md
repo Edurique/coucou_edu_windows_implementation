@@ -78,8 +78,8 @@ A session shows on its card, as the prototype draws it: the conversation's
 title, the step under way — its icon, its name, the file or the command it is at
 — and under it a look at what the step did: the lines of the file it read, the
 diff of its edit, the command it ran with the end of what that printed. Once the
-turn is over the card says **Done**, with Claude's first words and what its last
-command printed.
+turn is over the card says **Done** and shows the first lines of what Claude
+replied.
 
 <img src="screenshots/claude-session.png" width="640" alt="The session panel: the session's steps on the left, its journal on the right, an edit being typed">
 
