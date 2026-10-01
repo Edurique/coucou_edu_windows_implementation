@@ -3618,19 +3618,23 @@ button.gh-block:hover {
 }
 
 
-/* Several Claude Code sessions at once: under the ticker, a tab for each of
-   the ones behind the session on show. A click puts that one in front. */
+/* Several Claude Code sessions at once: in the middle of the island's bar, a
+   tab for each of the ones behind the session on show. A click puts that one
+   in front. */
 .sess-tabs {
+  flex: 1 1 auto;
   display: flex;
-  gap: 4px;
-  margin: 4px 12px 0 104px;
+  justify-content: center;
+  gap: 5px;
+  margin: 0 18px;
   min-width: 0;
 }
 
 .sess-tab {
   flex: 0 1 auto;
   min-width: 0;
-  height: 19px;
+  max-width: 170px;
+  height: 20px;
   padding: 0 7px;
   display: flex;
   align-items: center;
@@ -3664,25 +3668,6 @@ button.gh-block:hover {
   color: var(--c);
   border-color: color-mix(in srgb, var(--c) 35%, transparent);
   background: color-mix(in srgb, var(--c) 12%, transparent);
-}
-
-/* In the session panel: the sessions behind the one on show, at the column's foot. */
-.sess-others {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: auto -5px 0;
-  padding-top: 8px;
-  min-width: 0;
-}
-
-.sess-others .sess-tab {
-  flex: 0 0 auto;
-  background: transparent;
-}
-
-.sess-others .sess-tab:hover {
-  background: var(--gh-plate);
 }
 
 /* A card about a session names the conversation: a long title gives way to what follows it. */
@@ -4012,4 +3997,12 @@ button.gh-block:hover {
 .jr-body,
 .jr-asks {
   transition: border-color 0.3s ease-out;
+}
+
+/* A stack whose middle stretches (an approval's diff) would fill its card to
+   the brim: it keeps the air the other cards have above and below. Over the
+   padding the stack is built with, which is set on the element. */
+.stack.airy {
+  padding-top: 20px !important;
+  padding-bottom: 20px !important;
 }

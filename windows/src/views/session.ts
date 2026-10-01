@@ -80,7 +80,7 @@ function standing(session: ClaudeSession): { color: string; words: string } {
 
 /**
  * Keeps a row of tabs in step with the sessions behind the one in front —
- * that one is named right above them. A tab is a dot for where its session is
+ * that one is what the island shows. A tab is a dot for where its session is
  * at, and its name; one waiting for an answer, or with news nobody has seen,
  * stands out in its colour. Tabs are kept and updated where they are: a
  * session that changes state changes its dot's colour, a new one comes in, and
@@ -288,14 +288,7 @@ export function buildSession(actions: ViewActions): ViewHost {
   const name = h("b", { text: UNNAMED });
   const nameSub = h("span", { text: UNNAMED });
   const steps = h("div", { class: "sess-steps" });
-  // The sessions behind this one, at the foot of the column: a click puts one in front.
-  const others = h("div", { class: "sess-others" });
-  const syncOthers = sessionTabs(others, (id) => {
-    screen = { kind: "live" };
-    stamp++;
-    actions.pickSession(id);
-  });
-  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, name, nameSub), steps, others);
+  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, name, nameSub), steps);
   const el = h("div", { class: "view gh-view session-view" }, h("div", { class: "card gh-card" }, side, h("div", { class: "gh-col" }, main)));
 
   backBtn.addEventListener("click", () => {
@@ -436,6 +429,8 @@ export function buildSession(actions: ViewActions): ViewHost {
 
   /** The steps the column has shown, and in what state: what is new, or just ended, is animated once. */
   const listed = new WeakMap<SessionStep, SessionStep["state"]>();
+  /** The session the panel was last drawn for. */
+  let followed = "";
   let key = "";
   let headKey = "";
   let stepsKey = "";
@@ -449,9 +444,15 @@ export function buildSession(actions: ViewActions): ViewHost {
       const session = State.session;
       const files = State.sessionFiles;
 
-      // The column: whose session, where it runs, and its last steps — fewer
-      // of them when other sessions take a line each at its foot.
-      const shown = session.steps.filter((s) => !NOT_A_STEP.has(s.kind)).slice(-Math.max(1, STEPS_SHOWN - syncOthers()));
+      // Another session came in front (its tab, in the island's bar): its journal, at its end.
+      if (session.id !== followed) {
+        followed = session.id;
+        screen = { kind: "live" };
+        stamp++;
+      }
+
+      // The column: whose session, where it runs, and its last steps.
+      const shown = session.steps.filter((s) => !NOT_A_STEP.has(s.kind)).slice(-STEPS_SHOWN);
       const nextSteps = [task?.name, session.title, ...shown.map((s) => `${s.tool}:${s.state}:${s.at}`)].join("~");
       if (nextSteps !== stepsKey) {
         stepsKey = nextSteps;

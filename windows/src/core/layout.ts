@@ -119,9 +119,10 @@ export const NEWS_LINE = 28;
 
 /**
  * An approval card that shows what the edit would do holds a diff between the
- * request and its buttons: the island is that much taller for it.
+ * request and its buttons: the island is that much taller for it — as tall as
+ * the window allows.
  */
-export const PROPOSAL_ROOM = 132;
+export const PROPOSAL_ROOM = PANEL_H - 160;
 
 /**
  * A view whose content varies — a question has two options or four, a line
