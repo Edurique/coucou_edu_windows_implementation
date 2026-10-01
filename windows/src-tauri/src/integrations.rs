@@ -11,9 +11,9 @@
 // Nothing is polled until its key exists in the Credential Manager, and no
 // request goes anywhere the user has not configured.
 //
-// Two pills have no key and make no request: Spotify and WhatsApp are read
-// from window titles (media.rs). They are looked at often and speak only
-// when what they say has changed.
+// One pill has no key and makes no request: what Spotify plays is asked of
+// Windows (media.rs). It is looked at often and speaks only when what it says
+// has changed.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -81,8 +81,7 @@ pub fn start(app: AppHandle) {
     crate::github::watch_live(app.clone());
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
     spawn(app.clone(), "integration_notion", 9, 300, poll_notion);
-    spawn(app.clone(), SPOTIFY, 4, SPOTIFY_EVERY, poll_spotify);
-    spawn(app, WHATSAPP, 4, WHATSAPP_EVERY, poll_whatsapp);
+    spawn(app, SPOTIFY, 4, SPOTIFY_EVERY, poll_spotify);
 }
 
 /// True when the user has this integration switched on in settings.
@@ -128,60 +127,37 @@ pub async fn poll_once(app: AppHandle, id: &str) {
         "integration_notion" => poll_notion(app).await,
         "integration_calcom" => poll_calcom(app).await,
         // Asked for by hand: said again even if nothing changed.
-        SPOTIFY | WHATSAPP => {
-            TOLD.lock().unwrap().remove(id);
-            if id == SPOTIFY { poll_spotify(app).await } else { poll_whatsapp(app).await }
+        SPOTIFY => {
+            *TOLD.lock().unwrap() = None;
+            poll_spotify(app).await
         }
         _ => {}
     }
 }
 
-// ── Spotify and WhatsApp: window titles, no key ───────────────────────────────
+// ── Spotify: asked of Windows, no key ─────────────────────────────────────────
 
 const SPOTIFY: &str = "integration_spotify";
-const WHATSAPP: &str = "integration_whatsapp";
-/// Seconds between two looks at the windows. A song changes every few minutes
-/// and should not be shown a minute late; a look costs a pass over the open
-/// windows, no request.
+/// Seconds between two looks. A song changes every few minutes and should not
+/// be shown a minute late; a look asks Windows, not the network.
 const SPOTIFY_EVERY: u64 = 5;
-const WHATSAPP_EVERY: u64 = 15;
 
-/// What each of the two last told the island, so it is told again only when
-/// it changes: a poll that finds the same song must not wake the island.
-static TOLD: std::sync::LazyLock<Mutex<std::collections::HashMap<&'static str, Value>>> =
-    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-
-/// Remembers what is told now, and gives back what was told before — or None
-/// when it is the same thing again.
-fn told(id: &'static str, data: &Value) -> Option<Option<Value>> {
-    let mut told = TOLD.lock().unwrap();
-    if told.get(id) == Some(data) {
-        return None;
-    }
-    Some(told.insert(id, data.clone()))
-}
+/// What the island was last told, so it is told again only when it changes:
+/// a look that finds the same song must not wake the island.
+static TOLD: Mutex<Option<Value>> = Mutex::new(None);
 
 async fn poll_spotify(app: AppHandle) {
-    let data = serde_json::to_value(crate::media::now_playing()).unwrap_or_else(|_| json!({}));
-    if told(SPOTIFY, &data).is_some() {
-        emit(&app, IntegrationUpdate { id: SPOTIFY, data, error: None, event: None });
+    // Asking Windows waits on it: off the async runtime's own threads.
+    let Ok(now) = tauri::async_runtime::spawn_blocking(crate::media::now_playing).await else { return };
+    let data = serde_json::to_value(now).unwrap_or_else(|_| json!({}));
+    {
+        let mut told = TOLD.lock().unwrap();
+        if told.as_ref() == Some(&data) {
+            return;
+        }
+        *told = Some(data.clone());
     }
-}
-
-async fn poll_whatsapp(app: AppHandle) {
-    let state = crate::media::whatsapp();
-    let data = serde_json::to_value(state).unwrap_or_else(|_| json!({}));
-    let Some(before) = told(WHATSAPP, &data) else { return };
-    // News when there are more unread than the last look saw. The first look
-    // only learns how things stand.
-    let was = before.as_ref().and_then(|b| b.get("unread")).and_then(Value::as_u64);
-    let event = was.filter(|was| u64::from(state.unread) > *was).map(|_| IntegrationEvent {
-        success: true,
-        label: if state.unread == 1 { "1 unread message".into() } else { format!("{} unread messages", state.unread) },
-        detail: None,
-        open: None,
-    });
-    emit(&app, IntegrationUpdate { id: WHATSAPP, data, error: None, event });
+    emit(&app, IntegrationUpdate { id: SPOTIFY, data, error: None, event: None });
 }
 
 /// Remembers the newest id per integration so an event fires once, not on every poll.

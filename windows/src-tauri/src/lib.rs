@@ -358,10 +358,10 @@ async fn refresh_integration(app: AppHandle, id: String) {
     integrations::poll_once(app, &id).await;
 }
 
-/// One of the keyboard's media keys, from the Spotify card: "toggle", "next" or "previous".
+/// From the Spotify card: "toggle", "next" or "previous", asked of Spotify's own session.
 #[tauri::command]
-fn media_key(action: String) -> Result<(), String> {
-    media::press(&action)
+async fn media_key(action: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || media::press(&action)).await.map_err(|e| e.to_string())?
 }
 
 /// Lets the island write to the same log as the Rust side.

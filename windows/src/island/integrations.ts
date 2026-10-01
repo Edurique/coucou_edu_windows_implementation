@@ -20,7 +20,7 @@ const KEY_FOR: Record<string, string> = {
 };
 
 /** The pills that have no key: read from what is on this machine, they are set up as soon as they are switched on. */
-const KEYLESS = ["integration_spotify", "integration_whatsapp"];
+const KEYLESS = ["integration_spotify"];
 
 const clearTimers = new Map<string, number>();
 /** As in the Swift pollers: a pill's finished or error look clears itself after this. */

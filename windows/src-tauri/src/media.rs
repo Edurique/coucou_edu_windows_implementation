@@ -1,174 +1,139 @@
-// Two pills that need no key and no account: what Spotify is playing, and how
-// many WhatsApp messages are unread. Both are read from window titles, which
-// is local, instant and asks nothing of anybody:
+// What Spotify is playing, with no key and no account: Windows already knows.
 //
-//   * the Spotify desktop app titles its main window "Artist - Title" while
-//     something plays, and "Spotify" (or "Spotify Premium"…) when nothing does.
-//     Its window has the class every Chromium window has, so it is known by
-//     the program it belongs to;
-//   * WhatsApp Web titles its tab "(3) WhatsApp" with the unread count, and a
-//     browser window carries the title of the tab it shows.
+// Every player tells the system what it plays — it is what the volume flyout
+// and the lock screen show — through the System Media Transport Controls.
+// Asking Windows for Spotify's session gives the song, who plays it, whether
+// it is playing or paused, and its cover, and lets it be paused or skipped.
+// It is all local: nothing is asked of Spotify, nothing touches the network.
 //
-// That is also where they stop. Spotify in a browser is not seen. WhatsApp is
-// counted only while its tab is the one a browser window shows, and the
-// desktop app says "WhatsApp" with no count: the pill then knows it is open,
-// not what is unread. Nothing is read but titles — never a message, never a
-// contact — and nothing here touches the network.
+// Only the Spotify desktop app has a session of its own; Spotify in a browser
+// tab is the browser's, and is not looked for.
 //
-// The idea is corefusiion's (Louis-CFM/coucou#80); this is written for this
-// tree and its rules.
+// The idea of a keyless Spotify pill is corefusiion's (Louis-CFM/coucou#80),
+// which read the window's title; this asks the system instead, which also
+// knows the cover and a paused song.
+
+use std::sync::Mutex;
 
 use serde::Serialize;
-use windows::core::BOOL;
-use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+use windows::Media::Control::{
+    GlobalSystemMediaTransportControlsSession as Session, GlobalSystemMediaTransportControlsSessionManager as Sessions,
+    GlobalSystemMediaTransportControlsSessionMediaProperties as Properties,
+    GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_MEDIA_NEXT_TRACK,
-    VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK,
-};
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible};
+use windows::Storage::Streams::DataReader;
 
-/// The Spotify desktop app's program, as the end of its path.
-const SPOTIFY_EXE: &str = r"\spotify.exe";
-/// What a WhatsApp window's title is, after its count if it has one.
-const WHATSAPP: &str = "WhatsApp";
-/// Longest window title and program path read, in UTF-16 units.
-const TITLE_UNITS: usize = 512;
-const PATH_UNITS: usize = 1024;
+/// What marks a session as Spotify's, in the id of the app it belongs to:
+/// "Spotify.exe" for the installer's build, "SpotifyAB.SpotifyMusic_…" for the Store's.
+const SPOTIFY: &str = "spotify";
+/// Largest cover handed to the island, in bytes. Spotify's are a few dozen kilobytes.
+const MAX_COVER: u32 = 512 * 1024;
 
-/// A visible top-level window: the process it belongs to, and what it says.
-struct Window {
-    pid: u32,
-    title: String,
-}
-
-unsafe extern "system" fn collect(hwnd: HWND, out: LPARAM) -> BOOL {
-    // SAFETY: `out` is the Vec `windows()` passed, alive for the whole call.
-    let windows = unsafe { &mut *(out.0 as *mut Vec<Window>) };
-    if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-        let mut title = [0u16; TITLE_UNITS];
-        let len = unsafe { GetWindowTextW(hwnd, &mut title) };
-        if len > 0 {
-            let mut pid = 0u32;
-            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-            windows.push(Window { pid, title: String::from_utf16_lossy(&title[..len as usize]) });
-        }
-    }
-    true.into()
-}
-
-/// Every visible window that has a title.
-fn windows() -> Vec<Window> {
-    let mut found: Vec<Window> = Vec::new();
-    // SAFETY: the callback only runs during this call, on this thread.
-    let _ = unsafe { EnumWindows(Some(collect), LPARAM(&mut found as *mut Vec<Window> as isize)) };
-    found
-}
-
-/// The path of the program a process runs, lowercased. None when it cannot be
-/// asked — a process of another user, or one that is gone.
-fn program_of(pid: u32) -> Option<String> {
-    // SAFETY: the handle is closed before returning; the buffer is ours.
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut path = [0u16; PATH_UNITS];
-        let mut len = path.len() as u32;
-        let named = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut len);
-        let _ = CloseHandle(process);
-        named.ok()?;
-        Some(String::from_utf16_lossy(&path[..len as usize]).to_lowercase())
-    }
-}
-
-/// What Spotify is playing. `open` is false when the app is not running.
+/// What Spotify is playing. `open` is false when the app has no session:
+/// closed, or opened and never played since.
 #[derive(Serialize, Clone, Default, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NowPlaying {
     pub open: bool,
     pub playing: bool,
-    pub artist: String,
     pub title: String,
+    pub artist: String,
+    pub album: String,
+    /// The cover as a `data:` URL, when the system has one.
+    pub cover: Option<String>,
 }
 
-/// "Artist - Title" while something plays. The app's own name — "Spotify",
-/// "Spotify Premium", "Spotify Free" — is what it says when nothing does, and
-/// "Advertisement" is not a song.
-fn track_of(title: &str) -> Option<(String, String)> {
-    // A hyphen, or the en dash some versions use.
-    let (artist, track) = [" - ", " \u{2013} "].iter().find_map(|sep| title.split_once(sep))?;
-    let (artist, track) = (artist.trim(), track.trim());
-    let named = !artist.is_empty() && !track.is_empty() && !artist.starts_with("Spotify") && track != "Advertisement";
-    named.then(|| (artist.to_string(), track.to_string()))
+/// The cover of the song last asked about: read once per song, not at every look.
+static COVER: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+fn spotify() -> Option<Session> {
+    let sessions = Sessions::RequestAsync().ok()?.get().ok()?.GetSessions().ok()?;
+    sessions.into_iter().find(|session| {
+        session.SourceAppUserModelId().is_ok_and(|id| id.to_string().to_lowercase().contains(SPOTIFY))
+    })
 }
 
 pub fn now_playing() -> NowPlaying {
-    let spotify = |w: &Window| program_of(w.pid).is_some_and(|path| path.ends_with(SPOTIFY_EXE));
-    let Some(window) = windows().into_iter().find(spotify) else {
-        return NowPlaying::default();
+    let Some(session) = spotify() else { return NowPlaying::default() };
+    let playing = session
+        .GetPlaybackInfo()
+        .and_then(|info| info.PlaybackStatus())
+        .is_ok_and(|status| status == Status::Playing);
+    let Ok(song) = session.TryGetMediaPropertiesAsync().and_then(|asked| asked.get()) else {
+        return NowPlaying { open: true, playing, ..NowPlaying::default() };
     };
-    match track_of(&window.title) {
-        Some((artist, title)) => NowPlaying { open: true, playing: true, artist, title },
-        None => NowPlaying { open: true, ..NowPlaying::default() },
+    let text = |value: windows::core::Result<windows::core::HSTRING>| value.map(|s| s.to_string()).unwrap_or_default();
+    let (title, artist, album) = (text(song.Title()), text(song.Artist()), text(song.AlbumTitle()));
+    let cover = if title.is_empty() { None } else { cover_of(&song, &format!("{artist}\n{album}\n{title}")) };
+    NowPlaying { open: true, playing, title, artist, album, cover }
+}
+
+/// The song's cover, from the cache when it is the song last asked about. A
+/// song whose cover is not there yet — it comes a moment after the song
+/// changes — is asked again at the next look.
+fn cover_of(song: &Properties, key: &str) -> Option<String> {
+    if let Some((known, cover)) = COVER.lock().unwrap().as_ref() {
+        if known == key {
+            return Some(cover.clone());
+        }
+    }
+    let cover = read_cover(song)?;
+    *COVER.lock().unwrap() = Some((key.to_string(), cover.clone()));
+    Some(cover)
+}
+
+fn read_cover(song: &Properties) -> Option<String> {
+    let stream = song.Thumbnail().ok()?.OpenReadAsync().ok()?.get().ok()?;
+    let size = u32::try_from(stream.Size().ok()?).ok().filter(|size| (1..=MAX_COVER).contains(size))?;
+    let reader = DataReader::CreateDataReader(&stream).ok()?;
+    reader.LoadAsync(size).ok()?.get().ok()?;
+    let mut bytes = vec![0u8; size as usize];
+    reader.ReadBytes(&mut bytes).ok()?;
+    Some(format!("data:{};base64,{}", image_type(&bytes)?, base64(&bytes)))
+}
+
+/// What kind of image these bytes are, by how they start. Anything else is
+/// not shown: the island only ever draws what it knows to be a picture.
+fn image_type(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+        _ => None,
     }
 }
 
-/// WhatsApp, as far as a window title tells: whether it is open, and how many
-/// messages are unread when the title says so.
-#[derive(Serialize, Clone, Copy, Default, PartialEq, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct WhatsApp {
-    pub open: bool,
-    pub unread: u32,
+/// Standard base64, with padding. Written here rather than pulled in: it is
+/// twenty lines, and the app takes no dependency it can do without.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let group = chunk.iter().fold(0u32, |group, byte| (group << 8) | u32::from(*byte)) << (8 * (3 - chunk.len()));
+        for place in 0..4 {
+            if place <= chunk.len() {
+                out.push(ALPHABET[((group >> (18 - 6 * place)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
-/// The unread count a WhatsApp window's title carries: "(3) WhatsApp" is 3,
-/// "WhatsApp" is 0 — and anything else is not WhatsApp. What follows the name
-/// is the browser's ("… - Google Chrome").
-fn unread_of(title: &str) -> Option<u32> {
-    let title = title.trim_start();
-    let (count, rest) = match title.strip_prefix('(').and_then(|rest| rest.split_once(')')) {
-        Some((count, rest)) => (count.trim().parse::<u32>().ok()?, rest.trim_start()),
-        None => (0, title),
-    };
-    let after = rest.strip_prefix(WHATSAPP)?;
-    // "WhatsApp" itself, not a word that starts with it.
-    after.chars().next().is_none_or(|c| !c.is_alphanumeric()).then_some(count)
-}
-
-pub fn whatsapp() -> WhatsApp {
-    let counts: Vec<u32> = windows().iter().filter_map(|w| unread_of(&w.title)).collect();
-    // The highest: two windows on the same account must not count twice.
-    WhatsApp { open: !counts.is_empty(), unread: counts.into_iter().max().unwrap_or(0) }
-}
-
-/// Presses one of the keyboard's media keys. It goes to whatever is playing —
-/// the Spotify app, a browser tab — exactly as the key on a keyboard would.
+/// Play or pause, the next song, the one before: asked of Spotify's own
+/// session, so it never goes to another player.
 pub fn press(action: &str) -> Result<(), String> {
-    let key = match action {
-        "toggle" => VK_MEDIA_PLAY_PAUSE,
-        "next" => VK_MEDIA_NEXT_TRACK,
-        "previous" => VK_MEDIA_PREV_TRACK,
+    let session = spotify().ok_or("Spotify has nothing to play yet")?;
+    let asked = match action {
+        "toggle" => session.TryTogglePlayPauseAsync(),
+        "next" => session.TrySkipNextAsync(),
+        "previous" => session.TrySkipPreviousAsync(),
         _ => return Err("unknown media key".into()),
     };
-    let stroke = |up: bool| INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: VIRTUAL_KEY(key.0),
-                wScan: 0,
-                dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-    let strokes = [stroke(false), stroke(true)];
-    // SAFETY: a plain array of INPUT, with its real size.
-    let sent = unsafe { SendInput(&strokes, std::mem::size_of::<INPUT>() as i32) };
-    if sent as usize == strokes.len() { Ok(()) } else { Err("the media key was not delivered".into()) }
+    match asked.and_then(|asked| asked.get()) {
+        Ok(true) => Ok(()),
+        _ => Err("Spotify did not take it".into()),
+    }
 }
 
 #[cfg(test)]
@@ -176,28 +141,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_spotify_title_is_a_song_only_while_one_plays() {
-        assert_eq!(track_of("Daft Punk - Around the World"), Some(("Daft Punk".into(), "Around the World".into())));
-        assert_eq!(track_of("Sigur R\u{f3}s \u{2013} Hopp\u{ed}polla"), Some(("Sigur R\u{f3}s".into(), "Hopp\u{ed}polla".into())));
-        // A title with a dash of its own keeps it.
-        assert_eq!(track_of("AC/DC - Back in Black - Remastered"), Some(("AC/DC".into(), "Back in Black - Remastered".into())));
-        // Idle, paused, or an ad: nothing is playing.
-        assert_eq!(track_of("Spotify Premium"), None);
-        assert_eq!(track_of("Spotify"), None);
-        assert_eq!(track_of("Spotify - Advertisement"), None);
-        assert_eq!(track_of("Some Brand - Advertisement"), None);
+    fn base64_is_the_standard_one() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xFF, 0xD8, 0xFF, 0xE0]), "/9j/4A==");
     }
 
     #[test]
-    fn a_whatsapp_title_says_how_many_are_unread() {
-        assert_eq!(unread_of("(3) WhatsApp"), Some(3));
-        assert_eq!(unread_of("(12) WhatsApp - Google Chrome"), Some(12));
-        assert_eq!(unread_of("WhatsApp"), Some(0));
-        assert_eq!(unread_of("WhatsApp \u{2014} Mozilla Firefox"), Some(0));
-        // Not WhatsApp: another window, a word that only starts like it, a count that is not one.
-        assert_eq!(unread_of("(3) Inbox - Mail"), None);
-        assert_eq!(unread_of("WhatsApps export.txt - Notepad"), None);
-        assert_eq!(unread_of("Notes about WhatsApp"), None);
-        assert_eq!(unread_of("(draft) WhatsApp"), None);
+    fn only_a_picture_is_shown_as_one() {
+        assert_eq!(image_type(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]), Some("image/jpeg"));
+        assert_eq!(image_type(&[0x89, b'P', b'N', b'G', 0x0D]), Some("image/png"));
+        assert_eq!(image_type(b"<svg onload=alert(1)>"), None);
+        assert_eq!(image_type(&[]), None);
     }
 }

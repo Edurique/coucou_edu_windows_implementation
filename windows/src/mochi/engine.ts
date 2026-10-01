@@ -68,6 +68,8 @@ const BASE_TOP: RGB = [0.929, 0.929, 0.937]; // #EDEDEF
 const BASE_BOTTOM: RGB = [0.769, 0.773, 0.792]; // #C4C5CA
 const INK = "rgb(26,20,18)"; // #1A1412
 const MINI_INK = "rgb(16,19,26)"; // #10131A
+/** His eyes over a picture. */
+const PICTURE_INK = "#FFFFFF";
 
 const C = {
   idle: [0.902, 0.914, 0.933] as RGB,
@@ -168,6 +170,13 @@ export class BotEngine {
   isMini = false;
   /** Solid body colour for mini bots / integration pills (null = Mochi gradient). */
   bodyColor: RGB | null = null;
+  /**
+   * A picture Mochi wears over his body — the cover of the song playing — and
+   * how much of it shows, 0 to 1, so it can fade in over his colour. His
+   * shape, his eyes and his moves stay his own.
+   */
+  bodyImage: CanvasImageSource | null = null;
+  bodyImageAlpha = 0;
 
   // Animated state (BotEngine `s`)
   yaw = 0; pitch = 0; roll = 0; tilt = 0; open = 1;
@@ -710,11 +719,31 @@ export class BotEngine {
     return p;
   }
 
+  /** The picture over the body: cut to his shape, filling it, with a rim of shade so he stays round. */
+  private drawBodyImage(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
+    const image = this.bodyImage;
+    if (!image || this.bodyImageAlpha <= 0.01) return;
+    x.save();
+    x.clip(body);
+    x.globalAlpha = Math.min(1, this.bodyImageAlpha);
+    // A square picture over a body wider than it is tall: it covers the width, and its middle shows.
+    const side = 2 * Math.max(rx, ry);
+    x.drawImage(image, -side / 2, -side / 2, side, side);
+    const rim = x.createRadialGradient(0, 0, R * 0.2, 0, 0, R * 1.25);
+    rim.addColorStop(0, "rgba(0,0,0,0.12)");
+    rim.addColorStop(0.6, "rgba(0,0,0,0.16)");
+    rim.addColorStop(1, "rgba(0,0,0,0.42)");
+    x.fillStyle = rim;
+    x.fill(body);
+    x.restore();
+  }
+
   private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
     if (this.bodyColor) {
       // Mini bots: flat solid fill — no gradient, no reflection, no highlight
       x.fillStyle = rgba(this.bodyColor, 1);
       x.fill(body);
+      this.drawBodyImage(x, body, R, rx, ry);
       return;
     }
     const g = x.createLinearGradient(rx * 0.7, -ry * 0.85, -rx * 0.8, ry * 0.9);
@@ -744,6 +773,7 @@ export class BotEngine {
     hl.addColorStop(1, "rgba(255,255,255,0)");
     x.fillStyle = hl;
     x.fill(body);
+    this.drawBodyImage(x, body, R, rx, ry);
   }
 
   private drawEyes(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
@@ -755,9 +785,16 @@ export class BotEngine {
 
     x.save();
     x.clip(body);
-    const ink = this.isMini ? MINI_INK : INK;
+    // Over a picture his eyes are light, with a shade around them: dark eyes
+    // would be lost on a dark cover.
+    const pictured = this.bodyImage != null && this.bodyImageAlpha > 0.5;
+    const ink = pictured ? PICTURE_INK : this.isMini ? MINI_INK : INK;
     x.fillStyle = ink;
     x.strokeStyle = ink;
+    if (pictured) {
+      x.shadowColor = "rgba(0,0,0,0.75)";
+      x.shadowBlur = R * 0.16;
+    }
 
     for (const sd of [-1, 1]) {
       const eyeYaw = sd * EYE_SP + this.yaw;

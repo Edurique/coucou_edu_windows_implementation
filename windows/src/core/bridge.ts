@@ -97,7 +97,7 @@ export const Bridge = {
 
   // ── Integrations ──────────────────────────────────────────────────────────
   refreshIntegration: (id: string) => call<void>("refresh_integration", { id }),
-  /** Presses one of the keyboard's media keys, for whatever is playing. */
+  /** Asks Spotify to play or pause, or for the next or the previous song. */
   mediaKey: (action: "toggle" | "next" | "previous") => call<void>("media_key", { action }),
   /** Opens the configured n8n instance in the browser. */
   openN8n: () => call<void>("open_n8n"),

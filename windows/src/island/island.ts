@@ -36,6 +36,9 @@ const PRE_PROGRESS = USC.T_PROG_START - USC.T_DROP;
 
 const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 : 2);
 
+/** The pill whose song's cover Mochi wears. */
+const SPOTIFY_ID = "integration_spotify";
+
 /** How fast Mochi's body goes to a new colour, per second: about 90 % of the way in 0.4 s. */
 const TINT_RATE = 5.5;
 /** Closer than this on every channel (0…1), the body has its colour: a unit of 8-bit colour. */
@@ -79,6 +82,9 @@ export class Island {
   private viewState: BotStateName | null = null;
   /** The colour Mochi's body is drawn in, eased towards what it should be. */
   private bodyRGB: RGB | null = null;
+  /** The cover Mochi wears while Spotify's pill is in front, loaded, and how much of it shows. */
+  private cover: { url: string; image: HTMLImageElement } | null = null;
+  private coverAlpha = 0;
 
   private running = false;
   private lastFrame = 0;
@@ -149,8 +155,7 @@ export class Island {
           integration_stripe: "https://dashboard.stripe.com/payments",
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
-          integration_spotify: "https://open.spotify.com",
-          integration_whatsapp: "https://web.whatsapp.com",
+          integration_spotify: "spotify:",
         };
         if (task.id === CLAUDE_ID) this.openClient();
         else if (task.id === "integration_n8n") void Bridge.openN8n();
@@ -854,7 +859,7 @@ export class Island {
       ? settling
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
-        greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling ||
+        greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling || this.coverSettling ||
         // A view showing something live keeps its Mochis moving: a run's crew
         // would otherwise freeze the moment the big one came to rest.
         this.viewState != null;
@@ -912,6 +917,7 @@ export class Island {
     if (!ctx) return;
 
     this.engine.bodyColor = this.easeBodyColor(dt);
+    this.wearCover(dt);
     this.engine.particleOverhang = BOT_OVERHANG;
     this.engine.lookX = this.lookX();
     this.engine.lookY = this.lookY();
@@ -928,6 +934,36 @@ export class Island {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     wipe(ctx);
     this.engine.draw(ctx, w, hCss);
+  }
+
+  /**
+   * With Spotify's pill in front, Mochi turns into the cover of what plays:
+   * the picture fades in over his colour, and out again when the song has
+   * none or another pill takes the front. A new song fades in from his colour.
+   */
+  private wearCover(dt: number) {
+    const now = State.focusId === SPOTIFY_ID ? State.integrations[SPOTIFY_ID]?.data : null;
+    const url = typeof now?.cover === "string" && now.cover.startsWith("data:image/") ? now.cover : null;
+    if (url && this.cover?.url !== url) {
+      const image = new Image();
+      // Decoded off the frame: it shows once it is ready, and wakes the loop to be drawn.
+      image.onload = () => this.ensureRunning();
+      image.src = url;
+      this.cover = { url, image };
+      this.coverAlpha = 0;
+    }
+    const ready = url != null && this.cover?.url === url && this.cover.image.complete && this.cover.image.naturalWidth > 0;
+    const target = ready ? 1 : 0;
+    this.coverAlpha += (target - this.coverAlpha) * (1 - Math.exp(-dt * TINT_RATE));
+    if (Math.abs(target - this.coverAlpha) < TINT_SETTLED) this.coverAlpha = target;
+    if (!url && this.coverAlpha === 0) this.cover = null;
+    this.engine.bodyImage = this.cover?.image.complete ? this.cover.image : null;
+    this.engine.bodyImageAlpha = this.coverAlpha;
+  }
+
+  /** True while the cover is still fading in or out — the frame loop keeps going. */
+  private get coverSettling(): boolean {
+    return this.coverAlpha > 0 && this.coverAlpha < 1;
   }
 
   /** The colour Mochi should be: a view's request, else his pill's colour. */

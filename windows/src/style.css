@@ -4028,7 +4028,7 @@ button.gh-block:hover {
   color: var(--dim-5);
 }
 
-/* The Spotify card: the song, who plays it, and the keyboard's media keys. */
+/* The Spotify card: the song, who plays it, and the player's keys. */
 .media-title {
   padding-top: 5px;
   font: 600 13px var(--font);
@@ -4060,11 +4060,11 @@ button.gh-block:hover {
 
 .media-key {
   width: 24px;
-  height: 22px;
+  height: 20px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 11px;
+  border-radius: 10px;
   background: var(--gh-plate);
   color: var(--ink-2);
   cursor: default;
@@ -4079,22 +4079,4 @@ button.gh-block:hover {
   width: 30px;
   background: var(--ink);
   color: var(--on-light);
-}
-
-/* A card whose news is one number: the number, and what it counts. */
-.int-figure {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding-top: 3px;
-}
-
-.int-figure b {
-  font: 700 20px var(--mono);
-  color: var(--ink);
-}
-
-.int-figure span {
-  font: 400 11.5px var(--font);
-  color: var(--dim-2);
 }

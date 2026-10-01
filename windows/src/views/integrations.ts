@@ -52,8 +52,6 @@ const OPEN_URLS: Record<string, string> = {
   integration_stripe: "https://dashboard.stripe.com/payments",
   integration_notion: "https://notion.so",
   integration_calcom: "https://app.cal.com/bookings",
-  integration_spotify: "https://open.spotify.com",
-  integration_whatsapp: "https://web.whatsapp.com",
 };
 
 function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
@@ -210,7 +208,7 @@ const SPOTIFY = "integration_spotify";
 /** After a key is pressed, how long the app takes to say so in its window's title. */
 const KEY_SETTLES_MS = 700;
 
-/** One of the keyboard's media keys, then a look at what it did. */
+/** One of the player's keys, asked of Spotify, then a look at what it did. */
 function mediaKey(icon: string, title: string, action: "toggle" | "next" | "previous"): HTMLElement {
   return h(
     "button",
@@ -227,16 +225,19 @@ function mediaKey(icon: string, title: string, action: "toggle" | "next" | "prev
 }
 
 /**
- * What Spotify is playing, read from its window's title, and the keyboard's
- * media keys. Paused and idle look the same from here: the app only says a
- * song's name while it plays.
+ * What Spotify is playing, as Windows knows it: the song, who plays it, and
+ * the player's keys. The cover is on Mochi himself, who turns into it (see
+ * Island.wearCover). A paused song is still the song.
  */
 function spotifyCard(): HTMLElement {
   const now = get(SPOTIFY);
-  const playing = now.playing === true;
   const open = now.open === true;
-  const title = playing ? String(now.title ?? "") : open ? "Nothing playing" : "Spotify is not open";
-  const artist = playing ? String(now.artist ?? "") : open ? "Paused, or between two songs" : "Only the desktop app is seen";
+  const playing = now.playing === true;
+  const song = typeof now.title === "string" ? now.title : "";
+  const artist = typeof now.artist === "string" ? now.artist : "";
+  const title = song || (open ? "Nothing playing" : "Spotify is not playing");
+  const by = song ? artist : open ? "Pick a song in Spotify" : "Play something in the Spotify app";
+
   const keys = h(
     "div",
     { class: "media-keys" },
@@ -247,33 +248,10 @@ function spotifyCard(): HTMLElement {
   return h(
     "div",
     { class: "int-card" },
-    header("#1DB954", "Spotify", playing ? "Now playing" : "Music"),
-    h("div", { class: playing ? "media-title" : "media-title quiet", text: title, title }),
-    h("div", { class: "media-artist", text: artist, title: artist }),
-    open ? keys : h("div", { class: "int-actions" }),
-  );
-}
-
-// ── WhatsApp ──────────────────────────────────────────────────────────────────
-
-/**
- * How many WhatsApp messages are unread, as far as a window's title says:
- * WhatsApp Web shows the count while its tab is the one a browser window
- * shows. Open without a count, the pill knows it is there and no more.
- */
-function whatsappCard(task: AgentTask): HTMLElement {
-  const state = get(task.id);
-  const open = state.open === true;
-  const unread = typeof state.unread === "number" ? state.unread : 0;
-  const figure = h("div", { class: "int-figure" }, h("b", { text: open ? String(unread) : "—" }), h("span", { text: unread === 1 ? "unread message" : "unread messages" }));
-  // One line: the ↗ of the card is the way to WhatsApp.
-  const note = open ? (unread > 0 ? "From its window's title" : "Nothing unread") : "Open WhatsApp Web to count";
-  return h(
-    "div",
-    { class: "int-card" },
-    header(task.color, "WhatsApp", "Messages"),
-    figure,
-    h("div", { class: "int-status" }, dot(open ? "#22C55E" : COLOR.grey, 5), h("span", { text: note })),
+    header("#1DB954", "Spotify", playing ? "Now playing" : song ? "Paused" : "Music"),
+    h("div", { class: song ? "media-title" : "media-title quiet", text: title, title }),
+    h("div", { class: "media-artist", text: by, title: typeof now.album === "string" && now.album ? `${by} — ${now.album}` : by }),
+    open ? keys : null,
   );
 }
 
@@ -579,7 +557,6 @@ export function hasIntegrationData(id: string): boolean {
       return arr(id, "pages").length > 0;
     case "integration_calcom":
     case "integration_spotify":
-    case "integration_whatsapp":
       return info.loaded;
     default:
       return false;
@@ -611,8 +588,6 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
       return calcomCard();
     case "integration_spotify":
       return spotifyCard();
-    case "integration_whatsapp":
-      return whatsappCard(task);
     default:
       return idleCard(task, hooks.openSettings);
   }

@@ -452,9 +452,7 @@ const INTEGRATIONS: IntegrationDef[] = [
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
   { id: "integration_spotify", name: "Spotify", color: "#1DB954", fields: [],
-    note: "No key: reads what the Spotify desktop app is playing from its window's title." },
-  { id: "integration_whatsapp", name: "WhatsApp", color: "#25D366", fields: [],
-    note: "No key: counts unread messages from the title of a WhatsApp Web window. No message is read." },
+    note: "No key: asks Windows what the Spotify desktop app is playing. Nothing is asked of Spotify." },
 ];
 
 const MAX_ACTIVE = 4;
