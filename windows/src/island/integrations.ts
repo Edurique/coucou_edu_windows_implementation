@@ -76,6 +76,16 @@ function handle(island: Island, update: IntegrationUpdate) {
     news: update.event ?? previous?.news ?? null,
   };
 
+  // A run going on one of the projects: GitHub's Mochi is at work, like a
+  // session's, until it ends — in news, or quietly.
+  if (update.id === "integration_github" && hasData) {
+    const repos = (update.data as { repos?: { build?: { state?: string } | null }[] }).repos ?? [];
+    const going = repos.some((r) => r.build?.state === "running");
+    const task = State.tasks.find((t) => t.id === update.id);
+    if (task && going && task.state === "idle") task.state = "working";
+    else if (task && !going && task.state === "working") task.state = "idle";
+  }
+
   const event = update.event;
   if (event) {
     const task = State.tasks.find((t) => t.id === update.id);

@@ -76,6 +76,7 @@ pub fn start(app: AppHandle) {
     // Every two minutes rather than five: it is also what tells the pill that a
     // build broke, and "a while ago" is not news.
     spawn(app.clone(), "integration_github", 7, 120, crate::github::poll);
+    crate::github::watch_live(app.clone());
     #[cfg(debug_assertions)]
     crate::github::watch_demo(app.clone());
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
@@ -83,7 +84,7 @@ pub fn start(app: AppHandle) {
 }
 
 /// True when the user has this integration switched on in settings.
-fn enabled(app: &AppHandle, id: &str) -> bool {
+pub(crate) fn enabled(app: &AppHandle, id: &str) -> bool {
     app.try_state::<crate::Shared>()
         .map(|shared| {
             let settings = shared.settings.lock().unwrap();

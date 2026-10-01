@@ -66,6 +66,8 @@ interface ProjectScreen extends Pending<GithubProject> {
 /** The sheet behind a line of activity: a pull request, an issue, commits, a release. */
 interface DetailScreen extends Pending<GithubDetail> {
   type: "detail";
+  /** A pull request's or a commit's run, job by job: fetched beside the sheet. */
+  run?: GithubRunDetail | null;
   target: GithubTarget;
   /** What the line said: the head's title while the sheet loads. */
   label: string;
@@ -212,9 +214,48 @@ function showing(screen: DetailScreen): boolean {
   return s === screen || (s?.type === "job" && s.run === screen);
 }
 
-function loadDetail(screen: DetailScreen, force: boolean) {
-  return load(screen, () => showing(screen), () => Bridge.githubDetail(screen.target, force));
+async function loadDetail(screen: DetailScreen, force: boolean) {
+  await load(screen, () => showing(screen), () => Bridge.githubDetail(screen.target, force));
+  await loadRun(screen, force);
 }
+
+/** The run a sheet is tied to: a pull request's or a commit's CI. */
+function ciOf(screen: DetailScreen): { repo: string; id: number } | null {
+  const d = screen.data;
+  return (d?.kind === "pull" || d?.kind === "commits") && d.ci ? { repo: d.repo, id: d.ci.id } : null;
+}
+
+/**
+ * That run's jobs, for the sheet to show under its CI line. Quietly: the
+ * sheet is already up, the jobs join it when they come.
+ */
+async function loadRun(screen: DetailScreen, force: boolean) {
+  const ci = ciOf(screen);
+  if (!ci) {
+    screen.run = null;
+    return;
+  }
+  try {
+    const run = await Bridge.githubDetail({ kind: "run", repo: ci.repo, id: ci.id }, force);
+    screen.run = run.kind === "run" ? run : null;
+  } catch {
+    // The CI line still says how it went; the jobs can wait for a refresh.
+  }
+  if (showing(screen)) touch();
+}
+
+/** The run a screen can show the progress of, if any: its own, or its sheet's. */
+function runOf(s: Screen | null): GithubRunDetail | null {
+  const screen = s ? fetched(s) : null;
+  if (screen?.type !== "detail") return null;
+  return screen.data?.kind === "run" ? screen.data : (screen.run ?? null);
+}
+
+/**
+ * A run that was going when last seen and has just ended, while on screen:
+ * the view makes a moment of it (Mochi, the ring, a sound), once.
+ */
+let justEnded: "success" | "failure" | "neutral" | null = null;
 
 /** What a screen fetches — a job fetches through its run; a diff has nothing to fetch. */
 function fetched(s: Screen): ProjectScreen | DetailScreen | null {
@@ -222,9 +263,10 @@ function fetched(s: Screen): ProjectScreen | DetailScreen | null {
 }
 
 /**
- * A run still going asks again every few seconds while it is on screen, so its
- * jobs finish one by one before your eyes. Quietly: no loader, no search from
- * Mochi, the list stays where it was read. Only while the panel is open.
+ * A run still going asks again every few seconds while it is on screen — its
+ * own screen, or the pull request or commit it runs for — so its jobs finish
+ * one by one before your eyes. Quietly: no loader, no search from Mochi, the
+ * list stays where it was read. Only while the panel is open.
  */
 const LIVE_MS = 10_000;
 let liveTimer: number | null = null;
@@ -232,7 +274,13 @@ let liveTimer: number | null = null;
 function liveRun(): DetailScreen | null {
   const s = top();
   const screen = s ? fetched(s) : null;
-  return screen?.type === "detail" && screen.data?.kind === "run" && screen.data.state === "running" ? screen : null;
+  if (screen?.type !== "detail") return null;
+  const d = screen.data;
+  const going =
+    (d?.kind === "run" && d.state === "running") ||
+    screen.run?.state === "running" ||
+    ((d?.kind === "pull" || d?.kind === "commits") && d.ci?.state === "running");
+  return going ? screen : null;
 }
 
 function armLive() {
@@ -245,9 +293,13 @@ function armLive() {
     try {
       screen.data = await Bridge.githubDetail(screen.target, true);
       screen.error = null;
+      await loadRun(screen, true);
     } catch {
       // Offline for a moment: the next round tries again.
     }
+    // It was going a moment ago; if it no longer is, it has just ended.
+    const run = runOf(screen);
+    if (!liveRun() && run && run.state !== "running" && showing(screen)) justEnded = run.state;
     // Redraws, which arms the next round while the run still goes.
     if (showing(screen)) touch();
   }, LIVE_MS);
@@ -1147,7 +1199,25 @@ function reviewBlock(p: GithubPullDetail): HTMLElement {
   });
 }
 
-function pullView(p: GithubPullDetail, login: string): HTMLElement {
+/**
+ * The jobs of a sheet's run, under its CI line: each with its bar, as on the
+ * run's own screen, which a click on any of them opens.
+ */
+function ciJobs(screen: DetailScreen): HTMLElement[] {
+  const run = screen.run;
+  const ci = ciOf(screen);
+  if (!run || !ci || run.id !== ci.id || run.jobs.length === 0) return [];
+  const now = Date.now();
+  const whole = envelope(run.jobs, now);
+  return run.jobs.map((job) => {
+    const broke = job.steps.find((s) => s.state === "failure");
+    const going = job.steps.find((s) => s.state === "running" && !WAITING.has(s.outcome));
+    const where = broke ? `at “${broke.name}”` : going ? going.name : job.runner;
+    return timedRow(job, job.name, where, whole, now, () => openRun(run.repo, run.id, run.workflow, run.url));
+  });
+}
+
+function pullView(p: GithubPullDetail, login: string, screen: DetailScreen): HTMLElement {
   const style = PULL_STYLE[p.state];
   const branches = p.head && p.base ? h("span", { class: "gh-sha", text: `${p.head} → ${p.base}` }) : null;
   const when =
@@ -1165,6 +1235,7 @@ function pullView(p: GithubPullDetail, login: string): HTMLElement {
     facts(p.repo, login, p.author && `by ${p.author}`, branches, when),
     labelChips(p.labels),
     runBlock(p.ci, p.missing, p.repo),
+    ...ciJobs(screen),
     reviewBlock(p),
     block({
       icon: roundIcon("#9398A1", svg(ICONS.doc, 10)),
@@ -1201,7 +1272,7 @@ function issueView(i: GithubIssueDetail, login: string): HTMLElement {
   );
 }
 
-function commitsView(c: GithubCommitsDetail, login: string): HTMLElement {
+function commitsView(c: GithubCommitsDetail, login: string, screen: DetailScreen): HTMLElement {
   const count = c.total ?? c.commits.length;
   const single = c.commits.length === 1 && count <= 1;
   const newest = c.commits[0];
@@ -1234,6 +1305,7 @@ function commitsView(c: GithubCommitsDetail, login: string): HTMLElement {
     titleRow(title, single && newest ? chip(newest.sha, "#3B9EFF") : null),
     facts(c.repo, login, newest?.author && `by ${newest.author}`, newest?.at && ago(newest.at)),
     runBlock(c.ci, c.missing, c.repo),
+    ...ciJobs(screen),
     ...(single ? [] : [heading("Commits"), ...rows, more]).filter((n): n is HTMLElement => n != null),
     ...(c.files.length ? [heading(single ? "Files" : "Latest commit", changed), ...c.files.map((f) => fileRow(f, newest?.url ?? c.url))] : []),
   );
@@ -1438,11 +1510,11 @@ const LOCKED_WHAT: Record<string, string> = {
 function detailView(d: GithubDetail, login: string, screen: DetailScreen): HTMLElement {
   switch (d.kind) {
     case "pull":
-      return pullView(d, login);
+      return pullView(d, login, screen);
     case "issue":
       return issueView(d, login);
     case "commits":
-      return commitsView(d, login);
+      return commitsView(d, login, screen);
     case "release":
       return releaseView(d, login);
     case "run":
@@ -1706,7 +1778,39 @@ export function buildGithub(actions: ViewActions): ViewHost {
   const account = h("b", { text: "GitHub" });
   const accountSub = h("span", { text: "GitHub" });
   const trail = h("div", { class: "gh-trail" });
-  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, account, accountSub), trail);
+  // Around Mochi while a run is on screen: how far along it is. See drawOrbit.
+  const orbit = h("div", { class: "gh-orbit" });
+  const side = h("div", { class: "gh-side" }, orbit, h("div", { class: "gh-side-who" }, account, accountSub), trail);
+
+  /**
+   * A run on screen draws a ring around Mochi: as much of it as there are
+   * jobs done, with a light running round it while the run goes; whole, in
+   * the run's colour, once it has ended. Mochi works while it goes — the
+   * island's own working look — and when it ends before your eyes he says
+   * what he makes of it, with the island's sound for it.
+   */
+  function drawOrbit() {
+    const run = stack.length > 0 ? runOf(top()) : null;
+    orbit.classList.toggle("on", run != null);
+    actions.work(run?.state === "running");
+    if (run) {
+      const going = run.state === "running";
+      const done = run.jobs.filter((j) => j.state !== "running").length;
+      const progress = going ? Math.max(0.04, done / Math.max(1, run.jobs.length + run.moreJobs)) : 1;
+      orbit.classList.toggle("live", going);
+      orbit.style.setProperty("--p", String(progress));
+      orbit.style.setProperty("--c", BUILD_STYLE[run.state].color);
+    }
+    if (justEnded) {
+      const how = justEnded;
+      justEnded = null;
+      orbit.classList.remove("ended");
+      void orbit.offsetWidth;
+      orbit.classList.add("ended");
+      actions.emote(how === "success" ? "proud" : how === "failure" ? "surprised" : "happy");
+      if (how !== "neutral") Sound.play(how === "success" ? "finish" : "error");
+    }
+  }
 
   const card = h("div", { class: "card gh-card" }, side, h("div", { class: "gh-col" }, notice, main));
   const el = h("div", { class: "view" }, card);
@@ -2051,6 +2155,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       // A diff is part of the sheet under it: nothing of its own to refresh.
       refreshBtn.style.display = configured && s?.type !== "diff" ? "" : "none";
       armLive();
+      drawOrbit();
 
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.

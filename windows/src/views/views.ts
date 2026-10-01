@@ -35,6 +35,11 @@ export interface ViewActions {
    * of the GitHub graph. Null gives him his own back.
    */
   tintMochi(color: string | null): void;
+  /**
+   * The view is showing something at work (a run going): Mochi takes his
+   * working look for as long as it lasts, unless his own state says more.
+   */
+  work(on: boolean): void;
 }
 
 export interface ViewHost {

@@ -113,7 +113,7 @@ const details: Record<GithubTarget["kind"], GithubDetail> = {
     reviewers: [{ login: "louis", state: "approved" }, { login: "kirzen", state: "commented" }],
     labels: [{ name: "windows", color: "#0e8a16" }, { name: "enhancement", color: "#a2eeef" }],
     files, createdAt: minutesAgo(60 * 50), mergedAt: minutesAgo(4), mergedBy: "louis", closedAt: minutesAgo(4),
-    ci: ci("success"), missing: [],
+    ci: ci(params.has("running") ? "running" : "success"), missing: [],
   },
   issue: {
     kind: "issue", repo: "louis-cfm/coucou", number: 9, title: "Defender flags the installer", url: "https://github.com",

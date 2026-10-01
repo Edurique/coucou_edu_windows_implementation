@@ -67,6 +67,8 @@ export class Island {
    * graph). His body only: the glow stays his own.
    */
   private tintRequest: RGB | null = null;
+  /** A view asked for the working look (see ViewActions.work). */
+  private viewWorking = false;
   /** The colour Mochi's body is drawn in, eased towards what it should be. */
   private bodyRGB: RGB | null = null;
 
@@ -182,6 +184,11 @@ export class Island {
         this.tintRequest = color ? hexToRGB(color) : null;
         this.ensureRunning();
       },
+      work: (on) => {
+        if (this.viewWorking === on) return;
+        this.viewWorking = on;
+        State.notify();
+      },
     };
 
     this.wakeStrip = h("div", { id: "wake-strip" });
@@ -277,6 +284,7 @@ export class Island {
     State.mode = mode;
     // Whatever asked for a tint is no longer under the mouse.
     this.tintRequest = null;
+    this.viewWorking = false;
     if (mode === "expanded") Sound.play("open");
     if (prev === "expanded") {
       Sound.play("close");
@@ -318,6 +326,7 @@ export class Island {
   setView(view: IslandViewName) {
     this.stopSequenceIfLeaving(view);
     this.tintRequest = null;
+    this.viewWorking = false;
     if (State.mode !== "expanded") {
       this.fsm.forceHome();
       State.view = view;
@@ -915,7 +924,9 @@ export class Island {
     }
 
     syncMiniBotStates(State.tasks);
-    this.engine.setState(State.effectiveState);
+    // A view's working look only fills in for a Mochi with nothing to say.
+    const state = State.effectiveState;
+    this.engine.setState(this.viewWorking && state === "idle" ? "working" : state);
   }
 
   /** Applies settings coming from Rust at boot. */

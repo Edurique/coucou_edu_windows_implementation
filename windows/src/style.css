@@ -1416,6 +1416,56 @@ input[type="range"]::-webkit-slider-thumb {
   padding: 119px 8px 12px 13px;
 }
 
+/* Around Mochi while a run is on screen: a ring, as much of it lit as there
+   are jobs done, a light running round it while the run goes, whole in the
+   run's colour once it has ended. Centred on Mochi (VIEW_LAYOUTS.github),
+   who is drawn over it by the island. --p is registered so the lit part
+   grows instead of jumping. */
+@property --p {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+.gh-orbit {
+  position: absolute;
+  left: 5.5px;
+  top: 15px;
+  width: 102px;
+  height: 102px;
+  border-radius: 50%;
+  background: conic-gradient(var(--c) calc(var(--p) * 1turn), rgba(255, 255, 255, 0.07) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease-out, --p 0.6s cubic-bezier(0.3, 1.2, 0.4, 1);
+}
+
+.gh-orbit.on {
+  opacity: 1;
+}
+
+.gh-orbit.live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(rgba(255, 255, 255, 0) 0 72%, rgba(255, 255, 255, 0.85) 100%);
+  animation: gh-spin 1.5s linear infinite;
+}
+
+/* Ended before your eyes: the ring closes and gives one beat. */
+.gh-orbit.ended {
+  animation: gh-orbit-end 0.7s cubic-bezier(0.3, 1.2, 0.4, 1);
+}
+
+@keyframes gh-orbit-end {
+  0% { scale: 1; }
+  35% { scale: 1.09; }
+  100% { scale: 1; }
+}
+
 .gh-side-who {
   display: flex;
   flex-direction: column;

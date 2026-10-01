@@ -439,6 +439,33 @@ pub async fn poll(app: AppHandle) {
     refresh(app).await;
 }
 
+/// How often GitHub is asked while one of the projects has a run going.
+const LIVE_SECS: u64 = 20;
+
+/// The two-minute tick is fine for news, not for watching a run: a build that
+/// takes three minutes would be seen starting and never seen ending. While
+/// any project's newest run is going, the refresh comes every twenty seconds
+/// instead, island open or not, and falls back to the tick the moment none
+/// is. It asks nothing on its own while everything is at rest, and nothing
+/// at all while Coucou is paused or GitHub is switched off.
+pub fn watch_live(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(LIVE_SECS)).await;
+            let going = CACHE
+                .lock()
+                .unwrap()
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.repos.iter().any(|r| r.build.as_ref().is_some_and(|b| b.state == "running")));
+            if !going || crate::integrations::PAUSED.load(Ordering::Relaxed) || !crate::integrations::enabled(&app, ID) {
+                continue;
+            }
+            refresh(app.clone()).await;
+        }
+    });
+}
+
 /// Development builds only: a way to see the pill's news without breaking a
 /// build for it. Writing "fail" or "merge" to coucou-github-demo in the temp
 /// folder sends that news once, through the same event as the real thing.
