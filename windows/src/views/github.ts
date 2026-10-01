@@ -1676,6 +1676,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
     clear(badge);
     clear(aside);
     sub.classList.remove("path");
+    who.classList.remove("file");
     if (look) {
       badge.append(look.mark ? look.mark() : roundIcon(look.color, look.icon()));
       main.style.setProperty("--accent", look.color);
@@ -1906,6 +1907,7 @@ export function buildGithub(actions: ViewActions): ViewHost {
       who.textContent = splitPath(screen.file.path).base;
       sub.textContent = screen.file.path;
       sub.classList.add("path");
+      who.classList.add("file");
       aside.append(statusWord(screen.file), plusMinus(screen.file.additions, screen.file.deletions));
       list.classList.add("gh-edge");
       list.append(diffView(screen.file, screen.url));
