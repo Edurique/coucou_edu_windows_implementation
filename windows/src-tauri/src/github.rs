@@ -571,54 +571,6 @@ pub fn watch_live(app: AppHandle) {
     });
 }
 
-/// Development builds only: a way to see the pill's news without breaking a
-/// build for it. Writing "fail" or "merge" to coucou-github-demo in the temp
-/// folder sends that news once, through the same event as the real thing.
-#[cfg(debug_assertions)]
-pub fn watch_demo(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        let trigger = std::env::temp_dir().join("coucou-github-demo");
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            let Ok(what) = std::fs::read_to_string(&trigger) else { continue };
-            let _ = std::fs::remove_file(&trigger);
-            let event = match what.trim() {
-                "fail" => IntegrationEvent {
-                    success: false,
-                    label: "CI failed on coucou".into(),
-                    detail: Some("main".into()),
-                    open: Some(json!({
-                        "title": "CI failed on coucou",
-                        "facts": [
-                            { "kind": "step", "text": "test \u{203a} cargo test" },
-                            { "kind": "branch", "text": "main" },
-                            { "kind": "commit", "text": "Keep the last snapshot through an error" },
-                            { "kind": "by", "verb": "by", "text": "mochi" },
-                        ],
-                    })),
-                },
-                "merge" => IntegrationEvent {
-                    success: true,
-                    label: "#12 merged".into(),
-                    detail: Some("GitHub panel for the Windows island".into()),
-                    open: Some(json!({
-                        "title": "#12 GitHub panel for the Windows island",
-                        "facts": [
-                            { "kind": "repo", "text": "coucou" },
-                            { "kind": "by", "verb": "merged by", "text": "louis" },
-                            { "kind": "diff", "additions": 1332, "deletions": 64 },
-                            { "kind": "files", "text": "14 files" },
-                        ],
-                    })),
-                },
-                _ => continue,
-            };
-            // No data: the island keeps what it shows and only takes the news.
-            emit(&app, IntegrationUpdate { id: ID, data: json!({}), error: None, event: Some(event) });
-        }
-    });
-}
-
 /// A pull request of yours that went in.
 struct Merged {
     repo: String,

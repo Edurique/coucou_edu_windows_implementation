@@ -75,8 +75,6 @@ pub fn start(app: AppHandle) {
     spawn(app.clone(), "integration_resend", 6, 60, poll_resend);
     spawn(app.clone(), "integration_github", 7, crate::github::TICK_SECS, crate::github::refresh);
     crate::github::watch_live(app.clone());
-    #[cfg(debug_assertions)]
-    crate::github::watch_demo(app.clone());
     spawn(app.clone(), "integration_calcom", 8, 300, poll_calcom);
     spawn(app, "integration_notion", 9, 300, poll_notion);
 }
