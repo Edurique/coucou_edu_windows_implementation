@@ -14,7 +14,10 @@ use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::github::{build_state, is_timestamp, parse_run, split_full_name, text, unix_now, Build, Gh, GhError};
+use crate::github::{
+    build_state, first_line, flag, int, is_timestamp, parse_run, short_sha, split_full_name, text, unix_now, Build, Gh,
+    GhError, SHORT_SHA, UNTITLED, WEB, WORKFLOW,
+};
 
 /// What a line of activity leads to.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -249,7 +252,6 @@ pub struct Job {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
-    pub number: u64,
     pub name: String,
     pub state: &'static str,
     pub outcome: &'static str,
@@ -360,6 +362,10 @@ const EXCERPT: usize = 320;
 const MAX_FILES: usize = 20;
 const MAX_PATCH: usize = 12_000;
 const MAX_COMMITS: u64 = 10;
+/// Files of a release listed; its downloads are counted over all of them.
+const MAX_ASSETS: usize = 5;
+/// The grey a label gets when GitHub gives it no colour.
+const LABEL_GREY: &str = "6b7079";
 /// A comment is there to be read, so it gets more room than an excerpt; past
 /// this it is an essay, and GitHub has it.
 const MAX_REMARK: usize = 1600;
@@ -406,7 +412,7 @@ pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
         }
     }
 
-    let gh = Gh::from_store().map_err(|e| e.message())?;
+    let gh = Gh::from_store()?;
     let fetched = match &target {
         Target::Pull { repo, number } => pull(&gh, repo, *number).await,
         Target::Issue { repo, number } => issue(&gh, repo, *number).await,
@@ -418,7 +424,7 @@ pub async fn detail(target: Target, force: bool) -> Result<Detail, String> {
         Target::Comments { repo, number } => comments(&gh, repo, *number).await,
         Target::Project { .. } => Err(GhError::BadResponse),
     };
-    let detail = fetched.map_err(|e| e.message())?;
+    let detail = fetched?;
     CACHE.lock().unwrap().insert(key, (now, detail.clone()));
     Ok(detail)
 }
@@ -490,7 +496,7 @@ fn labels(node: &Value) -> Vec<Label> {
                 .filter_map(|l| {
                     Some(Label {
                         name: text(l.get("name"))?,
-                        color: format!("#{}", text(l.get("color")).unwrap_or_else(|| "6b7079".into())),
+                        color: format!("#{}", text(l.get("color")).unwrap_or_else(|| LABEL_GREY.into())),
                     })
                 })
                 .collect()
@@ -512,8 +518,8 @@ fn files(list: Option<&Value>) -> Vec<FileChange> {
                     Some(FileChange {
                         path: text(f.get("filename"))?,
                         status: text(f.get("status")),
-                        additions: f.get("additions").and_then(Value::as_i64).unwrap_or(0),
-                        deletions: f.get("deletions").and_then(Value::as_i64).unwrap_or(0),
+                        additions: int(f, "/additions"),
+                        deletions: int(f, "/deletions"),
                         patch,
                         truncated,
                     })
@@ -570,11 +576,11 @@ fn parse_pull(repo: &str, node: &Value) -> Option<PullDetail> {
                 .collect()
         })
         .unwrap_or_default();
-    let count = |path: &str| node.pointer(path).and_then(Value::as_i64).unwrap_or(0);
+    let count = |path: &str| int(node, path);
     Some(PullDetail {
         repo: repo.to_string(),
         number: node.get("number")?.as_u64()?,
-        title: text(node.get("title")).unwrap_or_else(|| "Untitled".into()),
+        title: text(node.get("title")).unwrap_or_else(|| UNTITLED.into()),
         url: text(node.get("url"))?,
         state,
         author: text(node.pointer("/author/login")),
@@ -680,7 +686,7 @@ fn parse_comments(repo: &str, node: &Value) -> Option<CommentsDetail> {
     Some(CommentsDetail {
         repo: repo.to_string(),
         number: node.get("number")?.as_u64()?,
-        title: text(node.get("title")).unwrap_or_else(|| "Untitled".into()),
+        title: text(node.get("title")).unwrap_or_else(|| UNTITLED.into()),
         url: text(node.get("url"))?,
         entries,
         earlier: more_comments || more_reviews || more_threads,
@@ -698,7 +704,6 @@ fn parse_thread(thread: &Value) -> Option<Thread> {
         return None;
     }
     let total = thread.pointer("/comments/totalCount").and_then(Value::as_u64).unwrap_or(0);
-    let flag = |name: &str| thread.get(name).and_then(Value::as_bool).unwrap_or(false);
     Some(Thread {
         path: text(thread.get("path"))?,
         line: thread.get("line").and_then(Value::as_u64),
@@ -706,8 +711,8 @@ fn parse_thread(thread: &Value) -> Option<Thread> {
             Some("LEFT") => "left",
             _ => "right",
         },
-        resolved: flag("isResolved"),
-        outdated: flag("isOutdated"),
+        resolved: flag(thread, "isResolved"),
+        outdated: flag(thread, "isOutdated"),
         code: thread
             .pointer("/hunk/nodes/0/diffHunk")
             .and_then(Value::as_str)
@@ -783,7 +788,7 @@ fn parse_issue(repo: &str, node: &Value) -> Option<IssueDetail> {
     Some(IssueDetail {
         repo: repo.to_string(),
         number: node.get("number")?.as_u64()?,
-        title: text(node.get("title")).unwrap_or_else(|| "Untitled".into()),
+        title: text(node.get("title")).unwrap_or_else(|| UNTITLED.into()),
         url: text(node.get("url"))?,
         state,
         author: text(node.pointer("/author/login")),
@@ -794,7 +799,7 @@ fn parse_issue(repo: &str, node: &Value) -> Option<IssueDetail> {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(|n| text(n.get("login"))).collect())
             .unwrap_or_default(),
-        comments: node.pointer("/comments/totalCount").and_then(Value::as_i64).unwrap_or(0),
+        comments: int(node, "/comments/totalCount"),
         created_at: text(node.get("createdAt")),
         closed_at: text(node.get("closedAt")),
     })
@@ -802,8 +807,11 @@ fn parse_issue(repo: &str, node: &Value) -> Option<IssueDetail> {
 
 // ── Commits ───────────────────────────────────────────────────────────────────
 
+/// A SHA written out whole.
+const FULL_SHA: usize = 40;
+
 fn is_sha(s: &str) -> bool {
-    (7..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
+    (SHORT_SHA..=FULL_SHA).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn is_login(s: &str) -> bool {
@@ -830,13 +838,13 @@ async fn commits(
     let (list_path, url) = match (head, author, from, to) {
         (Some(sha), _, _, _) if is_sha(sha) => {
             let n = count.unwrap_or(1).clamp(1, MAX_COMMITS);
-            (format!("/repos/{repo}/commits?sha={sha}&per_page={n}"), format!("https://github.com/{repo}/commits/{sha}"))
+            (format!("/repos/{repo}/commits?sha={sha}&per_page={n}"), format!("{WEB}/{repo}/commits/{sha}"))
         }
         (None, Some(login), Some(from), Some(to)) if is_login(login) && is_timestamp(from) && is_timestamp(to) => {
             let window = format!("author={login}&since={}&until={}", query_time(from), query_time(to));
             (
                 format!("/repos/{repo}/commits?{window}&per_page={MAX_COMMITS}"),
-                format!("https://github.com/{repo}/commits?{window}"),
+                format!("{WEB}/{repo}/commits?{window}"),
             )
         }
         _ => return Err(GhError::NotFound),
@@ -884,13 +892,11 @@ fn parse_commit_lines(list: &Value) -> Vec<CommitLine> {
                 .filter_map(|c| {
                     let sha = text(c.get("sha"))?;
                     Some(CommitLine {
-                        message: text(c.pointer("/commit/message"))
-                            .and_then(|m| m.lines().next().map(str::to_string))
-                            .unwrap_or_default(),
+                        message: text(c.pointer("/commit/message")).and_then(first_line).unwrap_or_default(),
                         author: text(c.pointer("/author/login")).or_else(|| text(c.pointer("/commit/author/name"))),
                         at: text(c.pointer("/commit/author/date")),
                         url: text(c.get("html_url")).unwrap_or_default(),
-                        sha: sha.chars().take(7).collect(),
+                        sha: short_sha(&sha),
                         id: sha,
                     })
                 })
@@ -928,8 +934,8 @@ fn parse_release(repo: &str, tag: &str, json: &Value) -> Option<ReleaseDetail> {
                 .filter_map(|a| {
                     Some(Asset {
                         name: text(a.get("name"))?,
-                        downloads: a.get("download_count").and_then(Value::as_i64).unwrap_or(0),
-                        size: a.get("size").and_then(Value::as_i64).unwrap_or(0),
+                        downloads: int(a, "/download_count"),
+                        size: int(a, "/size"),
                     })
                 })
                 .collect()
@@ -943,9 +949,9 @@ fn parse_release(repo: &str, tag: &str, json: &Value) -> Option<ReleaseDetail> {
         body: text(json.get("body")).map(|b| excerpt(&plain(&b))),
         author: text(json.pointer("/author/login")),
         published_at: text(json.get("published_at")),
-        prerelease: json.get("prerelease").and_then(Value::as_bool).unwrap_or(false),
+        prerelease: flag(json, "prerelease"),
         downloads: assets.iter().map(|a| a.downloads).sum(),
-        assets: assets.into_iter().take(5).collect(),
+        assets: assets.into_iter().take(MAX_ASSETS).collect(),
     })
 }
 
@@ -1011,7 +1017,7 @@ fn parse_run_detail(repo: &str, run: &Value, jobs: &Value) -> Option<RunDetail> 
     let list: Vec<Job> = jobs
         .get("jobs")
         .and_then(Value::as_array)
-        .map(|jobs| jobs.iter().filter_map(parse_job).take(MAX_JOBS).collect())
+        .map(|jobs| jobs.iter().filter_map(parse_job).collect())
         .unwrap_or_default();
     let total = jobs.get("total_count").and_then(Value::as_u64).unwrap_or(list.len() as u64);
     // A finished run ends with its last job. `updated_at` moves on afterwards
@@ -1027,10 +1033,10 @@ fn parse_run_detail(repo: &str, run: &Value, jobs: &Value) -> Option<RunDetail> 
     Some(RunDetail {
         repo: repo.to_string(),
         id: run.get("id")?.as_u64()?,
-        workflow: text(run.get("name")).unwrap_or_else(|| "Workflow".into()),
+        workflow: text(run.get("name")).unwrap_or_else(|| WORKFLOW.into()),
         title: text(run.get("display_title"))
             .or_else(|| text(run.pointer("/head_commit/message")))
-            .and_then(|t| t.lines().next().map(str::to_string)),
+            .and_then(first_line),
         branch: text(run.get("head_branch")),
         event: text(run.get("event")),
         actor: text(run.pointer("/triggering_actor/login")).or_else(|| text(run.pointer("/actor/login"))),
@@ -1068,7 +1074,6 @@ fn parse_job(job: &Value) -> Option<Job> {
 fn parse_step(step: &Value) -> Option<Step> {
     let (state, outcome) = states(step);
     Some(Step {
-        number: step.get("number")?.as_u64()?,
         name: text(step.get("name"))?,
         state,
         outcome,
@@ -1273,9 +1278,9 @@ mod tests {
                 "html_url": "https://github.com/edu/coucou/actions/runs/77/job/1", "labels": ["ubuntu-latest"],
                 "started_at": "2026-09-30T10:00:05Z", "completed_at": "2026-09-30T10:02:00Z",
                 "steps": [
-                    { "number": 1, "name": "Set up job", "status": "completed", "conclusion": "success",
+                    { "name": "Set up job", "status": "completed", "conclusion": "success",
                       "started_at": "2026-09-30T10:00:05Z", "completed_at": "2026-09-30T10:00:08Z" },
-                    { "number": 2, "name": "Lint", "status": "completed", "conclusion": "skipped",
+                    { "name": "Lint", "status": "completed", "conclusion": "skipped",
                       "started_at": null, "completed_at": null },
                 ],
             },

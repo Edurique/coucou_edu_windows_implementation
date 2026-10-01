@@ -234,7 +234,6 @@ export interface GithubTimed {
 }
 
 export interface GithubStep extends GithubTimed {
-  number: number;
   name: string;
 }
 
@@ -396,9 +395,7 @@ export interface GithubDeploy {
 /** `State.integrations.integration_github.data` — the Snapshot in github.rs. */
 export interface GithubData {
   login: string;
-  name: string | null;
   profileUrl: string;
-  totalRepos: number;
   totalStars: number;
   /** Newest first. */
   activity: GithubActivity[];
@@ -420,7 +417,6 @@ export interface GithubContributions {
 }
 
 export interface GithubRepo {
-  name: string;
   /** "owner/name". */
   fullName: string;
   url: string;
@@ -452,7 +448,6 @@ export type GithubActivityKind =
   | "issue_opened" | "issue_closed" | "release" | "create";
 
 export interface GithubActivity {
-  id: string;
   kind: GithubActivityKind;
   /** "owner/name". */
   repo: string;
@@ -469,7 +464,6 @@ export interface GithubActivity {
 export interface GithubAccount {
   login: string;
   name: string | null;
-  profileUrl: string;
   /** GitHub's `github-authentication-token-expiration` header, as sent. Null: no expiry. */
   expiresAt: string | null;
   /** One line per thing the panel needs, so a missing permission is named. */

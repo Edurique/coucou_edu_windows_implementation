@@ -284,9 +284,15 @@ function githubCard(onPanel: (open?: GithubOpening) => void): HTMLElement {
       )
     : null;
   // Without the year (the token may not read it), the stars are the figure.
+  // While the pill has news, the way in leads to what the news is about.
+  const news = State.integrations.integration_github?.news?.open;
   const figure = h(
     "button",
-    { class: "int-balance int-figure", title: "Open the GitHub panel", onclick: () => onPanel() },
+    {
+      class: "int-balance int-figure",
+      title: news?.title ?? "Open the GitHub panel",
+      onclick: () => onPanel(State.integrations.integration_github?.news?.open),
+    },
     h("span", { text: c ? c.total.toLocaleString("en-US") : compact(d.totalStars) }),
     h("i", { text: c ? "contributions" : "stars" }),
     week,

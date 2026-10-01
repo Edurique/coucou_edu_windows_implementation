@@ -7,10 +7,10 @@
 // and nowhere else: never into a URL, never into the log, never back to the
 // front end.
 //
-// When things happen: integrations.rs ticks every five minutes, as for every
-// other pill. A tick while the island is hidden fetches nothing, since nobody
-// can look at the panel; a tick while it is on screen, the Refresh button and
-// opening the panel fetch everything.
+// When things happen: integrations.rs ticks every two minutes, island shown or
+// not — the tick is what tells the pill a build broke — and `watch_live` every
+// twenty seconds while a run is going. The Refresh button and opening the
+// panel refresh too. Sheets are fetched on the click only.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,15 +31,55 @@ use crate::secrets;
 const ID: &str = "integration_github";
 
 const API: &str = "https://api.github.com";
+/// GitHub's own site: a page's address is built on it when GitHub gave no link.
+pub(crate) const WEB: &str = "https://github.com";
 /// Pinned so a change of default on GitHub's side can't reshape the answers.
 const API_VERSION: &str = "2022-11-28";
 const TIMEOUT: Duration = Duration::from_secs(10);
 const TOKEN_KEY: &str = "github-token";
+/// The wait GitHub's documentation asks for when it gives no length: a minute.
+const MINUTE: u64 = 60;
+/// How much of GitHub's own words about a failed query the log keeps.
+const LOG_CHARS: usize = 160;
+const ETAG: &str = "etag";
+
+/// What stands in for a name GitHub left out.
+pub(crate) const UNTITLED: &str = "Untitled";
+pub(crate) const WORKFLOW: &str = "Workflow";
+const OTHER: &str = "Other";
+const CREATED: &str = "Created the repository";
+
+/// A commit as people write it: the first seven characters of its SHA.
+pub(crate) const SHORT_SHA: usize = 7;
+
+pub(crate) fn short_sha(sha: &str) -> String {
+    sha.chars().take(SHORT_SHA).collect()
+}
+
+/// The first line of a message: a commit's title, a run's.
+pub(crate) fn first_line(message: String) -> Option<String> {
+    message.lines().next().map(str::to_string)
+}
+
+/// A count GitHub gave, or zero: `pointer` is a JSON pointer into `node`.
+pub(crate) fn int(node: &Value, pointer: &str) -> i64 {
+    node.pointer(pointer).and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// A yes or no GitHub gave, or no.
+pub(crate) fn flag(node: &Value, key: &str) -> bool {
+    node.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// "owner/name" → "name".
+pub(crate) fn short_name(full_name: &str) -> &str {
+    full_name.rsplit('/').next().unwrap_or(full_name)
+}
 
 /// Why a GitHub call gave nothing usable. `message()` is what the island and the
 /// settings window show, so it has to make sense to someone who never saw an
 /// HTTP status code.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum GhError {
     NoToken,
     /// 401 — wrong, revoked or expired token.
@@ -68,6 +108,12 @@ impl GhError {
             GhError::Status(code) => format!("GitHub error {code}"),
             GhError::BadResponse => "Unexpected answer from GitHub".into(),
         }
+    }
+}
+
+impl From<GhError> for String {
+    fn from(e: GhError) -> String {
+        e.message()
     }
 }
 
@@ -125,10 +171,10 @@ fn rate_block(
         }
     }
     if remaining == Some(0) {
-        return Some(reset.filter(|r| *r > now).unwrap_or(now + 60));
+        return Some(reset.filter(|r| *r > now).unwrap_or(now + MINUTE));
     }
     if status == 429 || (refused && says_rate_limit) {
-        return Some(now + 60);
+        return Some(now + MINUTE);
     }
     None
 }
@@ -137,7 +183,7 @@ fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
     headers.get(name)?.to_str().ok()?.trim().parse().ok()
 }
 
-pub(crate) fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
+fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)?
         .to_str()
@@ -159,8 +205,8 @@ pub struct Gh {
 }
 
 impl Gh {
-    /// Reads the token from the Credential Manager. Called once per poll, so a
-    /// token changed in the settings window is picked up on the next one.
+    /// Reads the token from the Credential Manager, each time something is
+    /// asked: a token changed in the settings window is the one used next.
     pub fn from_store() -> Result<Self, GhError> {
         let token = secrets::get(TOKEN_KEY).ok_or(GhError::NoToken)?;
         let http = reqwest::Client::builder()
@@ -228,7 +274,7 @@ impl Gh {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .chars()
-                    .take(160)
+                    .take(LOG_CHARS)
                     .collect();
                 log::line(format!("github /graphql → {message}"));
                 Err(graphql_error(&reply.json))
@@ -294,7 +340,7 @@ fn graphql_error(json: &Value) -> GhError {
     let kind = first.and_then(|e| e.get("type")).and_then(Value::as_str).unwrap_or("");
     match kind {
         "RATE_LIMITED" => {
-            let until = unix_now() + 60;
+            let until = unix_now() + MINUTE;
             block_until(until);
             GhError::RateLimited(until)
         }
@@ -307,13 +353,11 @@ fn graphql_error(json: &Value) -> GhError {
 // ── What the island receives ──────────────────────────────────────────────────
 
 /// The `data` of the `integration_github` update.
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub login: String,
-    pub name: Option<String>,
     pub profile_url: String,
-    pub total_repos: i64,
     pub total_stars: i64,
     /// Newest first.
     pub activity: Vec<Activity>,
@@ -343,7 +387,6 @@ pub struct Contributions {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Repo {
-    pub name: String,
     /// "owner/name".
     pub full_name: String,
     pub url: String,
@@ -375,7 +418,6 @@ pub struct Build {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Activity {
-    pub id: String,
     /// push, pr_opened, pr_merged, pr_closed, issue_opened, issue_closed,
     /// release or create.
     pub kind: &'static str,
@@ -418,7 +460,7 @@ struct Cache {
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
 
-/// One refresh at a time: the five-minute tick and a Refresh click can land
+/// One refresh at a time: the tick and a Refresh click can land
 /// together, and two refreshes racing would each spend the rate limit.
 static BUSY: AtomicBool = AtomicBool::new(false);
 
@@ -430,15 +472,9 @@ impl Drop for BusyGuard {
     }
 }
 
-/// The tick. It runs with the island hidden too: a build that just broke or a
-/// pull request that just went in is news for the pill, and the pill is what
-/// shows while the island is away. It stays cheap there — one GraphQL point,
-/// and the Actions and events calls answer 304, which GitHub doesn't count,
-/// as long as nothing happened.
-pub async fn poll(app: AppHandle) {
-    refresh(app).await;
-}
-
+/// The tick: every two minutes rather than the other pills' five, since it is
+/// also what tells the pill that a build broke, and "a while ago" is not news.
+pub(crate) const TICK_SECS: u64 = 120;
 /// How often GitHub is asked while one of the projects has a run going.
 const LIVE_SECS: u64 = 20;
 
@@ -544,7 +580,7 @@ fn parse_merged(viewer: &Value) -> Vec<Merged> {
                         key: format!("{repo}#{number}"),
                         number,
                         title: text(n.get("title")).unwrap_or_default(),
-                        url: text(n.get("url")).unwrap_or_else(|| format!("https://github.com/{repo}/pull/{number}")),
+                        url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{repo}/pull/{number}")),
                         merged_by: text(n.pointer("/mergedBy/login")),
                         additions: n.get("additions").and_then(Value::as_i64).unwrap_or(0),
                         deletions: n.get("deletions").and_then(Value::as_i64).unwrap_or(0),
@@ -569,7 +605,7 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
         let told = was.build.as_ref().is_some_and(|b| b.id == build.id && b.state == "failure");
         (!told).then(|| IntegrationEvent {
             success: false,
-            label: format!("{} failed on {}", build.workflow, repo.name),
+            label: format!("{} failed on {}", build.workflow, short_name(&repo.full_name)),
             detail: build.branch.clone(),
             // The card's title and facts are filled in by `tell_failure`, which
             // asks GitHub which job and which step broke.
@@ -600,7 +636,7 @@ fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, mer
 /// is — a name, a size in green and red, a branch — rather than as one grey
 /// sentence.
 fn merge_facts(pull: &Merged) -> Vec<Value> {
-    let mut facts = vec![json!({ "kind": "repo", "text": pull.repo.rsplit('/').next().unwrap_or(&pull.repo) })];
+    let mut facts = vec![json!({ "kind": "repo", "text": short_name(&pull.repo) })];
     if let Some(who) = &pull.merged_by {
         facts.push(json!({ "kind": "by", "verb": "merged by", "text": who }));
     }
@@ -610,7 +646,7 @@ fn merge_facts(pull: &Merged) -> Vec<Value> {
 }
 
 /// What the card says under a build that broke: the job and the step it broke
-/// at, the branch, the commit it ran for, who started it, how long it lasted.
+/// at, the branch, the commit it ran for, who started it.
 fn failure_facts(run: &crate::github_detail::RunDetail) -> Vec<Value> {
     let mut facts = Vec::new();
     if let Some(job) = run.jobs.iter().find(|j| j.state == "failure") {
@@ -647,6 +683,12 @@ async fn tell_failure(event: &mut IntegrationEvent) {
 
 /// Everything the panel shows. The tick, the Refresh button, opening the panel
 /// and saving a token all land here.
+///
+/// The tick runs with the island hidden too: a build that just broke or a
+/// pull request that just went in is news for the pill, and the pill is what
+/// shows while the island is away. It stays cheap there — one GraphQL point,
+/// and the Actions and events calls answer 304, which GitHub doesn't count,
+/// as long as nothing happened.
 pub async fn refresh(app: AppHandle) {
     if BUSY.swap(true, Ordering::SeqCst) {
         return;
@@ -718,18 +760,9 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
     let data = gh.graphql(PROFILE_QUERY).await?;
     let viewer = data.get("viewer").ok_or(GhError::BadResponse)?;
 
-    let login = viewer
-        .get("login")
-        .and_then(Value::as_str)
-        .ok_or(GhError::BadResponse)?
-        .to_string();
-    let repositories = viewer.get("repositories");
-    let total_repos = repositories
-        .and_then(|r| r.get("totalCount"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let nodes = repositories
-        .and_then(|r| r.get("nodes"))
+    let login = text(viewer.get("login")).ok_or(GhError::BadResponse)?;
+    let nodes = viewer
+        .pointer("/repositories/nodes")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
@@ -742,8 +775,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
     let activity = fetch_activity(&gh, &login).await?;
 
     let contributed = viewer
-        .get("repositoriesContributedTo")
-        .and_then(|r| r.get("nodes"))
+        .pointer("/repositoriesContributedTo/nodes")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or_default();
@@ -754,19 +786,9 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
 
     let merged = parse_merged(viewer);
     Ok((Snapshot {
-        name: viewer
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
-        profile_url: viewer
-            .get("url")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("https://github.com/{login}")),
+        profile_url: text(viewer.get("url")).unwrap_or_else(|| format!("{WEB}/{login}")),
         contributions: parse_contributions(viewer.pointer("/contributionsCollection/contributionCalendar")),
         login,
-        total_repos,
         total_stars,
         activity,
         repos,
@@ -799,7 +821,7 @@ fn parse_contributions(calendar: Option<&Value>) -> Option<Contributions> {
         })
         .collect();
     Some(Contributions {
-        total: calendar.get("totalContributions").and_then(Value::as_i64).unwrap_or(0),
+        total: int(calendar, "/totalContributions"),
         start,
         counts,
         levels,
@@ -814,24 +836,19 @@ fn parse_repos(owned: &[Value], contributed: &[Value]) -> Vec<Repo> {
     let mut repos: Vec<Repo> = owned
         .iter()
         .chain(contributed)
-        .filter(|n| !n.get("isArchived").and_then(Value::as_bool).unwrap_or(false))
+        .filter(|n| !flag(n, "isArchived"))
         .filter_map(|n| {
             let full_name = text(n.get("nameWithOwner"))?;
             let language = n.get("primaryLanguage");
             Some(Repo {
-                name: text(n.get("name")).unwrap_or_else(|| full_name.clone()),
-                url: text(n.get("url")).unwrap_or_else(|| format!("https://github.com/{full_name}")),
+                url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{full_name}")),
                 full_name,
-                private: n.get("isPrivate").and_then(Value::as_bool).unwrap_or(false),
+                private: flag(n, "isPrivate"),
                 language: text(language.and_then(|l| l.get("name"))),
                 language_color: text(language.and_then(|l| l.get("color"))),
-                stars: n.get("stargazerCount").and_then(Value::as_i64).unwrap_or(0),
+                stars: int(n, "/stargazerCount"),
                 // Null when the token may not read pull requests: shown as none.
-                open_prs: n
-                    .get("pullRequests")
-                    .and_then(|p| p.get("totalCount"))
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0),
+                open_prs: int(n, "/pullRequests/totalCount"),
                 pushed_at: text(n.get("pushedAt")),
                 build: None,
             })
@@ -861,7 +878,7 @@ async fn latest_build(gh: &Gh, repo: &str) -> Result<Option<Build>, GhError> {
         Ok(None) => Ok(cached.and_then(|(_, build)| build)),
         Ok(Some(reply)) => {
             let build = parse_run(&reply.json);
-            if let Some(tag) = header_str(&reply.headers, "etag") {
+            if let Some(tag) = header_str(&reply.headers, ETAG) {
                 CACHE.lock().unwrap().runs.insert(path, (tag, build.clone()));
             }
             Ok(build)
@@ -891,7 +908,7 @@ pub(crate) fn parse_run(json: &Value) -> Option<Build> {
     Some(Build {
         id: run.get("id")?.as_u64()?,
         state: build_state(status, conclusion),
-        workflow: text(run.get("name")).unwrap_or_else(|| "Workflow".into()),
+        workflow: text(run.get("name")).unwrap_or_else(|| WORKFLOW.into()),
         branch: text(run.get("head_branch")),
         url: text(run.get("html_url"))?,
         at: text(run.get("updated_at")).or_else(|| text(run.get("created_at")))?,
@@ -935,7 +952,7 @@ async fn fetch_activity(gh: &Gh, login: &str) -> Result<Vec<Activity>, GhError> 
     {
         let mut cache = CACHE.lock().unwrap();
         cache.events_not_before = now + interval;
-        cache.events_etag = header_str(&reply.headers, "etag").map(|tag| (path, tag));
+        cache.events_etag = header_str(&reply.headers, ETAG).map(|tag| (path, tag));
     }
     Ok(parse_events(&reply.json))
 }
@@ -961,11 +978,10 @@ pub(crate) fn text(value: Option<&Value>) -> Option<String> {
 /// events feed carries, and a missing title must cost a line its title, not
 /// the line itself.
 fn parse_event(event: &Value) -> Option<Activity> {
-    let id = text(event.get("id"))?;
     let repo = text(event.get("repo").and_then(|r| r.get("name")))?;
     let at = text(event.get("created_at"))?;
     let payload = event.get("payload")?;
-    let repo_url = format!("https://github.com/{repo}");
+    let repo_url = format!("{WEB}/{repo}");
     let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
 
     let (kind, title, detail, url, target) = match event.get("type")?.as_str()? {
@@ -980,7 +996,7 @@ fn parse_event(event: &Value) -> Option<Activity> {
             let message = commits
                 .and_then(|c| c.last())
                 .and_then(|c| text(c.get("message")))
-                .and_then(|m| m.lines().next().map(str::to_string));
+                .and_then(first_line);
             let title = message.unwrap_or_else(|| match count {
                 Some(n) if n > 1 => format!("Pushed {n} commits"),
                 _ => "Pushed".to_string(),
@@ -1067,7 +1083,7 @@ fn parse_event(event: &Value) -> Option<Activity> {
         "CreateEvent" => match payload.get("ref_type").and_then(Value::as_str)? {
             "repository" => (
                 "create",
-                "Created the repository".to_string(),
+                CREATED.to_string(),
                 None,
                 repo_url.clone(),
                 Some(Target::Project { repo: repo.clone() }),
@@ -1082,7 +1098,7 @@ fn parse_event(event: &Value) -> Option<Activity> {
         _ => return None,
     };
 
-    Some(Activity { id, kind, repo, title, detail, url, at, target })
+    Some(Activity { kind, repo, title, detail, url, at, target })
 }
 
 // ── Project sheet (a click on a project) ──────────────────────────────────────
@@ -1184,6 +1200,8 @@ const STREAK: usize = 8;
 const PROJECT_TTL: u64 = 60;
 /// Languages named in the bar before the rest becomes "Other".
 const MAX_LANGUAGES: usize = 4;
+/// Shares that add up to this are the whole: under half a percent is rounding.
+const WHOLE: f64 = 0.995;
 
 static PROJECTS: LazyLock<Mutex<HashMap<String, (u64, Project)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -1220,15 +1238,11 @@ pub async fn project(full_name: &str, force: bool) -> Result<Project, String> {
         }
     }
 
-    let gh = Gh::from_store().map_err(|e| e.message())?;
+    let gh = Gh::from_store()?;
     let (data, errors) = gh
         .graphql_with(PROJECT_QUERY, json!({ "owner": owner, "name": name }))
-        .await
-        .map_err(|e| e.message())?;
-    let repo = data
-        .get("repository")
-        .filter(|r| !r.is_null())
-        .ok_or_else(|| GhError::NotFound.message())?;
+        .await?;
+    let repo = data.get("repository").filter(|r| !r.is_null()).ok_or(GhError::NotFound)?;
 
     let mut missing = Vec::new();
     if refused(&errors, "pullRequests") {
@@ -1245,10 +1259,10 @@ pub async fn project(full_name: &str, force: bool) -> Result<Project, String> {
         }
         // Actions switched off for this repository.
         Err(GhError::NotFound) => Vec::new(),
-        Err(e) => return Err(e.message()),
+        Err(e) => return Err(e.into()),
     };
 
-    let project = parse_project(repo, runs, missing).ok_or_else(|| GhError::BadResponse.message())?;
+    let project = parse_project(repo, runs, missing).ok_or(GhError::BadResponse)?;
     PROJECTS
         .lock()
         .unwrap()
@@ -1267,11 +1281,11 @@ fn parse_runs(json: &Value) -> Vec<Run> {
             Some(Run {
                 id: run.get("id")?.as_u64()?,
                 state: build_state(status, conclusion),
-                workflow: text(run.get("name")).unwrap_or_else(|| "Workflow".into()),
+                workflow: text(run.get("name")).unwrap_or_else(|| WORKFLOW.into()),
                 branch: text(run.get("head_branch")),
                 title: text(run.get("display_title"))
                     .or_else(|| text(run.pointer("/head_commit/message")))
-                    .and_then(|t| t.lines().next().map(str::to_string)),
+                    .and_then(first_line),
                 actor: text(run.pointer("/triggering_actor/login"))
                     .or_else(|| text(run.pointer("/actor/login"))),
                 url: text(run.get("html_url"))?,
@@ -1279,7 +1293,6 @@ fn parse_runs(json: &Value) -> Vec<Run> {
                 updated_at: text(run.get("updated_at")).or_else(|| text(run.get("created_at")))?,
             })
         })
-        .take(STREAK)
         .collect()
 }
 
@@ -1304,14 +1317,15 @@ fn parse_languages(languages: Option<&Value>) -> Vec<LanguageShare> {
         .collect();
     if shares.len() > MAX_LANGUAGES {
         let rest: f64 = shares.drain(MAX_LANGUAGES..).map(|l| l.share).sum();
-        shares.push(LanguageShare { name: "Other".into(), color: None, share: rest });
+        shares.push(LanguageShare { name: OTHER.into(), color: None, share: rest });
     }
-    // What the six largest don't cover also counts as "Other".
+    // What the languages asked for don't cover also counts as "Other" — once
+    // it is more than a rounding's worth.
     let covered: f64 = shares.iter().map(|l| l.share).sum();
-    if covered < 0.995 {
-        match shares.last_mut().filter(|l| l.name == "Other") {
+    if covered < WHOLE {
+        match shares.last_mut().filter(|l| l.name == OTHER) {
             Some(other) => other.share += 1.0 - covered,
-            None => shares.push(LanguageShare { name: "Other".into(), color: None, share: 1.0 - covered }),
+            None => shares.push(LanguageShare { name: OTHER.into(), color: None, share: 1.0 - covered }),
         }
     }
     shares
@@ -1335,15 +1349,15 @@ fn parse_pull(node: &Value) -> Option<Pull> {
     let at = merged_at.or_else(|| text(node.get("updatedAt")))?;
     Some(Pull {
         number: node.get("number")?.as_u64()?,
-        title: text(node.get("title")).unwrap_or_else(|| "Untitled".into()),
+        title: text(node.get("title")).unwrap_or_else(|| UNTITLED.into()),
         url: text(node.get("url"))?,
         state,
         author: text(node.pointer("/author/login")),
-        additions: node.get("additions").and_then(Value::as_i64).unwrap_or(0),
-        deletions: node.get("deletions").and_then(Value::as_i64).unwrap_or(0),
-        changed_files: node.get("changedFiles").and_then(Value::as_i64).unwrap_or(0),
+        additions: int(node, "/additions"),
+        deletions: int(node, "/deletions"),
+        changed_files: int(node, "/changedFiles"),
         review,
-        comments: node.pointer("/comments/totalCount").and_then(Value::as_i64).unwrap_or(0),
+        comments: int(node, "/comments/totalCount"),
         at,
     })
 }
@@ -1361,7 +1375,7 @@ fn parse_deploy(node: &Value) -> Option<Deploy> {
         state,
         url: text(status.and_then(|s| s.get("environmentUrl"))),
         creator: text(node.pointer("/creator/login")),
-        sha: text(node.get("commitOid")).map(|sha| sha.chars().take(7).collect()),
+        sha: text(node.get("commitOid")).map(|sha| short_sha(&sha)),
         at: text(status.and_then(|s| s.get("createdAt"))).or_else(|| text(node.get("createdAt")))?,
     })
 }
@@ -1369,14 +1383,14 @@ fn parse_deploy(node: &Value) -> Option<Deploy> {
 fn parse_project(repo: &Value, runs: Vec<Run>, missing: Vec<&'static str>) -> Option<Project> {
     let full_name = text(repo.get("nameWithOwner"))?;
     Some(Project {
-        url: text(repo.get("url")).unwrap_or_else(|| format!("https://github.com/{full_name}")),
+        url: text(repo.get("url")).unwrap_or_else(|| format!("{WEB}/{full_name}")),
         full_name,
         description: text(repo.get("description")),
         homepage: text(repo.get("homepageUrl")),
-        private: repo.get("isPrivate").and_then(Value::as_bool).unwrap_or(false),
+        private: flag(repo, "isPrivate"),
         created_at: text(repo.get("createdAt")),
-        stars: repo.get("stargazerCount").and_then(Value::as_i64).unwrap_or(0),
-        forks: repo.get("forkCount").and_then(Value::as_i64).unwrap_or(0),
+        stars: int(repo, "/stargazerCount"),
+        forks: int(repo, "/forkCount"),
         languages: parse_languages(repo.get("languages")),
         runs,
         pull: repo.pointer("/pullRequests/nodes/0").and_then(parse_pull),
@@ -1447,14 +1461,9 @@ pub async fn day(from: &str, to: &str, today: bool) -> Result<Day, String> {
         }
     }
 
-    let gh = Gh::from_store().map_err(|e| e.message())?;
-    let (data, _) = gh
-        .graphql_with(DAY_QUERY, json!({ "from": from, "to": to }))
-        .await
-        .map_err(|e| e.message())?;
-    let collection = data
-        .pointer("/viewer/contributionsCollection")
-        .ok_or_else(|| GhError::BadResponse.message())?;
+    let gh = Gh::from_store()?;
+    let (data, _) = gh.graphql_with(DAY_QUERY, json!({ "from": from, "to": to })).await?;
+    let collection = data.pointer("/viewer/contributionsCollection").ok_or(GhError::BadResponse)?;
     let login = text(data.pointer("/viewer/login"));
     let day = parse_day(collection, login.as_deref(), from, to);
     DAYS.lock().unwrap().insert(key, (now, day.clone()));
@@ -1488,7 +1497,7 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
         ) else {
             continue;
         };
-        let url = text(group.pointer("/repository/url")).unwrap_or_else(|| format!("https://github.com/{repo}"));
+        let url = text(group.pointer("/repository/url")).unwrap_or_else(|| format!("{WEB}/{repo}"));
         let title = if count == 1 { "1 commit".to_string() } else { format!("{count} commits") };
         let target = Target::Commits {
             repo: repo.clone(),
@@ -1539,20 +1548,17 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
         let repo = text(n.pointer("/repository/nameWithOwner"))?;
         Some(DayItem {
             kind: "create",
-            url: text(n.pointer("/repository/url")).unwrap_or_else(|| format!("https://github.com/{repo}")),
+            url: text(n.pointer("/repository/url")).unwrap_or_else(|| format!("{WEB}/{repo}")),
             target: Some(Target::Project { repo: repo.clone() }),
             repo,
-            title: "Created the repository".into(),
+            title: CREATED.into(),
             detail: None,
         })
     }));
 
     Day {
         items,
-        private_count: collection
-            .get("restrictedContributionsCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0),
+        private_count: int(collection, "/restrictedContributionsCount"),
     }
 }
 
@@ -1563,7 +1569,6 @@ fn parse_day(collection: &Value, login: Option<&str>, from: &str, to: &str) -> D
 pub struct Account {
     pub login: String,
     pub name: Option<String>,
-    pub profile_url: String,
     /// As GitHub sends it, e.g. "2026-12-12 10:00:00 +0100". None: no expiry.
     pub expires_at: Option<String>,
     pub checks: Vec<Check>,
@@ -1592,27 +1597,11 @@ fn check(label: &'static str, result: Result<(), GhError>) -> Check {
 /// Settings → GitHub → Test connection. One call per thing the panel needs, so
 /// a missing permission is named here rather than discovered as an empty card.
 pub async fn test() -> Result<Account, String> {
-    let gh = Gh::from_store().map_err(|e| e.message())?;
-    let me = gh.get("/user").await.map_err(|e| e.message())?;
+    let gh = Gh::from_store()?;
+    let me = gh.get("/user").await?;
 
-    let login = me
-        .json
-        .get("login")
-        .and_then(Value::as_str)
-        .ok_or_else(|| GhError::BadResponse.message())?
-        .to_string();
-    let name = me
-        .json
-        .get("name")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let profile_url = me
-        .json
-        .get("html_url")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("https://github.com/{login}"));
+    let login = text(me.json.get("login")).ok_or(GhError::BadResponse)?;
+    let name = text(me.json.get("name"));
     let expires_at = header_str(&me.headers, "github-authentication-token-expiration");
 
     let mut checks = vec![Check { label: "Account", ok: true, note: None }];
@@ -1656,7 +1645,7 @@ pub async fn test() -> Result<Account, String> {
     let failed = checks.iter().filter(|c| !c.ok).count();
     log::line(format!("github test: {} checks, {failed} failed", checks.len()));
 
-    Ok(Account { login, name, profile_url, expires_at, checks })
+    Ok(Account { login, name, expires_at, checks })
 }
 
 #[cfg(test)]
@@ -1666,15 +1655,12 @@ mod tests {
     fn snapshot_with(builds: &[(&str, Option<(u64, &'static str)>)]) -> Snapshot {
         Snapshot {
             login: "edu".into(),
-            name: None,
             profile_url: String::new(),
-            total_repos: 0,
             total_stars: 0,
             activity: Vec::new(),
             repos: builds
                 .iter()
                 .map(|(name, build)| Repo {
-                    name: name.to_string(),
                     full_name: format!("edu/{name}"),
                     url: String::new(),
                     private: false,
@@ -1882,15 +1868,11 @@ mod tests {
     #[test]
     fn the_feed_keeps_its_order_and_is_capped() {
         let many: Vec<Value> = (0..30)
-            .map(|i| {
-                let mut e = event("PushEvent", json!({ "ref": "refs/heads/main" }));
-                e["id"] = json!(i.to_string());
-                e
-            })
+            .map(|i| event("PushEvent", json!({ "ref": format!("refs/heads/b{i}") })))
             .collect();
         let list = parse_events(&Value::Array(many));
         assert_eq!(list.len(), MAX_ACTIVITY);
-        assert_eq!(list[0].id, "0");
+        assert_eq!(list[0].detail.as_deref(), Some("b0"));
     }
 
     #[test]
@@ -1910,11 +1892,11 @@ mod tests {
         ];
         let repos = parse_repos(&nodes, &[]);
         assert_eq!(repos.len(), 2);
-        assert_eq!(repos[0].name, "coucou");
+        assert_eq!(repos[0].full_name, "edu/coucou");
         assert_eq!(repos[0].language.as_deref(), Some("Rust"));
         assert_eq!(repos[0].language_color.as_deref(), Some("#dea584"));
         assert_eq!((repos[0].stars, repos[0].open_prs), (12, 2));
-        assert_eq!(repos[1].name, "notes");
+        assert_eq!(repos[1].full_name, "edu/notes");
         assert!(repos[1].private);
         assert_eq!((repos[1].language.as_deref(), repos[1].open_prs), (None, 0));
         assert_eq!(repos[1].url, "https://github.com/edu/notes");
@@ -2087,7 +2069,7 @@ mod tests {
         let shares = parse_languages(Some(&langs));
         let names: Vec<&str> = shares.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["Rust", "TypeScript", "CSS", "HTML", "Other"]);
-        // Shell + Nix + the 2 % the six largest didn't cover.
+        // Shell + Nix + the 2 % the languages listed didn't cover.
         assert!((shares[4].share - 0.12).abs() < 1e-9);
         assert!((shares.iter().map(|l| l.share).sum::<f64>() - 1.0).abs() < 1e-9);
     }

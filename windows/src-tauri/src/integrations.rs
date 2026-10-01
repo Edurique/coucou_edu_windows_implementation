@@ -73,9 +73,7 @@ pub fn start(app: AppHandle) {
     spawn(app.clone(), "integration_vercel", 5, 30, poll_vercel);
     spawn(app.clone(), "integration_stripe", 6, 30, poll_stripe);
     spawn(app.clone(), "integration_resend", 6, 60, poll_resend);
-    // Every two minutes rather than five: it is also what tells the pill that a
-    // build broke, and "a while ago" is not news.
-    spawn(app.clone(), "integration_github", 7, 120, crate::github::poll);
+    spawn(app.clone(), "integration_github", 7, crate::github::TICK_SECS, crate::github::refresh);
     crate::github::watch_live(app.clone());
     #[cfg(debug_assertions)]
     crate::github::watch_demo(app.clone());

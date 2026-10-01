@@ -20,15 +20,15 @@ const pushTarget = (repo: string, count: number, branch: string): GithubTarget =
 });
 
 const activity: GithubActivity[] = [
-  { id: "1", kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com", at: minutesAgo(4), target: pullTarget("mochi/coucou", 12) },
-  { id: "2", kind: "push", repo: "mochi/coucou", title: "Keep the last snapshot through an error", detail: "3 commits · windows-github-panel", url: "https://github.com", at: minutesAgo(38), target: pushTarget("mochi/coucou", 3, "windows-github-panel") },
-  { id: "3", kind: "pr_opened", repo: "mochi/coucou", title: "Windows: GitHub panel", detail: "#12", url: "https://github.com", at: minutesAgo(95), target: pullTarget("mochi/coucou", 12) },
-  { id: "4", kind: "issue_opened", repo: "louis-cfm/coucou", title: "Defender flags the installer", detail: "#9", url: "https://github.com", at: minutesAgo(60 * 5), target: { kind: "issue", repo: "louis-cfm/coucou", number: 9 } },
-  { id: "5", kind: "release", repo: "mochi/tour-convention-geneve", title: "Sprint 3", detail: "v0.3.0", url: "https://github.com", at: minutesAgo(60 * 26), target: { kind: "release", repo: "mochi/tour-convention-geneve", tag: "v0.3.0" } },
-  { id: "6", kind: "issue_closed", repo: "mochi/tour-convention-geneve", title: "Map tiles flicker on zoom", detail: "#41", url: "https://github.com", at: minutesAgo(60 * 50), target: { kind: "issue", repo: "mochi/tour-convention-geneve", number: 41 } },
-  { id: "7", kind: "pr_closed", repo: "mochi/dotfiles", title: "Try another prompt theme", detail: "#3", url: "https://github.com", at: minutesAgo(60 * 72), target: pullTarget("mochi/dotfiles", 3) },
-  { id: "8", kind: "create", repo: "mochi/sandbox", title: "Created the repository", detail: null, url: "https://github.com", at: minutesAgo(60 * 24 * 6), target: { kind: "project", repo: "mochi/sandbox" } },
-  { id: "9", kind: "push", repo: "mochi/sandbox", title: "Pushed", detail: "main", url: "https://github.com", at: minutesAgo(60 * 24 * 6), target: pushTarget("mochi/sandbox", 1, "main") },
+  { kind: "pr_merged", repo: "mochi/coucou", title: "GitHub panel for the Windows island", detail: "#12", url: "https://github.com", at: minutesAgo(4), target: pullTarget("mochi/coucou", 12) },
+  { kind: "push", repo: "mochi/coucou", title: "Keep the last snapshot through an error", detail: "3 commits · windows-github-panel", url: "https://github.com", at: minutesAgo(38), target: pushTarget("mochi/coucou", 3, "windows-github-panel") },
+  { kind: "pr_opened", repo: "mochi/coucou", title: "Windows: GitHub panel", detail: "#12", url: "https://github.com", at: minutesAgo(95), target: pullTarget("mochi/coucou", 12) },
+  { kind: "issue_opened", repo: "louis-cfm/coucou", title: "Defender flags the installer", detail: "#9", url: "https://github.com", at: minutesAgo(60 * 5), target: { kind: "issue", repo: "louis-cfm/coucou", number: 9 } },
+  { kind: "release", repo: "mochi/tour-convention-geneve", title: "Sprint 3", detail: "v0.3.0", url: "https://github.com", at: minutesAgo(60 * 26), target: { kind: "release", repo: "mochi/tour-convention-geneve", tag: "v0.3.0" } },
+  { kind: "issue_closed", repo: "mochi/tour-convention-geneve", title: "Map tiles flicker on zoom", detail: "#41", url: "https://github.com", at: minutesAgo(60 * 50), target: { kind: "issue", repo: "mochi/tour-convention-geneve", number: 41 } },
+  { kind: "pr_closed", repo: "mochi/dotfiles", title: "Try another prompt theme", detail: "#3", url: "https://github.com", at: minutesAgo(60 * 72), target: pullTarget("mochi/dotfiles", 3) },
+  { kind: "create", repo: "mochi/sandbox", title: "Created the repository", detail: null, url: "https://github.com", at: minutesAgo(60 * 24 * 6), target: { kind: "project", repo: "mochi/sandbox" } },
+  { kind: "push", repo: "mochi/sandbox", title: "Pushed", detail: "main", url: "https://github.com", at: minutesAgo(60 * 24 * 6), target: pushTarget("mochi/sandbox", 1, "main") },
 ];
 
 // The sheets behind those lines, one per kind, with a real-looking diff.
@@ -64,8 +64,8 @@ const ci = (state: "success" | "failure" | "running" | "neutral"): GithubBuild =
 const live = params.has("running");
 const runStart = Date.now() - (live ? 100 : 7 * 60) * 1000;
 const t = (s: number) => new Date(runStart + s * 1000).toISOString();
-const step = (number: number, name: string, from: number, to: number | null, outcome = "passed"): GithubStep => ({
-  number, name, outcome,
+const step = (name: string, from: number, to: number | null, outcome = "passed"): GithubStep => ({
+  name, outcome,
   state: outcome === "failed" ? "failure" : outcome === "skipped" ? "neutral" : to == null ? "running" : "success",
   startedAt: outcome === "skipped" ? null : t(from), endedAt: to == null ? null : t(to),
 });
@@ -73,24 +73,24 @@ const jobs: GithubJob[] = [
   {
     id: 1, name: "lint", state: "success", outcome: "passed", url: "https://github.com", runner: "ubuntu-latest",
     startedAt: t(4), endedAt: t(46),
-    steps: [step(1, "Set up job", 4, 6), step(2, "Checkout", 6, 8), step(3, "npm ci", 8, 31), step(4, "Type-check", 31, 45), step(5, "Complete job", 45, 46)],
+    steps: [step("Set up job", 4, 6), step("Checkout", 6, 8), step("npm ci", 8, 31), step("Type-check", 31, 45), step("Complete job", 45, 46)],
   },
   {
     id: 2, name: "build (windows)", state: live ? "running" : "success", outcome: live ? "running" : "passed",
     url: "https://github.com", runner: "windows-latest", startedAt: t(5), endedAt: live ? null : t(212),
     steps: [
-      step(1, "Set up job", 5, 9), step(2, "Checkout", 9, 12), step(3, "Set up Rust", 12, 41), step(4, "Restore cache", 41, 52),
-      live ? step(5, "cargo build --release", 52, null) : step(5, "cargo build --release", 52, 198),
-      ...(live ? [] : [step(6, "Save cache", 198, 210), step(7, "Complete job", 210, 212)]),
+      step("Set up job", 5, 9), step("Checkout", 9, 12), step("Set up Rust", 12, 41), step("Restore cache", 41, 52),
+      live ? step("cargo build --release", 52, null) : step("cargo build --release", 52, 198),
+      ...(live ? [] : [step("Save cache", 198, 210), step("Complete job", 210, 212)]),
     ],
   },
   {
     id: 3, name: "test", state: live ? "running" : "failure", outcome: live ? "running" : "failed",
     url: "https://github.com", runner: "ubuntu-latest", startedAt: t(5), endedAt: live ? null : t(141),
     steps: [
-      step(1, "Set up job", 5, 7), step(2, "Checkout", 7, 9), step(3, "Set up Rust", 9, 35),
-      live ? step(4, "cargo test", 35, null) : step(4, "cargo test", 35, 139, "failed"),
-      ...(live ? [] : [step(5, "Upload report", 139, 139, "skipped"), step(6, "Complete job", 139, 141)]),
+      step("Set up job", 5, 7), step("Checkout", 7, 9), step("Set up Rust", 9, 35),
+      live ? step("cargo test", 35, null) : step("cargo test", 35, 139, "failed"),
+      ...(live ? [] : [step("Upload report", 139, 139, "skipped"), step("Complete job", 139, 141)]),
     ],
   },
   {
@@ -137,7 +137,7 @@ function playedRun(): GithubRunDetail {
       const broke = p.ends === "failed" && done && i === p.steps.length - 1;
       const over = elapsed >= to;
       return {
-        number: i + 1, name,
+        name,
         state: broke ? "failure" : over ? "success" : "running",
         outcome: broke ? "failed" : over ? "passed" : elapsed >= from ? "running" : "queued",
         startedAt: elapsed >= from ? at(from) : null, endedAt: over ? at(to) : null,
@@ -256,7 +256,7 @@ const repo = (
   name: string, language: [string, string] | null, stars: number, openPrs: number,
   build: GithubRepo["build"], pushedMinutesAgo: number, priv = false,
 ): GithubRepo => ({
-  name, fullName: `mochi/${name}`, url: "https://github.com", private: priv,
+  fullName: `mochi/${name}`, url: "https://github.com", private: priv,
   language: language?.[0] ?? null, languageColor: language?.[1] ?? null,
   stars, openPrs, pushedAt: minutesAgo(pushedMinutesAgo), build,
 });
@@ -294,12 +294,10 @@ const level = (n: number) => (n === 0 ? 0 : n <= 2 ? 1 : n <= 5 ? 2 : n <= 8 ? 3
 
 const data: GithubData = {
   login: "mochi",
-  name: "Mochi",
   profileUrl: "https://github.com",
-  totalRepos: 23,
   totalStars: 1284,
   // `pushed`: pushes GitHub gave no message for come first, as they often do.
-  activity: params.has("empty") ? [] : params.has("pushed") ? [{ ...activity[8], at: minutesAgo(14) }, { ...activity[8], id: "10", at: minutesAgo(31) }, ...activity] : activity,
+  activity: params.has("empty") ? [] : params.has("pushed") ? [{ ...activity[8], at: minutesAgo(14) }, { ...activity[8], at: minutesAgo(31) }, ...activity] : activity,
   repos: params.has("empty") ? [] : repos,
   contributions: {
     total: counts.reduce((a, b) => a + b, 0),
