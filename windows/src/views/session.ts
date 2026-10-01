@@ -42,8 +42,8 @@ const JOURNAL_LINES = 14;
 /** This close to the journal's end, it is being followed: what comes next is scrolled to. */
 const FOLLOW_PX = 24;
 
-/** What is on screen: the journal, the list of changes, or one file's diff. */
-type Screen = { kind: "live" } | { kind: "list" } | { kind: "file"; path: string };
+/** What is on screen: the journal, the list of changes, one file's diff — or the sessions to choose from. */
+type Screen = { kind: "live" } | { kind: "list" } | { kind: "file"; path: string } | { kind: "sessions" };
 let screen: Screen = { kind: "live" };
 /** Bumped by every action: what the view shows has changed. */
 let stamp = 0;
@@ -54,9 +54,9 @@ function go(next: Screen) {
   State.notify();
 }
 
-/** Back on the session's journal, at its end — or, asked for its changes, on their list. */
-export function enterSessionPanel(changes = false) {
-  screen = { kind: changes ? "list" : "live" };
+/** Into the panel: on the session's journal, at its end; on the list of its changes; or on the sessions to choose from. */
+export function enterSessionPanel(on: "journal" | "changes" | "sessions" = "journal") {
+  screen = { kind: on === "changes" ? "list" : on === "sessions" ? "sessions" : "live" };
   stamp++;
 }
 
@@ -78,45 +78,32 @@ function standing(session: ClaudeSession): { color: string; words: string } {
   return { color: botGlowColor(session.state), words: "at work" };
 }
 
+/** Something a session wants looked at: it is waiting for an answer, or has news nobody has seen. */
+const calls = (session: ClaudeSession) => session.news != null || session.question != null || session.approval != null;
+
 /**
- * Keeps a row of tabs in step with the sessions behind the one in front —
- * that one is what the island shows. A tab is a dot for where its session is
- * at, and its name; one waiting for an answer, or with news nobody has seen,
- * stands out in its colour. Tabs are kept and updated where they are: a
- * session that changes state changes its dot's colour, a new one comes in, and
- * nothing is rebuilt between a mouse-down and its mouse-up.
- * Returns how many tabs it shows.
+ * What the sessions behind the one on show have to say, as one colour: the
+ * colour of the first that wants looking at, or null when none does.
  */
-export function sessionTabs(el: HTMLElement, onPick: (id: string) => void): () => number {
-  const tabs = new Map<string, { tab: HTMLElement; mark: HTMLElement; label: HTMLElement }>();
-  return () => {
-    const behind = State.sessions.filter((s) => s.id !== State.frontId);
-    for (const [id, { tab }] of tabs) {
-      if (behind.some((s) => s.id === id)) continue;
-      tab.remove();
-      tabs.delete(id);
-    }
-    behind.forEach((session, i) => {
-      let made = tabs.get(session.id);
-      if (!made) {
-        const mark = dot(COLOR.grey, 6);
-        const label = h("span");
-        const tab = h("button", { class: "sess-tab in", onclick: () => onPick(session.id) }, mark, label);
-        made = { tab, mark, label };
-        tabs.set(session.id, made);
-      }
-      const { color, words } = standing(session);
-      const name = sessionName(session);
-      made.mark.style.background = color;
-      made.label.textContent = name;
-      made.tab.title = `${name} — ${words}`;
-      made.tab.style.setProperty("--c", color);
-      made.tab.classList.toggle("calls", session.news != null || session.question != null || session.approval != null);
-      if (el.children[i] !== made.tab) el.insertBefore(made.tab, el.children[i] ?? null);
-    });
-    el.style.display = behind.length > 0 ? "" : "none";
-    return behind.length;
-  };
+export function sessionsCall(): string | null {
+  const calling = State.sessions.find((s) => s.id !== State.frontId && calls(s));
+  return calling ? standing(calling).color : null;
+}
+
+/** A session in the list of them: where it is at, its name, its project, and what it did last. */
+function sessionRow(session: ClaudeSession, onPick: (id: string) => void): HTMLElement {
+  const { color, words } = standing(session);
+  const front = session.id === State.frontId;
+  const state = h("span", { class: "gh-file-status", text: front ? `on show · ${words}` : words });
+  if (calls(session)) state.style.color = color;
+  return h(
+    "button",
+    { class: front ? "gh-row sess-row on" : "gh-row sess-row", title: sessionName(session), onclick: () => onPick(session.id) },
+    h("i", { class: "gh-row-icon" }, dot(color, 7)),
+    h("span", { class: "gh-row-title", text: sessionName(session) }),
+    h("span", { class: "gh-row-where", text: session.title ? session.project : (session.lines.at(-1) ?? "") }),
+    h("span", { class: "gh-right" }, state, h("span", { class: "int-ago", text: timeAgo(session.heardAt) })),
+  );
 }
 
 /** What happened to the file, as the GitHub panel says it: "edited" in grey, "new" in green. */
@@ -295,6 +282,11 @@ export function buildSession(actions: ViewActions): ViewHost {
     actions.blip();
     go(screen.kind === "file" ? { kind: "list" } : { kind: "live" });
   });
+  /** A session picked from the list: it comes in front, on its journal. */
+  const pick = (id: string) => {
+    actions.pickSession(id);
+    go({ kind: "live" });
+  };
   filesBtn.addEventListener("click", () => {
     actions.blip();
     go({ kind: "list" });
@@ -444,10 +436,10 @@ export function buildSession(actions: ViewActions): ViewHost {
       const session = State.session;
       const files = State.sessionFiles;
 
-      // Another session came in front (its tab, in the island's bar): its journal, at its end.
+      // Another session came in front: whatever file of the last one was open, its journal.
       if (session.id !== followed) {
         followed = session.id;
-        screen = { kind: "live" };
+        if (screen.kind !== "sessions") screen = { kind: "live" };
         stamp++;
       }
 
@@ -487,7 +479,7 @@ export function buildSession(actions: ViewActions): ViewHost {
       // The head: the journal is the journal, whatever file Claude is at; a
       // file opened from the changes has its name on the tab, as in an editor.
       const path = picked?.path ?? null;
-      const nextHead = [session.id, screen.kind, path, files.length, picked?.edits.length].join("~");
+      const nextHead = [session.id, screen.kind, path, files.length, picked?.edits.length, State.sessions.length].join("~");
       if (nextHead !== headKey) {
         headKey = nextHead;
         clear(badge);
@@ -502,12 +494,13 @@ export function buildSession(actions: ViewActions): ViewHost {
           sub.textContent = path;
           badge.append(extBadge(path));
         } else {
-          who.textContent = live ? "Journal" : "Changes";
-          sub.textContent = !live && files.length > 0 ? counted(files.length, "file") : "";
+          who.textContent = live ? "Journal" : screen.kind === "sessions" ? "Sessions" : "Changes";
+          sub.textContent =
+            screen.kind === "sessions" ? counted(State.sessions.length, "session") : !live && files.length > 0 ? counted(files.length, "file") : "";
           badge.append(dot(task?.color ?? COLOR.idle, 7));
         }
         if (picked) aside.append(statusWord(picked), plusMinus(picked.additions, picked.deletions));
-        else if (!live && files.length > 0) {
+        else if (screen.kind === "list" && files.length > 0) {
           aside.append(plusMinus(files.reduce((n, f) => n + f.additions, 0), files.reduce((n, f) => n + f.deletions, 0)));
         }
         main.style.setProperty("--accent", picked ? (picked.created ? COLOR.green : COLOR.amber) : "rgba(0,0,0,0)");
@@ -521,7 +514,8 @@ export function buildSession(actions: ViewActions): ViewHost {
       // Rebuilding the rows between a mouse-down and its mouse-up would swallow
       // the click, so only rebuild when something they show has changed.
       const total = files.reduce((n, f) => n + f.edits.length, 0);
-      const next = [session.id, stamp, screen.kind, total, files[0]?.path].join("~");
+      const others = screen.kind === "sessions" ? State.sessions.map((s) => [s.id, sessionName(s), standing(s).words, calls(s)].join(":")).join("|") : "";
+      const next = [session.id, stamp, screen.kind, total, files[0]?.path, others].join("~");
       if (next === key) return;
       key = next;
 
@@ -530,7 +524,8 @@ export function buildSession(actions: ViewActions): ViewHost {
       drawn = now;
       clear(list);
       list.classList.toggle("gh-edge", picked != null);
-      if (picked) list.append(diffView(picked, fileKind(picked.path)));
+      if (screen.kind === "sessions") for (const s of State.sessions) list.append(sessionRow(s, pick));
+      else if (picked) list.append(diffView(picked, fileKind(picked.path)));
       else if (files.length === 0) list.append(h("div", { class: "int-empty", text: "Nothing written in this session yet." }));
       else for (const f of files) list.append(fileRow(f));
       list.scrollTop = scroll;

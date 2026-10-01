@@ -11,7 +11,7 @@ import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
 import { buildGithub, enterGithubPanel, newsFacts } from "./github";
-import { buildSession, sessionName, sessionTabs } from "./session";
+import { buildSession, sessionName, sessionsCall } from "./session";
 import { diffLine, fileKind, plusMinus, readPatch } from "./code";
 import { hasPreview, stepIcon, stepName, stepPreview } from "./step";
 import { COLOR } from "./palette";
@@ -63,6 +63,8 @@ export interface ViewActions {
    * said. With `changes`, straight to the list of files it changed.
    */
   openSession(changes?: boolean): void;
+  /** Into the session panel, on the list of the sessions followed: the way from one to another. */
+  openSessions(): void;
   /** Puts another Claude Code session in front: the island shows that one. */
   pickSession(id: string): void;
 }
@@ -219,17 +221,27 @@ export function buildHeader(actions: ViewActions): ViewHost {
     actions.setView(v);
   }
 
-  // With several Claude Code sessions open: a tab for each of the ones behind
-  // the session on show, in the middle of the bar — where they can be reached
-  // from any view, and out of the cards' way.
-  const sessions = h("div", { class: "sess-tabs" });
-  const syncSessions = sessionTabs(sessions, (id) => actions.pickSession(id));
+  // With several Claude Code sessions open: one more tab, with how many, that
+  // leads to the list of them. With the others on the left — the middle of the
+  // bar is where a Mac has its camera, and stays empty.
+  const sessionCount = h("span");
+  const tabSessions = h(
+    "button",
+    {
+      class: "tab sess-count",
+      onclick: () => {
+        actions.blip();
+        actions.openSessions();
+      },
+    },
+    svg(ICONS.stack, 12),
+    sessionCount,
+  );
 
   const el = h(
     "div",
     { id: "header" },
-    h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    sessions,
+    h("div", { class: "tabs" }, tabHome, tabChat, tabDrop, tabSessions),
     h("div", { class: "header-actions" }, gearBtn, soundBtn),
   );
 
@@ -246,7 +258,14 @@ export function buildHeader(actions: ViewActions): ViewHost {
       gearBtn.append(svg(v === "settings" ? ICONS.gearFill : ICONS.gear, 14));
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
-      syncSessions();
+      const several = State.sessions.length > 1;
+      tabSessions.style.display = several ? "" : "none";
+      sessionCount.textContent = String(State.sessions.length);
+      tabSessions.title = `${State.sessions.length} Claude Code sessions`;
+      // One of the sessions behind wants looking at: the tab takes its colour.
+      const call = several ? sessionsCall() : null;
+      tabSessions.classList.toggle("calls", call != null);
+      tabSessions.style.setProperty("--c", call ?? "currentColor");
       el.style.opacity = v === "confused" ? "0" : "1";
     },
   };

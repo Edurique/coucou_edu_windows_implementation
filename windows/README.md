@@ -111,13 +111,14 @@ Claude, there is Claude Code.
 
 ### Several sessions at once
 
-<img src="screenshots/claude-sessions.png" width="640" alt="Two more sessions as tabs in the island's bar, above the card of the one on show">
+<img src="screenshots/claude-sessions.png" width="640" alt="The list of sessions: the one on show, one at work in a terminal, one that has finished">
 
 Two conversations in the Claude app, one more in a terminal: each is followed on
 its own, and one of them is in front — the one the card, the panel and Mochi
-show. The others get a tab each in the island's bar, with a dot for where they
-are at: at work, waiting for you, finished. A click puts one in front, from any
-view.
+show. With more than one, the island's bar gets one more tab, with how many
+there are: it opens the list of them — each with its name, its project and where
+it is at: at work, waiting for you, finished — and a click puts one in front.
+The tab takes a colour when a session behind the one on show wants looking at.
 
 The island stays on the session it shows for as long as that one is at work or
 being looked at. Another one takes its place when the first has nothing going

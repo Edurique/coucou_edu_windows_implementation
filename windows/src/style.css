@@ -3618,56 +3618,28 @@ button.gh-block:hover {
 }
 
 
-/* Several Claude Code sessions at once: in the middle of the island's bar, a
-   tab for each of the ones behind the session on show. A click puts that one
-   in front. */
-.sess-tabs {
-  flex: 1 1 auto;
-  display: flex;
-  justify-content: center;
-  gap: 5px;
-  margin: 0 18px;
-  min-width: 0;
-}
-
-.sess-tab {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 170px;
-  height: 20px;
-  padding: 0 7px;
+/* Several Claude Code sessions at once: one more tab in the island's bar, with
+   how many there are, that leads to the list of them. */
+.tab.sess-count {
+  width: auto;
   display: flex;
   align-items: center;
-  gap: 5px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: var(--gh-plate);
-  color: var(--dim);
-  font: 500 10.5px var(--font);
-  cursor: default;
+  gap: 4px;
+  padding: 0 8px;
+  font: 600 10.5px var(--font);
+  transition: color 0.3s ease-out, background 0.3s ease-out;
 }
 
-.sess-tab > .dot {
-  flex: 0 0 auto;
-}
-
-.sess-tab > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sess-tab:hover {
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.14);
-}
-
-/* Waiting for an answer, or with news nobody has seen: in its own colour. */
-.sess-tab.calls {
+/* One of the sessions behind wants looking at: the tab says so in its colour. */
+.tab.sess-count.calls {
   color: var(--c);
-  border-color: color-mix(in srgb, var(--c) 35%, transparent);
-  background: color-mix(in srgb, var(--c) 12%, transparent);
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+}
+
+/* The session on show, in the list of sessions. */
+.sess-row.on .gh-row-title {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 /* A card about a session names the conversation: a long title gives way to what follows it. */
@@ -3978,15 +3950,8 @@ button.gh-block:hover {
 
 .jr.more .jr-chip,
 .jr.more .jr-option.on,
-.sess-mark.in,
-.sess-tab.in {
+.sess-mark.in {
   animation: pop-in 0.3s cubic-bezier(0.3, 1.2, 0.4, 1) both;
-}
-
-/* A tab's dot, and the tab around it, go from one state's colour to the next. */
-.sess-tab,
-.sess-tab > .dot {
-  transition: color 0.3s ease-out, background 0.3s ease-out, border-color 0.3s ease-out;
 }
 
 /* A step that ends dims where it stands. */
