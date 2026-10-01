@@ -66,7 +66,50 @@ exits cleanly if the app is closed, slow or crashed — **a Claude Code session 
 never blocked or slowed down by Coucou.** If nobody answers a permission request
 in time, Coucou stays quiet and Claude Code asks in the terminal as usual.
 
-It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
+It works wherever Claude Code runs — the Claude desktop app, VS Code, Windows
+Terminal, PowerShell, Git Bash. The Claude pill takes the name of the app the
+session is in, and its ↗ brings that app forward.
+
+### Watching a session
+
+<img src="screenshots/claude-session.png" width="640" alt="The session panel: the session's steps on the left, a file being written on the right">
+
+A session at work shows on its card: the conversation's title, the step under
+way, the lines added and removed so far. Click the card for the **session
+panel**:
+
+| What | Where |
+|---|---|
+| The steps of the turn — each tool going, done or failed | Mochi's column, on the left |
+| The file being written, the old line struck and the new ones typed under it | The panel, while Claude works |
+| Every file the session changed, and each one's whole diff | **N files**, at the top right |
+| What Claude said to end its turn, as it wrote it | The panel, once the turn is over — or **Read reply** on the finished card |
+
+An edit is shown the moment Claude Code reports it, so the typing is a replay of
+it, about a second behind. The island only watches: to write to Claude, there is
+Claude Code.
+
+### Answering from the island
+
+<img src="screenshots/claude-question.png" width="640" alt="A question from Claude, each option with what it means">
+<img src="screenshots/claude-approval.png" width="640" alt="A permission request for an edit, with the diff it would make">
+
+- **A question** Claude asks with its question tool opens on the island with
+  its options, each with what it means. Pick one — or several, then **Send** —
+  type your own with **Other…**, **Skip** it, or hand it back with **Answer in
+  Claude**. The session goes on exactly as if you had answered in Claude Code.
+- **A permission request for an edit** shows the diff the edit would make before
+  you click **Allow**.
+
+### What it reads
+
+Everything comes from the hooks Claude Code already sends — nothing is asked of
+Anthropic, and nothing leaves your machine. Two things are read from disk by the
+relay, and only then: the file an edit asks permission for (to show its diff —
+it is never written), and the end of the session's transcript at the start and
+end of a turn (for the conversation's title and Claude's last message). That
+transcript's format is Claude Code's own: if it changes, the title and the last
+message simply stop showing. None of it is written to the log.
 
 ## Chat and keys
 
@@ -171,6 +214,9 @@ app:
 - `dev/github-preview.html` shows the GitHub card and panel on made-up data, so
   they can be worked on without a token. The links at the bottom of the page go
   to each screen: a project, a run in progress, a failing build, the comments.
+- `dev/claude-preview.html` plays a made-up Claude Code session through the
+  island's own hook handler: a file being written, a question, a permission
+  request with its diff, the end of a turn.
 
 `npm run pack` leaves two files in `windows/release/`, the same names the release
 workflow publishes:
@@ -219,6 +265,8 @@ problems. It stays on your machine.
   the top edge instead of hiding in a notch.
 - Permission approval works from **any** terminal; the Mac build only listens to
   VS Code sessions.
+- The [session panel](#watching-a-session), answering Claude's questions and the
+  diff on a permission request are Windows-only for now.
 - Not in this version: sending a file by email, dragging Mochi onto a window to
   attach it as context, and jumping to a specific terminal window — "Open
   terminal" opens the working folder in VS Code when `code` is on your `PATH`.
