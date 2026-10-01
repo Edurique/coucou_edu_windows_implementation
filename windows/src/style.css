@@ -3000,10 +3000,11 @@ button.gh-block:hover {
 .gh-crew .gh-row-icon {
   width: 20px;
   height: 17px;
-  /* Centred on the line's box he reads as riding high: a name's weight is in
-     its lower-case letters, under the middle of the line, and his badge and
-     his hops are all above him. Two pixels down puts him on the name's axis. */
-  translate: 0 2px;
+  /* He stands beside the whole row — the name and the bar under it — not
+     beside the name alone: centred on the name he reads as riding high, all
+     the more as his badge and his hops are above him. Four pixels down is the
+     middle of the two. */
+  translate: 0 4px;
 }
 
 .gh-crew .gh-bar {
