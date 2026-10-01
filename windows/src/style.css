@@ -2650,6 +2650,18 @@ button.gh-step:hover {
   padding-left: 8px;
 }
 
+/* The mark of a way out to GitHub, as on the panel's own button. */
+.gh-thread-out {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--dim-3);
+}
+
+.gh-thread-head .gh-row-where + .gh-thread-out {
+  margin-left: auto;
+}
+
 .gh-thread > .gh-diff {
   padding: 4px 0;
   background: var(--card-flat);
@@ -2700,6 +2712,22 @@ button.gh-step:hover {
   border-radius: 0 0 9px 9px;
   background: color-mix(in srgb, var(--card), #fff 3.5%);
   user-select: none;
+}
+
+/* A thread whose line is not in the diff: over the code, not in it. */
+.gh-diff-note.apart {
+  margin: 0 10px 8px 12px;
+  border-radius: 9px;
+}
+
+.gh-diff-note-why {
+  padding: 8px 10px 0;
+  font: 400 10.5px var(--font);
+  color: var(--dim-3);
+}
+
+.gh-diff-note-why + .gh-thread-talk {
+  padding-top: 6px;
 }
 
 /* ── GitHub panel: a project's sheet ────────────────────────────────────── */

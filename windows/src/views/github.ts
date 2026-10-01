@@ -367,15 +367,16 @@ function openComments(p: GithubPullDetail) {
 
 /**
  * A thread, in its file's diff. The diff comes from the pull request's sheet,
- * the screen the comments were opened from; a file that sheet doesn't carry,
- * or a thread whose line is gone, is read on GitHub.
+ * the screen the comments were opened from; only a file that sheet doesn't
+ * carry is read on GitHub. A thread whose line is gone — the code has changed
+ * since — still opens its file, and heads the diff instead of sitting in it.
  */
 function threadFile(c: GithubCommentsDetail, thread: GithubThread): { file: GithubFile; url: string } | null {
   for (const s of stack) {
     const p = s.type === "detail" && s.data?.kind === "pull" ? s.data : null;
     if (!p || p.repo !== c.repo || p.number !== c.number) continue;
     const file = p.files.find((f) => f.path === thread.path);
-    if (file?.patch && threadRow(file.patch, thread) != null) return { file, url: p.url };
+    if (file?.patch) return { file, url: p.url };
   }
   return null;
 }
@@ -1341,17 +1342,21 @@ function threadTalk(thread: GithubThread): HTMLElement {
 function threadBlock(c: GithubCommentsDetail, thread: GithubThread): HTMLElement {
   const { dir, base } = splitPath(thread.path);
   const state = thread.resolved ? "resolved" : thread.outdated ? "outdated" : null;
+  const found = threadFile(c, thread);
+  const onLine = found?.file.patch != null && threadRow(found.file.patch, thread) != null;
   const head = h(
     "button",
     {
       class: "gh-thread-head",
-      title: threadFile(c, thread) ? `Open ${base} on this line` : "Open this thread on GitHub",
+      title: !found ? "Open this thread on GitHub" : onLine ? `Open ${base} on this line` : `Open ${base}`,
       onclick: () => openThread(c, thread),
     },
     h("i", { class: "gh-row-icon" }, extBadge(thread.path)),
     h("span", { class: "gh-row-title", text: thread.line != null ? `${base}:${thread.line}` : base }),
     h("span", { class: "gh-row-where", text: dir }),
     state ? h("span", { class: "gh-file-status", text: state }) : null,
+    // Its file isn't among the ones the sheet carries: this one leaves for GitHub.
+    found ? null : h("span", { class: "gh-thread-out" }, svg(ICONS.arrowUpRight, 9)),
   );
   if (thread.resolved) {
     const people = [...new Set(thread.remarks.map((r) => r.author ?? "ghost"))];
@@ -2067,6 +2072,17 @@ function diffView(file: GithubFile, url: string, thread?: GithubThread): HTMLEle
       diff.append(h("div", { class: "gh-diff-note" }, threadTalk(thread)));
     }
     row++;
+  }
+  // A thread with no line left in this diff heads it, and says why.
+  if (thread && noted == null) {
+    const why = thread.outdated
+      ? "On lines that have changed since"
+      : thread.line == null
+        ? "On the file as a whole"
+        : `On line ${thread.line}, further down than this diff goes`;
+    diff.prepend(
+      h("div", { class: "gh-diff-note apart" }, h("div", { class: "gh-diff-note-why", text: why }), threadTalk(thread)),
+    );
   }
   return h(
     "div",
