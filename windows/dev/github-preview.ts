@@ -271,12 +271,26 @@ if (params.has("news")) {
     ? { success: true, label: "#12 merged", detail: "GitHub panel for the Windows island", open: { target: pullTarget("mochi/coucou", 12), label: "#12", url: "https://github.com" } }
     : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com" } };
 }
-State.setFocus("integration_github");
+// With the news, Mochi's state as the island's handler sets it. `view=pill`
+// shows it the way it arrives with the island away: the compact pill, badged.
+const news = State.integrations.integration_github.news;
+const pill = params.get("view") === "pill";
+if (news) {
+  const task = State.tasks.find((t) => t.id === "integration_github");
+  if (task) {
+    task.state = news.success ? "finished" : "error";
+    task.steps = news.detail ? [news.label, news.detail] : [news.label];
+    task.stepIndex = task.steps.length - 1;
+    if (pill) task.pillBadge = news.success ? "finished" : "error";
+  }
+}
+if (!pill) State.setFocus("integration_github");
 // Pinned, so the island doesn't fold away while it's being looked at.
 State.isPinned = true;
 
 const island = new Island(document.getElementById("root")!);
-island.alert(params.get("view") === "overview" ? "overview" : "github");
+if (pill) island.reveal();
+else island.alert(params.get("view") === "overview" ? "overview" : "github");
 
 // The tab is the panel's own state; get there the way a person would.
 if (params.get("tab") === "projects") {
