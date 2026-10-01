@@ -80,6 +80,12 @@ body {
   inset: 0;
   overflow: hidden;
   border-radius: inherit;
+  /* What is drawn in here stops a pixel short of the island's bottom edge.
+     Cut on the very same line as the black under it, a layer of its own — the
+     drop sequence's canvas and its halo — could land a physical pixel lower
+     than that black on a scaled display, and showed as a line of light under
+     the island. The row given up is the island's own black margin. */
+  clip-path: inset(0 0 1px);
 }
 
 #bot-canvas,
