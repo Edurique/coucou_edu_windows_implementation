@@ -1967,8 +1967,11 @@ button.gh-step:hover {
   flex: 0 0 auto;
 }
 
+/* When it was, in a column wide enough for the longest it says ("just now"):
+   a row pushed a minute ago would otherwise push its marks out of line. */
 .gh-right .int-ago {
   margin-left: 0;
+  min-width: 50px;
 }
 
 .gh-lock {
@@ -3205,12 +3208,6 @@ button.gh-block:hover {
 
 .who .gh-pm.count {
   font-size: 10.5px;
-}
-
-/* The session's files read as a table: when each was touched in a column of its own. */
-.session-view .gh-right .int-ago {
-  min-width: 50px;
-  text-align: right;
 }
 
 /* The line that says what is asked never gives its height to the diff under it. */
