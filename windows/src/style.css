@@ -2009,8 +2009,11 @@ button.gh-step:hover {
   flex: 0 0 auto;
 }
 
+/* When it was, in a column wide enough for the longest it says ("just now"):
+   a row pushed a minute ago would otherwise push its marks out of line. */
 .gh-right .int-ago {
   margin-left: 0;
+  min-width: 50px;
 }
 
 .gh-lock {
