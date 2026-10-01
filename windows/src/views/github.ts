@@ -1425,15 +1425,30 @@ function timedMark(t: GithubTimed): Element {
   return WAITING.has(t.outcome) ? h("i", { class: "gh-wait" }) : stateMark(t.state, 8);
 }
 
-/** Where a part sits on its timeline: a bar that starts and ends when it did. */
-function bar(t: GithubTimed, whole: Span | null, now: number): HTMLElement {
+/**
+ * Jobs queued together are picked up by their runners a few seconds apart.
+ * That is not one job waiting for another, and drawn on the timeline it is
+ * only a bar that looks as if it failed to fill from the left: a job that
+ * started this soon after the first one is drawn as starting with it.
+ */
+const PICKUP_MS = 10_000;
+
+/**
+ * Where a part sits on its timeline: a bar that starts and ends when it did.
+ * A job's (`job`) leaves a gap on its left only for a wait worth the name —
+ * one that needed another job to end — and then says so on hover.
+ */
+function bar(t: GithubTimed, whole: Span | null, now: number, job = false): HTMLElement {
   const track = h("span", { class: "gh-bar" });
   const span = spanOf(t, now);
   if (!whole || !span) return track;
   const length = Math.max(whole.to - whole.from, 1);
+  const late = span.from - whole.from;
+  const from = job && late < PICKUP_MS ? whole.from : span.from;
+  if (job && from > whole.from) track.title = `Started ${spoken(late)} after the first job`;
   const segment = h("i", { class: t.state === "running" ? "live" : "" });
-  segment.style.left = `${((span.from - whole.from) / length) * 100}%`;
-  segment.style.width = `${((span.to - span.from) / length) * 100}%`;
+  segment.style.left = `${((from - whole.from) / length) * 100}%`;
+  segment.style.width = `${((span.to - from) / length) * 100}%`;
   segment.style.setProperty("--c", BUILD_STYLE[t.state].color);
   track.append(segment);
   return track;
@@ -1510,7 +1525,7 @@ function timedRow(
     h("span", { class: "gh-row-title", text: name }),
     where ? h("span", { class: "gh-row-where", text: where }) : null,
     h("span", { class: "int-ago gh-took", text: took(t, now) }),
-    bar(t, whole, now),
+    bar(t, whole, now, mark != null),
   ];
   const cls = mark ? "gh-row gh-timed gh-crew" : "gh-row gh-timed";
   return open ? h("button", { class: cls, onclick: open }, ...parts) : h("div", { class: cls }, ...parts);
