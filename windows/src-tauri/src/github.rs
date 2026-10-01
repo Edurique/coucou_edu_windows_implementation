@@ -21,10 +21,10 @@ use reqwest::header::HeaderMap;
 use reqwest::{Method, RequestBuilder};
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::github_detail::Target;
-use crate::integrations::{emit, IntegrationUpdate};
+use crate::integrations::{emit, IntegrationEvent, IntegrationUpdate};
 use crate::log;
 use crate::secrets;
 
@@ -411,6 +411,9 @@ struct Cache {
     events_not_before: u64,
     /// Per Actions URL: the ETag of the last answer and what it said.
     runs: HashMap<String, (String, Option<Build>)>,
+    /// The merged pull requests already known, so each is announced once.
+    /// None until the first refresh, which announces nothing.
+    merged: Option<Vec<String>>,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
@@ -427,21 +430,70 @@ impl Drop for BusyGuard {
     }
 }
 
-fn island_hidden(app: &AppHandle) -> bool {
-    app.try_state::<crate::Shared>()
-        .map(|shared| shared.gate.collapsed.load(Ordering::Relaxed))
-        .unwrap_or(false)
+/// The tick. It runs with the island hidden too: a build that just broke or a
+/// pull request that just went in is news for the pill, and the pill is what
+/// shows while the island is away. It stays cheap there — one GraphQL point,
+/// and the Actions and events calls answer 304, which GitHub doesn't count,
+/// as long as nothing happened.
+pub async fn poll(app: AppHandle) {
+    refresh(app).await;
 }
 
-/// The five-minute tick. A hidden island means nobody can look at the panel:
-/// once there is something in the cache, the tick waits for the island to come
-/// back rather than calling GitHub for nobody.
-pub async fn poll(app: AppHandle) {
-    let cached = CACHE.lock().unwrap().snapshot.is_some();
-    if cached && island_hidden(&app) {
-        return;
-    }
-    refresh(app).await;
+/// A pull request of yours that went in.
+#[derive(Clone, Debug, PartialEq)]
+struct Merged {
+    /// "owner/name#12".
+    key: String,
+    number: u64,
+    title: String,
+}
+
+fn parse_merged(viewer: &Value) -> Vec<Merged> {
+    viewer
+        .pointer("/merged/nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| {
+                    let number = n.get("number")?.as_u64()?;
+                    let repo = text(n.pointer("/repository/nameWithOwner"))?;
+                    Some(Merged {
+                        key: format!("{repo}#{number}"),
+                        number,
+                        title: text(n.get("title")).unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What changed since the last refresh that the pill should say: a build that
+/// broke, else a pull request that went in. Nothing on the first refresh —
+/// it only learns how things stand — and nothing for a failure already told.
+fn news(before: Option<&Snapshot>, now: &Snapshot, known: Option<&[String]>, merged: &[Merged]) -> Option<IntegrationEvent> {
+    let before = before?;
+    let broke = now.repos.iter().find_map(|repo| {
+        let build = repo.build.as_ref().filter(|b| b.state == "failure")?;
+        // A project that just entered the list has no "before" to compare with.
+        let was = before.repos.iter().find(|r| r.full_name == repo.full_name)?;
+        let told = was.build.as_ref().is_some_and(|b| b.id == build.id && b.state == "failure");
+        (!told).then(|| IntegrationEvent {
+            success: false,
+            label: format!("{} failed on {}", build.workflow, repo.name),
+            detail: build.branch.clone(),
+        })
+    });
+    broke.or_else(|| {
+        let known = known?;
+        let pull = merged.iter().find(|m| !known.contains(&m.key))?;
+        Some(IntegrationEvent {
+            success: true,
+            label: format!("#{} merged", pull.number),
+            detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
+        })
+    })
 }
 
 /// Everything the panel shows. The tick, the Refresh button, opening the panel
@@ -453,7 +505,7 @@ pub async fn refresh(app: AppHandle) {
     let _busy = BusyGuard;
 
     match fetch().await {
-        Ok(snapshot) => {
+        Ok((snapshot, merged)) => {
             log::line(format!(
                 "github refresh: {} events, {} projects, {} with a build, {} contribution days",
                 snapshot.activity.len(),
@@ -462,8 +514,17 @@ pub async fn refresh(app: AppHandle) {
                 snapshot.contributions.as_ref().map_or(0, |c| c.counts.len()),
             ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
-            CACHE.lock().unwrap().snapshot = Some(snapshot);
-            emit(&app, IntegrationUpdate { id: ID, data, error: None, event: None });
+            let event = {
+                let mut cache = CACHE.lock().unwrap();
+                let event = news(cache.snapshot.as_ref(), &snapshot, cache.merged.as_deref(), &merged);
+                cache.snapshot = Some(snapshot);
+                cache.merged = Some(merged.into_iter().map(|m| m.key).collect());
+                event
+            };
+            if let Some(e) = &event {
+                log::line(format!("github news: {} ({})", e.label, if e.success { "good" } else { "bad" }));
+            }
+            emit(&app, IntegrationUpdate { id: ID, data, error: None, event });
         }
         // No token: the pill says "Key not configured" on its own. Forget what a
         // previous token showed, so a removed token doesn't leave its data up.
@@ -495,11 +556,13 @@ const PROFILE_QUERY: &str = "query { viewer { login name url \
     repositories(ownerAffiliations: OWNER, first: 100, orderBy: {field: PUSHED_AT, direction: DESC}) { \
     totalCount nodes { ...Project } } \
     repositoriesContributedTo(first: 25, includeUserRepositories: true, \
-    orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } } } \
+    orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } \
+    merged: pullRequests(states: MERGED, first: 5, orderBy: {field: UPDATED_AT, direction: DESC}) { \
+    nodes { number title repository { nameWithOwner } } } } } \
     fragment Project on Repository { name nameWithOwner url isPrivate isArchived pushedAt \
     stargazerCount primaryLanguage { name color } pullRequests(states: OPEN) { totalCount } }";
 
-async fn fetch() -> Result<Snapshot, GhError> {
+async fn fetch() -> Result<(Snapshot, Vec<Merged>), GhError> {
     let gh = Gh::from_store()?;
     let data = gh.graphql(PROFILE_QUERY).await?;
     let viewer = data.get("viewer").ok_or(GhError::BadResponse)?;
@@ -538,7 +601,8 @@ async fn fetch() -> Result<Snapshot, GhError> {
         repo.build = latest_build(&gh, &repo.full_name).await?;
     }
 
-    Ok(Snapshot {
+    let merged = parse_merged(viewer);
+    Ok((Snapshot {
         name: viewer
             .get("name")
             .and_then(Value::as_str)
@@ -556,7 +620,7 @@ async fn fetch() -> Result<Snapshot, GhError> {
         activity,
         repos,
         fetched_at: unix_now() * 1000,
-    })
+    }, merged))
 }
 
 fn parse_contributions(calendar: Option<&Value>) -> Option<Contributions> {
@@ -1447,6 +1511,80 @@ pub async fn test() -> Result<Account, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snapshot_with(builds: &[(&str, Option<(u64, &'static str)>)]) -> Snapshot {
+        Snapshot {
+            login: "edu".into(),
+            name: None,
+            profile_url: String::new(),
+            total_repos: 0,
+            total_stars: 0,
+            activity: Vec::new(),
+            repos: builds
+                .iter()
+                .map(|(name, build)| Repo {
+                    name: name.to_string(),
+                    full_name: format!("edu/{name}"),
+                    url: String::new(),
+                    private: false,
+                    language: None,
+                    language_color: None,
+                    stars: 0,
+                    open_prs: 0,
+                    pushed_at: None,
+                    build: build.map(|(id, state)| Build {
+                        id,
+                        state,
+                        workflow: "CI".into(),
+                        branch: Some("main".into()),
+                        url: String::new(),
+                        at: String::new(),
+                    }),
+                })
+                .collect(),
+            contributions: None,
+            fetched_at: 0,
+        }
+    }
+
+    #[test]
+    fn the_pill_hears_of_a_build_once_it_breaks_and_only_once() {
+        let green = snapshot_with(&[("coucou", Some((1, "success")))]);
+        let running = snapshot_with(&[("coucou", Some((2, "running")))]);
+        let red = snapshot_with(&[("coucou", Some((2, "failure")))]);
+
+        // The first refresh only learns how things stand, broken or not.
+        assert!(news(None, &red, None, &[]).is_none());
+        // A new run that failed, and a run that was going and ended badly.
+        let event = news(Some(&green), &red, Some(&[]), &[]).unwrap();
+        assert_eq!((event.success, event.label.as_str(), event.detail.as_deref()), (false, "CI failed on coucou", Some("main")));
+        assert!(news(Some(&running), &red, Some(&[]), &[]).is_some());
+        // Still the same failure on the next refresh: already told.
+        assert!(news(Some(&red), &red, Some(&[]), &[]).is_none());
+        // A project that just entered the list has nothing to compare with.
+        assert!(news(Some(&snapshot_with(&[])), &red, Some(&[]), &[]).is_none());
+    }
+
+    #[test]
+    fn the_pill_hears_of_a_merged_pull_request_once() {
+        let calm = snapshot_with(&[("coucou", Some((1, "success")))]);
+        let merged = parse_merged(&json!({ "merged": { "nodes": [
+            { "number": 12, "title": "Panel", "repository": { "nameWithOwner": "edu/coucou" } },
+            { "number": 3, "title": "Older", "repository": { "nameWithOwner": "edu/notes" } },
+        ]}}));
+        assert_eq!(merged[0].key, "edu/coucou#12");
+
+        // Nothing known yet: the first refresh announces none of them.
+        assert!(news(Some(&calm), &calm, None, &merged).is_none());
+        let known = vec!["edu/notes#3".to_string()];
+        let event = news(Some(&calm), &calm, Some(&known), &merged).unwrap();
+        assert_eq!((event.success, event.label.as_str(), event.detail.as_deref()), (true, "#12 merged", Some("Panel")));
+        let all = vec!["edu/notes#3".to_string(), "edu/coucou#12".to_string()];
+        assert!(news(Some(&calm), &calm, Some(&all), &merged).is_none());
+        // A build that broke comes before a merge.
+        let red = snapshot_with(&[("coucou", Some((2, "failure")))]);
+        assert!(!news(Some(&calm), &red, Some(&known), &merged).unwrap().success);
+    }
 
     const NOW: u64 = 1_000_000;
 
