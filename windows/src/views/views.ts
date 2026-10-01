@@ -6,13 +6,13 @@ import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
 import { CLAUDE_ID, State, type AgentTask } from "../core/state";
-import { fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
+import { VIEW_LAYOUTS, fittedHeight, washRGBA, type BotEmoteName, type BotStateName, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
 import { buildGithub, enterGithubPanel, newsFacts } from "./github";
-import { buildSession } from "./session";
+import { buildSession, sessionName, sessionTabs } from "./session";
 import { diffLine, fileKind, plusMinus, readPatch } from "./code";
 import type { IntegrationNews } from "../core/bridge";
 
@@ -62,7 +62,12 @@ export interface ViewActions {
    * said. With `changes`, straight to the list of files it changed.
    */
   openSession(changes?: boolean): void;
+  /** Puts another Claude Code session in front: the island shows that one. */
+  pickSession(id: string): void;
 }
+
+/** With several sessions, the overview has a row of tabs under the ticker: this much taller. */
+const SESSION_TABS_ROOM = 24;
 
 
 export interface ViewHost {
@@ -107,6 +112,22 @@ function agentWho(task: AgentTask | null, label: string): HTMLElement {
     row.append(dot(task.color, 8), h("span", { class: "n", text: task.name }));
   }
   row.append(h("span", { text: label }));
+  return row;
+}
+
+/**
+ * Whose card this is, for a card about a Claude Code session: the conversation
+ * by its name — with several open, the project alone would not say which —
+ * and, when other sessions are waiting for an answer behind it, how many.
+ */
+function sessionWho(label: string): HTMLElement {
+  const task = State.tasks.find((t) => t.id === CLAUDE_ID) ?? State.focusTask;
+  const session = State.session;
+  const row = h("div", { class: "who-row" });
+  if (task) row.append(dot(task.color, 8), h("span", { class: "n", text: session.id ? sessionName(session) : task.name }));
+  row.append(h("span", { text: label }));
+  const waiting = State.waiting.length;
+  if (waiting > 0) row.append(h("span", { class: "who-waiting", text: `+${waiting} waiting`, title: "Other sessions waiting for an answer" }));
   return row;
 }
 
@@ -158,10 +179,16 @@ export function buildHeader(actions: ViewActions): ViewHost {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 
-function buildOverview(actions: ViewActions): ViewHost {
-  const ticker = new Ticker();
+function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
+  let ticker = new Ticker();
   const who = h("div", { class: "who" });
-  const tickerBody = h("div", { class: "card-body" }, who, ticker.el);
+  // With several sessions open: under the ticker, a tab for each of the others.
+  const tabs = h("div", { class: "sess-tabs" });
+  const syncTabs = sessionTabs(tabs, (id) => actions.pickSession(id));
+  const tickerBody = h("div", { class: "card-body" }, who, ticker.el, tabs);
+  /** The session the ticker is scrolling the steps of. */
+  let tickerOf = "";
+  let tabbed = false;
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
     "button",
@@ -222,6 +249,9 @@ function buildOverview(actions: ViewActions): ViewHost {
     get animating() {
       return mode === "ticker" && ticker.animating;
     },
+    get height() {
+      return tabbed ? VIEW_LAYOUTS.overview.height + SESSION_TABS_ROOM : undefined;
+    },
     sync() {
       const task = State.focusTask;
       if (task?.id !== lastFocus) {
@@ -234,7 +264,7 @@ function buildOverview(actions: ViewActions): ViewHost {
       // VS Code with a live Claude Code session keeps the ticker; every other
       // pill shows its own card, exactly like IntegrationCardView.
       const sessionActive =
-        task?.id === "integration_claude" && (task.state !== "idle" || task.steps.length > 0);
+        task?.id === CLAUDE_ID && (task.state !== "idle" || task.steps.length > 0 || State.sessions.length > 1);
 
       if (task && sessionActive) {
         if (mode !== "ticker") {
@@ -266,6 +296,14 @@ function buildOverview(actions: ViewActions): ViewHost {
             text: `${Math.min(task.stepIndex + 1, task.steps.length)}/${task.steps.length}`,
           }));
         }
+        // Another session in front: its steps are not the next ones of the
+        // session before it, and a new ticker starts on them without scrolling.
+        if (State.frontId !== tickerOf) {
+          tickerOf = State.frontId;
+          const fresh = new Ticker();
+          ticker.el.replaceWith(fresh.el);
+          ticker = fresh;
+        }
         ticker.sync(task);
       } else if (task) {
         const info = State.integrations[task.id];
@@ -283,6 +321,12 @@ function buildOverview(actions: ViewActions): ViewHost {
       }
 
       jump.style.display = detailOpen ? "none" : "";
+
+      const nowTabbed = syncTabs() > 0 && mode === "ticker";
+      if (nowTabbed !== tabbed) {
+        tabbed = nowTabbed;
+        onResize();
+      }
 
       left.classList.toggle("opens", mode === "ticker");
       left.title = mode === "ticker" ? "Open the session" : "";
@@ -376,7 +420,7 @@ function buildApproval(actions: ViewActions): ViewHost {
       const approval = State.pendingApproval;
       const proposal = approval?.proposal ?? null;
       clear(who);
-      const asking = agentWho(State.focusTask, "needs permission");
+      const asking = sessionWho("needs permission");
       if (proposal) asking.append(plusMinus(proposal.additions, proposal.deletions));
       who.append(asking);
       // The whole point of approving here rather than in the terminal: this line
@@ -536,7 +580,7 @@ function buildQuestion(actions: ViewActions, onResize: () => void): ViewHost {
     }
     // Rebuilding the buttons between a mouse-down and its mouse-up would
     // swallow the click, so only rebuild when what they show has changed.
-    const next = [request, at, typing, [...picked].join("|"), State.clientName].join("~");
+    const next = [request, at, typing, [...picked].join("|"), State.clientName, State.waiting.length].join("~");
     if (next === key) return;
     key = next;
 
@@ -548,7 +592,7 @@ function buildQuestion(actions: ViewActions, onResize: () => void): ViewHost {
     pass.textContent = `Answer in ${State.clientName}`;
     back.style.display = at > 0 ? "" : "none";
     if (!info || !q) {
-      who.append(agentWho(task, "Claude Code is asking a question"));
+      who.append(sessionWho("is asking a question"));
       title.textContent = task?.steps.at(-1) ?? "Claude needs an answer.";
       hint.textContent = "";
       pass.style.display = "none";
@@ -558,7 +602,7 @@ function buildQuestion(actions: ViewActions, onResize: () => void): ViewHost {
     pass.style.display = "";
     skip.style.display = "";
 
-    const asking = agentWho(task, "Claude Code is asking a question");
+    const asking = sessionWho("is asking a question");
     if (q.header) asking.append(h("span", { class: "q-chip", text: q.header }));
     if (info.questions.length > 1) asking.append(h("span", { class: "q-count", text: `${at + 1}/${info.questions.length}` }));
     who.append(asking);
@@ -704,7 +748,7 @@ function buildError(actions: ViewActions): ViewHost {
         tellNews(news, who, title, facts);
         return;
       }
-      who.append(agentWho(task, task?.source === "n8n" ? "n8n" : "Claude Code"));
+      who.append(task?.source === "n8n" ? agentWho(task, "n8n") : sessionWho("Claude Code"));
       title.textContent = task?.source === "n8n" ? "Workflow stopped." : "Session stopped on an error.";
       detail.textContent = task?.steps.at(-1) ?? "No detail available.";
     },
@@ -744,7 +788,7 @@ function buildFinished(actions: ViewActions): ViewHost {
         tellNews(news, who, title, facts);
         return;
       }
-      who.append(agentWho(State.focusTask, "Claude Code finished"));
+      who.append(sessionWho("finished"));
       // What Claude said to end its turn, its first line; its last step otherwise.
       const answer = State.session.answer
         ?.split("\n")
@@ -874,7 +918,7 @@ export function buildViews(
   onChatHeightChange: () => void,
 ): Map<IslandViewName, ViewHost> {
   const map = new Map<IslandViewName, ViewHost>();
-  map.set("overview", buildOverview(actions));
+  map.set("overview", buildOverview(actions, onChatHeightChange));
   map.set("empty", buildEmpty(actions));
   map.set("approval", buildApproval(actions));
   map.set("question", buildQuestion(actions, onChatHeightChange));

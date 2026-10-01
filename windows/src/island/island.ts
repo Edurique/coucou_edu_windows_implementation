@@ -133,6 +133,8 @@ export class Island {
         if (id !== CLAUDE_ID) return;
         if (State.pendingQuestion) this.setView("question");
         else if (State.pendingApproval) this.setView("approval");
+        // No card for the session in front, but one behind it is waiting: its turn.
+        else if (State.waiting.length > 0) this.afterRequest(true);
       },
       openTerminal: () => this.openClient(),
       // The ↗ button — same targets as openAgentTarget() on macOS.
@@ -190,6 +192,7 @@ export class Island {
         enterSessionPanel(changes === true);
         this.setView("session");
       },
+      pickSession: (id) => this.pickSession(id),
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
@@ -231,8 +234,7 @@ export class Island {
     this.countdown = h("div", { id: "countdown" });
 
     this.header = buildHeader(actions);
-    this.views = buildViews(actions, () => this.animateGeometry(false));
-    this.viewsEl = h("div", { id: "views" });
+    this.views = buildViews(actions, () => this.animateGeometry(false));    this.viewsEl = h("div", { id: "views" });
     for (const v of this.views.values()) this.viewsEl.append(v.el);
     this.contentEl = h("div", { id: "content" }, this.header.el, this.viewsEl);
 
@@ -373,15 +375,45 @@ export class Island {
     State.notify();
   }
 
-  /** The request on the card got its answer: back to the session at work. */
+  /** The request on the card got its answer: its session is back at work. */
   private settleRequest() {
-    State.pendingApproval = null;
-    State.pendingQuestion = null;
-    State.isPinned = false;
-    this.fsm.pinned = false;
-    State.updateTask(CLAUDE_ID, "working");
-    State.setPillBadge(CLAUDE_ID, null);
-    this.setView(State.defaultView());
+    const session = State.session;
+    session.approval = null;
+    session.question = null;
+    session.state = "working";
+    this.afterRequest(true);
+  }
+
+  /**
+   * The request of the session in front is done with. Another session waiting
+   * for an answer comes forward with its own; with none, the island is free
+   * to close again. `show` moves the view too: to that card, or back to the
+   * overview.
+   */
+  afterRequest(show: boolean) {
+    const next = State.pendingApproval || State.pendingQuestion ? State.session : State.waiting[0];
+    if (next) State.bringForward(next.id);
+    State.isPinned = next != null;
+    this.fsm.pinned = next != null;
+    State.setPillBadge(CLAUDE_ID, next && State.focusId !== CLAUDE_ID ? "approval" : null);
+    State.present();
+    if (show) this.setView(next ? (next.question ? "question" : "approval") : State.defaultView());
+  }
+
+  /**
+   * Puts another session in front, at the user's asking: its card if it is
+   * waiting for an answer, and never the card of the one that was there.
+   */
+  private pickSession(id: string) {
+    if (id === State.frontId) return;
+    Sound.play("blip");
+    State.bringForward(id);
+    const session = State.session;
+    const waits = session.question != null || session.approval != null;
+    State.isPinned = waits;
+    this.fsm.pinned = waits;
+    if (waits) this.setView(session.question ? "question" : "approval");
+    else if (State.view === "approval" || State.view === "question") this.setView(State.defaultView());
   }
 
   /** Where the session runs: the Claude app brought forward, or its folder in VS Code. */
@@ -408,11 +440,6 @@ export class Island {
 
   reveal() {
     this.fsm.reveal();
-  }
-
-  /** An alert stopped waiting for an answer: let the island auto-close again. */
-  dropPin() {
-    this.fsm.pinned = false;
   }
 
   // ── File drop ───────────────────────────────────────────────────────────────

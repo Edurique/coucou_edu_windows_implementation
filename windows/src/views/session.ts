@@ -19,7 +19,8 @@ import { ICONS } from "./icons";
 import { COLOR } from "./palette";
 import { timeAgo } from "./integrations";
 import { markdown } from "./markdown";
-import { CLAUDE_ID, State, type AgentTask, type ChangedFile, type SessionStep } from "../core/state";
+import { CLAUDE_ID, State, type AgentTask, type ChangedFile, type ClaudeSession, type SessionStep } from "../core/state";
+import { botGlowColor } from "../core/layout";
 import type { ViewActions, ViewHost } from "./views";
 
 /** What a session is called until it has a project or a title to go by. */
@@ -79,6 +80,61 @@ const STEP_NAMES: Record<string, string> = {
 
 
 const counted = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+
+// ── Several sessions ──────────────────────────────────────────────────────────
+
+/** A session by its name: the conversation's title, or untitled, the folder it works in. */
+export const sessionName = (session: ClaudeSession) => session.title ?? session.project;
+
+/** Where a session is at, as a colour and in words: what its tab shows and says. */
+function standing(session: ClaudeSession): { color: string; words: string } {
+  if (session.question) return { color: COLOR.cyan, words: "is asking a question" };
+  if (session.approval) return { color: COLOR.amber, words: "needs permission" };
+  if (session.news === "error" || session.state === "error") return { color: COLOR.red, words: "stopped on an error" };
+  if (session.news === "finished" || session.state === "finished") return { color: COLOR.green, words: "finished" };
+  if (session.state === "question") return { color: COLOR.cyan, words: "is waiting for you" };
+  if (session.state === "idle" || session.state === "sleeping") return { color: COLOR.grey, words: "at rest" };
+  return { color: botGlowColor(session.state), words: "at work" };
+}
+
+/**
+ * A session's tab: a dot for where it is at, and its name. One waiting for an
+ * answer, or with news nobody has seen, stands out in its colour.
+ */
+function sessionTab(session: ClaudeSession, onPick: (id: string) => void): HTMLElement {
+  const { color, words } = standing(session);
+  const name = sessionName(session);
+  const calls = session.news != null || session.question != null || session.approval != null;
+  const tab = h(
+    "button",
+    { class: calls ? "sess-tab calls" : "sess-tab", title: `${name} — ${words}`, onclick: () => onPick(session.id) },
+    dot(color, 6),
+    h("span", { text: name }),
+  );
+  tab.style.setProperty("--c", color);
+  return tab;
+}
+
+/**
+ * Keeps a row of tabs in step with the sessions behind the one in front —
+ * that one is named right above them. Rebuilt only when a tab would change:
+ * between a mouse-down and its mouse-up, a rebuild would swallow the click.
+ * Returns how many tabs it shows.
+ */
+export function sessionTabs(el: HTMLElement, onPick: (id: string) => void): () => number {
+  let key = "";
+  return () => {
+    const behind = State.sessions.filter((s) => s.id !== State.frontId);
+    const next = behind.map((s) => [s.id, sessionName(s), standing(s).words].join(":")).join("|");
+    if (next !== key) {
+      key = next;
+      clear(el);
+      for (const session of behind) el.append(sessionTab(session, onPick));
+    }
+    el.style.display = behind.length > 0 ? "" : "none";
+    return behind.length;
+  };
+}
 
 /** The states of a session with a turn under way. */
 const AT_WORK = new Set(["working", "thinking", "searching", "approval", "question"]);
@@ -181,7 +237,14 @@ export function buildSession(actions: ViewActions): ViewHost {
   const name = h("b", { text: UNNAMED });
   const nameSub = h("span", { text: UNNAMED });
   const steps = h("div", { class: "sess-steps" });
-  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, name, nameSub), steps);
+  // The sessions behind this one, at the foot of the column: a click puts one in front.
+  const others = h("div", { class: "sess-others" });
+  const syncOthers = sessionTabs(others, (id) => {
+    screen = { kind: "live" };
+    stamp++;
+    actions.pickSession(id);
+  });
+  const side = h("div", { class: "gh-side" }, h("div", { class: "gh-side-who" }, name, nameSub), steps, others);
   const el = h("div", { class: "view gh-view session-view" }, h("div", { class: "card gh-card" }, side, h("div", { class: "gh-col" }, main)));
 
   backBtn.addEventListener("click", () => {
@@ -272,8 +335,9 @@ export function buildSession(actions: ViewActions): ViewHost {
       const files = State.sessionFiles;
       const live = running(task);
 
-      // The column: whose session, where it runs, and its last steps.
-      const shown = State.session.steps.slice(-STEPS_SHOWN);
+      // The column: whose session, where it runs, and its last steps — fewer
+      // of them when other sessions take a line each at its foot.
+      const shown = State.session.steps.slice(-Math.max(1, STEPS_SHOWN - syncOthers()));
       const nextSteps = [task?.name, State.session.title, ...shown.map((s) => `${s.tool}:${s.state}`)].join("~");
       if (nextSteps !== stepsKey) {
         stepsKey = nextSteps;

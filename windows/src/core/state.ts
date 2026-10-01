@@ -98,12 +98,22 @@ export interface SessionStep {
   state: "running" | "done" | "failed";
 }
 
-/** The Claude Code session the island is following: the last one heard from. */
+/**
+ * A Claude Code session the island knows of. There can be several at once —
+ * two conversations in the Claude app, one more in a terminal — and one of
+ * them is in front: the one the Claude pill, the cards and the panel show.
+ */
 export interface ClaudeSession {
   id: string;
   client: ClaudeClient | null;
   /** The conversation's title, when Claude Code has given it one. */
   title: string | null;
+  /** The folder it works in: by its name, and whole. */
+  project: string;
+  cwd: string | null;
+  state: BotStateName;
+  /** What the overview's ticker scrolls: a line per step, oldest first. */
+  lines: string[];
   /** The tools of the turn under way, oldest first; "Done" closes a turn. */
   steps: SessionStep[];
   /** What the user asked last, and what Claude said to end its turn. */
@@ -111,6 +121,24 @@ export interface ClaudeSession {
   answer: string | null;
   /** When that answer came. */
   answeredAt: number;
+  /** What it is waiting on a human for: a permission, or a question. One at a time. */
+  approval: ApprovalInfo | null;
+  question: QuestionInfo | null;
+  /** What happened here while another session was in front, until it is looked at. */
+  news: PillBadge | null;
+  /** When it was last heard from. */
+  heardAt: number;
+}
+
+/** What a session is called before its folder is known. */
+export const SESSION_UNNAMED = "Session";
+
+export function newSession(id: string): ClaudeSession {
+  return {
+    id, client: null, title: null, project: SESSION_UNNAMED, cwd: null, state: "idle",
+    lines: [], steps: [], asked: null, answer: null, answeredAt: 0,
+    approval: null, question: null, news: null, heardAt: 0,
+  };
 }
 
 export interface ChatMessage {
@@ -226,13 +254,14 @@ class AppState {
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
-  pendingApproval: ApprovalInfo | null = null;
-  pendingQuestion: QuestionInfo | null = null;
 
-  session: ClaudeSession = {
-    id: "", client: null, title: null, steps: [], asked: null, answer: null, answeredAt: 0,
-  };
-  /** What each session changed, by session id — the few last sessions only. */
+  /** Every session the island knows of, in the order they were first heard. */
+  sessions: ClaudeSession[] = [];
+  /** The session in front; empty when there is none. */
+  frontId = "";
+  /** What stands for the session in front while there is none. */
+  private readonly noSession = newSession("");
+  /** What each session changed, by session id. */
   changes = new Map<string, ChangedFile[]>();
 
   integrations: Record<string, IntegrationInfo> = {};
@@ -259,6 +288,50 @@ class AppState {
 
   get effectiveState(): BotStateName {
     return this.stateOverride ?? this.focusTask?.state ?? "idle";
+  }
+
+  /** The session in front: the one the Claude pill, the cards and the panel show. */
+  get session(): ClaudeSession {
+    return this.sessions.find((s) => s.id === this.frontId) ?? this.noSession;
+  }
+
+  /** What the session in front is waiting on a human for. */
+  get pendingApproval(): ApprovalInfo | null {
+    return this.session.approval;
+  }
+
+  get pendingQuestion(): QuestionInfo | null {
+    return this.session.question;
+  }
+
+  /** The other sessions waiting on a human, the one that has waited longest first. */
+  get waiting(): ClaudeSession[] {
+    return this.sessions.filter((s) => s.id !== this.frontId && (s.approval != null || s.question != null));
+  }
+
+  /**
+   * Puts a session in front. The one it takes the place of keeps going where
+   * it runs; if it was waiting for an answer, its tab says so.
+   */
+  bringForward(id: string) {
+    const from = this.session;
+    if (from.id && from.id !== id && (from.approval || from.question)) from.news = "approval";
+    this.frontId = id;
+    this.session.news = null;
+    this.present();
+  }
+
+  /** The Claude pill wears the session in front: its project, its state, its steps. */
+  present() {
+    const t = this.tasks.find((x) => x.id === CLAUDE_ID);
+    if (!t) return;
+    const s = this.session;
+    t.name = s.id ? s.project : this.clientName;
+    t.state = s.state;
+    t.steps = s.lines;
+    t.stepIndex = Math.max(0, s.lines.length - 1);
+    t.sessionCwd = s.cwd;
+    this.notify();
   }
 
   /** The Claude pill's name: the app of the session it follows. */

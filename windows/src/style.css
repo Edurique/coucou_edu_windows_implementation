@@ -3662,3 +3662,93 @@ button.gh-block:hover {
   border-top: 1px solid var(--gh-edge);
   margin: 2px 0;
 }
+
+
+/* Several Claude Code sessions at once: under the ticker, a tab for each of
+   the ones behind the session on show. A click puts that one in front. */
+.sess-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 4px 12px 0 104px;
+  min-width: 0;
+}
+
+.sess-tab {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 19px;
+  padding: 0 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--gh-plate);
+  color: var(--dim);
+  font: 500 10.5px var(--font);
+  cursor: default;
+  transition: color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.sess-tab > .dot {
+  flex: 0 0 auto;
+}
+
+.sess-tab > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sess-tab:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* Waiting for an answer, or with news nobody has seen: in its own colour. */
+.sess-tab.calls {
+  color: var(--c);
+  border-color: color-mix(in srgb, var(--c) 35%, transparent);
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+}
+
+/* In the session panel: the sessions behind the one on show, at the column's foot. */
+.sess-others {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: auto -5px 0;
+  padding-top: 8px;
+  min-width: 0;
+}
+
+.sess-others .sess-tab {
+  flex: 0 0 auto;
+  background: transparent;
+}
+
+.sess-others .sess-tab:hover {
+  background: var(--gh-plate);
+}
+
+/* A card about a session names the conversation: a long title gives way to what follows it. */
+.who-row .n {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.who-row > span:not(.n),
+.who-row > .dot {
+  flex: 0 0 auto;
+}
+
+.who-waiting {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font: 500 10.5px var(--font);
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+}

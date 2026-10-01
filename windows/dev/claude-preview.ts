@@ -4,7 +4,7 @@
 // /dev/claude-preview.html.
 
 import "../src/style.css";
-import { State } from "../src/core/state";
+import { CLAUDE_ID, State } from "../src/core/state";
 import { handleHook, type HookPayload } from "../src/island/hooks";
 import { Island } from "../src/island/island";
 
@@ -18,7 +18,7 @@ const base: HookPayload = {
 };
 
 State.loadIntegrationTasks();
-State.setFocus("integration_claude");
+State.setFocus(CLAUDE_ID);
 // Pinned, so the island doesn't fold away while it's being looked at.
 State.isPinned = true;
 
@@ -86,6 +86,21 @@ edit("windows\\src\\island\\hooks.ts", [
 edit("windows\\README.md", ["@@ -40,3 +40,4 @@", " ## Claude Code", "+Answer Claude's questions from the island.", " "].join("\n"));
 hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "cargo test -p coucou-hook" } });
 
+// `sessions`: two more conversations going on behind the first — one at work
+// in a terminal, one that has just finished in the Claude app.
+const second: HookPayload = {
+  session_id: "8b1d04e7-preview", cwd: "C:\\Users\\mochi\\code\\atlas", entrypoint: "cli", session_title: "Course search",
+};
+const third: HookPayload = {
+  session_id: "c47e9a02-preview", cwd: CWD, entrypoint: "claude-desktop", session_title: "Fix the blurry island",
+};
+if (params.has("sessions")) {
+  hook({ ...second, hook_event_name: "UserPromptSubmit", prompt: "Add a search to the course list" });
+  hook({ ...second, hook_event_name: "PreToolUse", tool_name: "Grep", tool_input: { pattern: "courses" } });
+  hook({ ...third, hook_event_name: "UserPromptSubmit", prompt: "The island is blurry while it resizes" });
+  hook({ ...third, hook_event_name: "Stop", last_message: "The island now stays on a whole pixel while it resizes." });
+}
+
 const option = (label: string, description: string) => ({ label, description });
 const engine = {
   question: "Which engine for the course search?",
@@ -113,6 +128,10 @@ if (view === "question") {
     hook_event_name: "PermissionRequest", request_id: "preview-1", tool_name: "AskUserQuestion",
     tool_input: { questions: params.has("many") ? [engine, ...more] : [engine] },
   });
+  // A second session asks while the first one's question is on the card: it waits its turn.
+  if (params.has("sessions")) {
+    hook({ ...second, hook_event_name: "PermissionRequest", request_id: "preview-3", tool_name: "AskUserQuestion", tool_input: { questions: [more[0]] } });
+  }
 } else if (view === "approval") {
   hook(params.has("diff")
     ? {
@@ -157,8 +176,8 @@ if (view === "question") {
   if (view === "session") island.alert("session");
 } else if (view === "session") {
   if (params.has("idle")) {
-    const task = State.tasks.find((t) => t.id === "integration_claude");
-    if (task) task.state = "idle";
+    State.session.state = "idle";
+    State.present();
   }
   island.alert("session");
   if (params.has("list")) {

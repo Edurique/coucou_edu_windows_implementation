@@ -11,11 +11,20 @@
 
 import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
-import { CLAUDE_ID, State, type ChangedFile, type ClaudeClient, type Question } from "../core/state";
+import {
+  CLAUDE_ID, SESSION_UNNAMED, State, newSession,
+  type ChangedFile, type ClaudeClient, type ClaudeSession, type Question,
+} from "../core/state";
+import type { IslandViewName } from "../core/layout";
 import type { Island } from "./island";
 
-/** Clears the approval card if no decision was made before the hook gave up. */
-let pendingTimeout: number | null = null;
+/**
+ * By session: clears its request if no decision was made before the hook gave
+ * up. Coucou answers within 108 s or not at all; after that the terminal has
+ * taken over and the card would be lying.
+ */
+const pendingTimeouts = new Map<string, number>();
+const PENDING_MS = 110_000;
 
 export interface HookPayload {
   hook_event_name?: string;
@@ -43,34 +52,47 @@ export interface HookPayload {
 /** The tool Claude asks its questions with. */
 const QUESTION_TOOL = "AskUserQuestion";
 
-/** Sessions whose changes are kept: the one followed and the few before it. */
+/** Sessions followed at once: as many as the island has tabs for. */
 const MAX_SESSIONS = 4;
 /** Files kept for a session, and edits kept for a file. */
 const MAX_FILES = 40;
 const MAX_EDITS = 30;
 /** Steps kept for the turn under way; the session panel shows the last few. */
 const MAX_STEPS = 12;
+/** Lines kept for the ticker; past that the older half goes. */
+const MAX_LINES = 200;
+/** A line of the ticker is this long at most. */
+const LINE_CHARS = 60;
+/** How long a session that just finished says so before it goes back to rest. */
+const FINISHED_MS = 5_200;
+/** The id of a session whose hooks carry none. */
+const ANONYMOUS = "session";
 
 /** The step that closes a turn, in the place of a tool's name. */
 const TURN_DONE = "Done";
 
 /** A tool starts: one more step, going. */
-function startStep(tool: string) {
-  const steps = State.session.steps;
-  steps.push({ tool, state: "running" });
-  if (steps.length > MAX_STEPS) steps.shift();
+function startStep(session: ClaudeSession, tool: string) {
+  session.steps.push({ tool, state: "running" });
+  if (session.steps.length > MAX_STEPS) session.steps.shift();
 }
 
 /** A tool ends: its last step still going takes the outcome. */
-function endStep(tool: string, state: "done" | "failed") {
-  const step = [...State.session.steps].reverse().find((s) => s.tool === tool && s.state === "running");
+function endStep(session: ClaudeSession, tool: string, state: "done" | "failed") {
+  const step = [...session.steps].reverse().find((s) => s.tool === tool && s.state === "running");
   if (step) step.state = state;
 }
 
 /** The turn ends: nothing is going any more, and the column says so. */
-function closeSteps() {
-  for (const step of State.session.steps) if (step.state === "running") step.state = "done";
-  State.session.steps.push({ tool: TURN_DONE, state: "done" });
+function closeSteps(session: ClaudeSession) {
+  for (const step of session.steps) if (step.state === "running") step.state = "done";
+  session.steps.push({ tool: TURN_DONE, state: "done" });
+}
+
+/** One more line for the session's ticker. */
+function say(session: ClaudeSession, line: string) {
+  session.lines.push(line);
+  if (session.lines.length > MAX_LINES) session.lines.splice(0, MAX_LINES / 2);
 }
 
 /** How the Agent SDK names itself as an entry point: "sdk-ts", "sdk-py", "sdk-cli". */
@@ -93,24 +115,84 @@ function clientOf(payload: HookPayload): ClaudeClient {
   return "terminal";
 }
 
-/** The island follows one session: the last one heard from. */
-function follow(payload: HookPayload) {
-  const id = payload.session_id ?? "";
-  if (!id) return;
-  if (State.session.id === id) {
-    State.session.client = clientOf(payload);
-    if (payload.session_title) State.session.title = payload.session_title;
-    return;
+const waits = (session: ClaudeSession) => session.approval != null || session.question != null;
+
+/** No turn under way, and nothing asked: the session is where its last turn left it. */
+const AT_REST: ReadonlySet<string> = new Set(["idle", "finished", "error", "sleeping"]);
+const resting = (session: ClaudeSession) => AT_REST.has(session.state) && !waits(session);
+
+/** The session an event comes from, told what the event says of it. A new one gets a place. */
+function sessionOf(island: Island, payload: HookPayload): ClaudeSession {
+  const id = payload.session_id || ANONYMOUS;
+  let session = State.sessions.find((s) => s.id === id);
+  if (!session) {
+    session = newSession(id);
+    State.sessions.push(session);
+    makeRoom(island, session);
   }
-  State.session = {
-    id, client: clientOf(payload), title: payload.session_title ?? null,
-    steps: [], asked: null, answer: null, answeredAt: 0,
-  };
-  if (!State.changes.has(id)) State.changes.set(id, []);
-  for (const old of State.changes.keys()) {
-    if (State.changes.size <= MAX_SESSIONS) break;
-    if (old !== id) State.changes.delete(old);
+  session.client = clientOf(payload);
+  if (payload.session_title) session.title = payload.session_title;
+  if (payload.cwd) {
+    session.cwd = payload.cwd;
+    session.project = aliasProjectName(lastPathComponent(payload.cwd) || SESSION_UNNAMED);
   }
+  session.heardAt = Date.now();
+  return session;
+}
+
+/**
+ * One session too many: the one that goes is at rest if any is, and the one
+ * heard from longest ago. Never the one in front, the one that just came, or
+ * one that is waiting for an answer.
+ */
+function makeRoom(island: Island, newcomer: ClaudeSession) {
+  while (State.sessions.length > MAX_SESSIONS) {
+    const old = State.sessions
+      .filter((s) => s !== newcomer && s.id !== State.frontId && !waits(s))
+      .sort((a, b) => Number(resting(b)) - Number(resting(a)) || a.heardAt - b.heardAt)[0];
+    if (!old) return;
+    forget(island, old);
+  }
+}
+
+/** A session is over, or gave its place: nothing of it is kept. */
+function forget(island: Island, session: ClaudeSession) {
+  const at = State.sessions.indexOf(session);
+  if (at < 0) return;
+  const request = (session.approval ?? session.question)?.requestId;
+  if (request) void Bridge.approvalDecline(request);
+  stopWaiting(session);
+  State.sessions.splice(at, 1);
+  State.changes.delete(session.id);
+  if (session.id !== State.frontId) return;
+  // It was in front: the one heard from last takes its place.
+  const next = [...State.sessions].sort((a, b) => b.heardAt - a.heardAt)[0];
+  State.bringForward(next?.id ?? "");
+  island.afterRequest(onCard());
+}
+
+/** True while the island shows a request's card. */
+const onCard = () => State.view === "approval" || State.view === "question";
+
+/** The views that are about the session in front: it is not changed under them. */
+const ABOUT_FRONT: ReadonlySet<IslandViewName> = new Set(["session", "finished", "error", "approval", "question"]);
+/** The events that say a session is being worked in. */
+const WORK_EVENTS: ReadonlySet<string> = new Set(["SessionStart", "UserPromptSubmit", "PreToolUse"]);
+
+/**
+ * Whether the session an event comes from takes the front. The island stays on
+ * the session it shows for as long as that one is at work or being looked at:
+ * another one takes its place when it has nothing going on, or to ask for
+ * something — unless the one in front is itself waiting for an answer, and
+ * then the request waits its turn.
+ */
+function takesFront(session: ClaudeSession, event: string): boolean {
+  const front = State.session;
+  if (!front.id) return true;
+  if (front === session || waits(front)) return false;
+  if (event === "PermissionRequest") return true;
+  const watched = State.mode === "expanded" && ABOUT_FRONT.has(State.view);
+  return WORK_EVENTS.has(event) && resting(front) && !watched;
 }
 
 /** "C:\\work\\app\\src\\a.ts" in "C:\\work\\app" → "src/a.ts". Outside the folder, the whole path. */
@@ -121,12 +203,12 @@ function sessionPath(file: string, cwd: string): string {
 }
 
 /** One more edit to a file: the file moves to the top of the session's changes. */
-function recordChange(payload: HookPayload) {
+function recordChange(session: ClaudeSession, payload: HookPayload) {
   const change = payload.change;
   const file = payload.tool_input?.file_path;
-  if (!change || typeof file !== "string" || !State.session.id) return;
+  if (!change || typeof file !== "string") return;
   const path = sessionPath(file, payload.cwd ?? "");
-  const files = State.changes.get(State.session.id) ?? [];
+  const files = State.changes.get(session.id) ?? [];
   const at = files.findIndex((f) => f.path === path);
   const entry: ChangedFile =
     at >= 0 ? files.splice(at, 1)[0] : { path, created: change.created, additions: 0, deletions: 0, edits: [], at: 0 };
@@ -140,7 +222,7 @@ function recordChange(payload: HookPayload) {
   entry.at = Date.now();
   files.unshift(entry);
   if (files.length > MAX_FILES) files.pop();
-  State.changes.set(State.session.id, files);
+  State.changes.set(session.id, files);
 }
 
 /** The question tool's input as the island shows it — null when it is not one it can answer. */
@@ -164,29 +246,31 @@ function questionsOf(input: Record<string, unknown>): Question[] | null {
   return questions;
 }
 
-/**
- * The card waiting for an answer is no longer needed: it was answered in
- * Claude Code itself, or the relay stopped waiting. The island lets go of it.
- */
-function dropPending(island: Island) {
-  if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
-  pendingTimeout = null;
-  if (!State.pendingApproval && !State.pendingQuestion) return;
-  State.pendingApproval = null;
-  State.pendingQuestion = null;
-  State.isPinned = false;
-  island.dropPin();
-  State.updateTask(CLAUDE_ID, "working");
-  State.setPillBadge(CLAUDE_ID, null);
-  if (State.view === "approval" || State.view === "question") island.setView(State.defaultView());
+/** The relay's wait for this session's request is no longer the island's to time. */
+function stopWaiting(session: ClaudeSession) {
+  const timeout = pendingTimeouts.get(session.id);
+  if (timeout != null) window.clearTimeout(timeout);
+  pendingTimeouts.delete(session.id);
 }
 
-/** True when this event says the pending card's tool has run: someone answered elsewhere. */
-function answeredElsewhere(payload: HookPayload): boolean {
-  const pending = State.pendingQuestion ?? State.pendingApproval;
-  if (!pending || pending.sessionId !== (payload.session_id ?? "")) return false;
-  const tool = State.pendingQuestion ? QUESTION_TOOL : State.pendingApproval?.tool;
-  return payload.tool_name === tool;
+/**
+ * A session's request is no longer needed: it was answered in Claude Code
+ * itself, or the relay stopped waiting. The island lets go of it.
+ */
+function dropPending(island: Island, session: ClaudeSession) {
+  stopWaiting(session);
+  if (!waits(session)) return;
+  session.approval = null;
+  session.question = null;
+  session.state = "working";
+  if (session.news === "approval") session.news = null;
+  if (session.id === State.frontId) island.afterRequest(onCard());
+}
+
+/** True when this event says the tool the session's request is about has run: someone answered elsewhere. */
+function answeredElsewhere(session: ClaudeSession, payload: HookPayload): boolean {
+  if (!waits(session)) return false;
+  return payload.tool_name === (session.question ? QUESTION_TOOL : session.approval?.tool);
 }
 
 const PROJECT_ALIASES: Record<string, string> = {
@@ -265,22 +349,6 @@ function approvalTarget(tool: string, input: Record<string, unknown>): string {
   return tool;
 }
 
-function upsert(projectName: string, cwd: string) {
-  const t = State.tasks.find((x) => x.id === CLAUDE_ID);
-  if (!t) return;
-  t.name = projectName;
-  if (cwd) t.sessionCwd = cwd;
-}
-
-function clearSession() {
-  const t = State.tasks.find((x) => x.id === CLAUDE_ID);
-  if (!t) return;
-  t.steps = [];
-  t.stepIndex = 0;
-  t.name = State.clientName;
-  t.pillBadge = null;
-}
-
 export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
 }
@@ -296,16 +364,24 @@ export function handleHook(island: Island, payload: HookPayload) {
     return;
   }
 
-  follow(payload);
-
   const name = payload.hook_event_name ?? "";
+
+  if (name === "SessionEnd") {
+    const over = State.sessions.find((s) => s.id === (payload.session_id || ANONYMOUS));
+    if (over) forget(island, over);
+    State.notify();
+    return;
+  }
+
+  const session = sessionOf(island, payload);
+  if (takesFront(session, name)) State.bringForward(session.id);
+  /** The session the island shows; the others go on behind their tabs. */
+  const front = session.id === State.frontId;
+  const focused = front && State.focusId === CLAUDE_ID;
   const cwd = payload.cwd ?? "";
-  const raw = lastPathComponent(cwd);
-  const projectName = aliasProjectName(raw || "Session");
-  const focused = State.focusId === CLAUDE_ID;
 
   /** Alerts force the island open; work events only reveal the compact island. */
-  const surface = (view: Parameters<Island["alert"]>[0], isAlert: boolean) => {
+  const surface = (view: IslandViewName, isAlert: boolean) => {
     if (State.mode === "expanded") {
       if (isAlert) island.setView(view);
     } else if (isAlert) {
@@ -315,155 +391,159 @@ export function handleHook(island: Island, payload: HookPayload) {
     }
   };
 
+  /**
+   * A turn's end, good or bad: its card when the session is in front, a mark
+   * on its tab when it is behind, a badge on the pill when Claude's is not
+   * the one in front.
+   */
+  const tell = (what: "finished" | "error") => {
+    if (focused) return surface(what, true);
+    if (!front) session.news = what;
+    if (State.focusId !== CLAUDE_ID) State.setPillBadge(CLAUDE_ID, what);
+  };
+
   switch (name) {
     case "SessionStart":
-      upsert(projectName, cwd);
       surface("overview", false);
       Sound.play("work");
       break;
 
     case "UserPromptSubmit": {
-      upsert(projectName, cwd);
-      State.updateTask(CLAUDE_ID, "thinking");
+      session.state = "thinking";
+      session.steps = [];
       // The field is `prompt`; reading `message` meant this step was always blank.
-      State.session.steps = [];
       const asked = payload.prompt ?? payload.message;
-      if (asked && !asked.trimStart().startsWith("<")) {
-        State.session.asked = asked;
-        State.session.answer = null;
-      }
       // What Claude Code feeds itself as a prompt — a task's notification, a
       // reminder — comes as markup, and is nobody's words to show.
-      if (asked && !asked.trimStart().startsWith("<")) State.appendStep(CLAUDE_ID, asked.slice(0, 60));
+      if (asked && !asked.trimStart().startsWith("<")) {
+        session.asked = asked;
+        session.answer = null;
+        say(session, asked.slice(0, LINE_CHARS));
+      }
       surface("overview", false);
       break;
     }
 
     case "PreToolUse": {
-      upsert(projectName, cwd);
-      State.updateTask(CLAUDE_ID, "working");
+      session.state = "working";
       const tool = payload.tool_name ?? "Tool";
-      startStep(tool);
-      State.appendStep(CLAUDE_ID, stepLabel(tool, payload.tool_input ?? {}));
+      startStep(session, tool);
+      say(session, stepLabel(tool, payload.tool_input ?? {}));
       surface("overview", false);
       break;
     }
 
     case "PostToolUse":
-      if (answeredElsewhere(payload)) dropPending(island);
-      endStep(payload.tool_name ?? "Tool", "done");
-      recordChange(payload);
-      State.updateTask(CLAUDE_ID, "working");
+      if (answeredElsewhere(session, payload)) dropPending(island, session);
+      endStep(session, payload.tool_name ?? "Tool", "done");
+      recordChange(session, payload);
+      session.state = "working";
       break;
 
     case "PostToolUseFailure":
-      if (answeredElsewhere(payload)) dropPending(island);
-      endStep(payload.tool_name ?? "Tool", "failed");
-      State.updateTask(CLAUDE_ID, "working");
-      State.appendStep(CLAUDE_ID, "⚠ failed");
+      if (answeredElsewhere(session, payload)) dropPending(island, session);
+      endStep(session, payload.tool_name ?? "Tool", "failed");
+      session.state = "working";
+      say(session, "⚠ failed");
       break;
 
     case "Notification": {
       const message = payload.message ?? "";
       const lower = message.toLowerCase();
       if (lower.includes("rate limit") || lower.includes("limite d")) {
-        State.updateTask(CLAUDE_ID, "ratelimit");
+        session.state = "ratelimit";
         Sound.play("rate");
       } else if (message.endsWith("?")) {
-        State.updateTask(CLAUDE_ID, "question");
-        State.appendStep(CLAUDE_ID, message);
+        session.state = "question";
+        say(session, message);
       }
       break;
     }
 
     case "Stop":
-      closeSteps();
+      closeSteps(session);
       if (payload.last_message) {
-        State.session.answer = payload.last_message;
-        State.session.answeredAt = Date.now();
+        session.answer = payload.last_message;
+        session.answeredAt = Date.now();
       }
-      State.updateTask(CLAUDE_ID, "finished");
-      if (payload.message) State.appendStep(CLAUDE_ID, payload.message.slice(0, 60));
+      session.state = "finished";
+      if (payload.message) say(session, payload.message.slice(0, LINE_CHARS));
       Sound.play("finish");
-      if (focused) surface("finished", true);
-      else State.setPillBadge(CLAUDE_ID, "finished");
+      tell("finished");
       window.setTimeout(() => {
-        State.updateTask(CLAUDE_ID, "idle");
-        State.setPillBadge(CLAUDE_ID, null);
-      }, 5200);
+        // Still where its turn left it: back to rest. Its tab keeps its mark.
+        if (session.state === "finished") session.state = "idle";
+        if (session.id === State.frontId) State.setPillBadge(CLAUDE_ID, null);
+        State.present();
+      }, FINISHED_MS);
       break;
 
     case "StopFailure":
-      State.updateTask(CLAUDE_ID, "error");
+      session.state = "error";
       Sound.play("error");
-      if (focused) surface("error", true);
-      else State.setPillBadge(CLAUDE_ID, "error");
-      break;
-
-    case "SessionEnd":
-      State.updateTask(CLAUDE_ID, "idle");
-      clearSession();
+      tell("error");
       break;
 
     case "SubagentStart":
-      State.appendStep(CLAUDE_ID, "+ subagent");
+      say(session, "+ subagent");
       break;
 
     case "SubagentStop":
-      State.appendStep(CLAUDE_ID, "• subagent done");
+      say(session, "• subagent done");
       break;
 
     case "PermissionRequest": {
       const requestId = payload.request_id ?? "";
-      // One card, one request. A second one must never quietly replace the first
-      // — that would leave a human staring at request B while request A waits for
-      // a decision nobody can give. Hand it straight back to the terminal.
-      const held = State.pendingApproval ?? State.pendingQuestion;
+      // One request per session. A second one must never quietly replace the
+      // first — that would leave a human staring at request B while request A
+      // waits for a decision nobody can give. Hand it straight back to the terminal.
+      const held = session.approval ?? session.question;
       if (held && held.requestId !== requestId) {
         if (requestId) void Bridge.approvalDecline(requestId);
         break;
       }
-      upsert(projectName, cwd);
-      if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
+      stopWaiting(session);
       const tool = payload.tool_name ?? "Tool";
       const input = payload.tool_input ?? {};
-      const sessionId = payload.session_id ?? "";
       // Claude's question tool asks for permission like any other: allowing it
       // with the answers is how a question gets answered from here.
       const questions = tool === QUESTION_TOOL ? questionsOf(input) : null;
-      if (questions) State.pendingQuestion = { requestId, sessionId, questions };
+      if (questions) session.question = { requestId, sessionId: session.id, questions };
       else {
         const file = input.file_path;
         const proposal =
           payload.proposal && typeof file === "string" ? { path: sessionPath(file, cwd), ...payload.proposal } : null;
-        State.pendingApproval = { requestId, sessionId, tool, command: approvalTarget(tool, input), proposal };
+        session.approval = { requestId, sessionId: session.id, tool, command: approvalTarget(tool, input), proposal };
       }
       // The relay's short ack window closes in 800 ms; everything below this
       // line is synchronous, so the card really is up by the time it lands.
       if (requestId) void Bridge.approvalAck(requestId);
-      State.updateTask(CLAUDE_ID, questions ? "question" : "approval");
-      State.isPinned = true;
+      session.state = questions ? "question" : "approval";
       Sound.play(questions ? "question" : "approval");
-      if (focused) {
+      if (!front) {
+        // The session in front is waiting for an answer of its own: this one
+        // waits its turn behind its tab, and gets the card next.
+        session.news = "approval";
+      } else if (focused) {
+        State.isPinned = true;
         island.alert(questions ? "question" : "approval");
       } else {
         // Another agent holds the view, so the card would yank it away. The badge
         // is the signal instead — but it has to be on screen for that to mean
         // anything, hence the reveal. We just told the relay a human can act.
+        State.isPinned = true;
         State.setPillBadge(CLAUDE_ID, "approval");
         island.reveal();
       }
-      // Coucou answers within 108 s or not at all; after that the terminal has
-      // taken over and the card would be lying.
-      pendingTimeout = window.setTimeout(() => {
-        dropPending(island);
-        State.notify();
-      }, 110_000);
+      pendingTimeouts.set(session.id, window.setTimeout(() => {
+        dropPending(island, session);
+        State.present();
+      }, PENDING_MS));
       break;
     }
 
     default:
       break;
   }
-  State.notify();
+  State.present();
 }
