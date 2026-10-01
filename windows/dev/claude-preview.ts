@@ -6,6 +6,8 @@
 import "../src/style.css";
 import { CLAUDE_ID, State } from "../src/core/state";
 import { handleHook, type HookPayload } from "../src/island/hooks";
+import { handleIntegration } from "../src/island/integrations";
+import type { IntegrationUpdate } from "../src/core/bridge";
 import { Island } from "../src/island/island";
 
 const params = new URLSearchParams(location.search);
@@ -25,8 +27,10 @@ State.isPinned = true;
 const island = new Island(document.getElementById("root")!);
 const hook = (payload: HookPayload) => handleHook(island, { ...base, ...payload });
 // From the console: `hook({ hook_event_name: "Stop" })` plays any event by hand,
-// and `island.launch()` the greeting.
-Object.assign(window, { hook, island });
+// `island.launch()` the greeting, `integration({ id, data, error: null, event: null })`
+// an integration's update, and `State` is the island's own.
+const integration = (update: IntegrationUpdate) => handleIntegration(island, update);
+Object.assign(window, { hook, island, State, integration });
 
 const edit = (file: string, patch: string, created = false) => {
   const lines = patch.split("\n");
