@@ -103,10 +103,18 @@ export function chatPromptHeight(messageCount: number): number {
   return Math.min(300, 240 + messageCount * 40);
 }
 
+/**
+ * A result card that tells an integration's news has one line more than a
+ * session's — the facts under the title. The island grows by that line, so
+ * the card keeps the same room above and below its words.
+ */
+export const NEWS_LINE = 20;
+
 export function islandSize(
   mode: IslandMode,
   view: IslandViewName,
   chatCount = 0,
+  news = false,
 ): { w: number; h: number } {
   switch (mode) {
     case "hidden":
@@ -117,7 +125,8 @@ export function islandSize(
       return { w: COMPACT_W, h: NOTCH_H };
     case "expanded": {
       const h = view === "prompt" ? chatPromptHeight(chatCount) : VIEW_LAYOUTS[view].height;
-      return { w: EXPANDED_W, h };
+      const grown = news && (view === "finished" || view === "error") ? NEWS_LINE : 0;
+      return { w: EXPANDED_W, h: h + grown };
     }
   }
 }
