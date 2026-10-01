@@ -3618,22 +3618,40 @@ button.gh-block:hover {
 }
 
 
-/* Several Claude Code sessions at once: one more tab in the island's bar, with
+/* Several Claude Code sessions at once: where a session is shown, a chip with
    how many there are, that leads to the list of them. */
-.tab.sess-count {
-  width: auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.sess-chip {
+  flex: 0 0 auto;
+  height: 17px;
   padding: 0 8px;
-  font: 600 10.5px var(--font);
+  border: 0;
+  border-radius: 999px;
+  background: var(--gh-plate);
+  color: var(--gh-text);
+  font: 500 10.5px var(--font);
+  white-space: nowrap;
+  cursor: default;
   transition: color 0.3s ease-out, background 0.3s ease-out;
 }
 
-/* One of the sessions behind wants looking at: the tab says so in its colour. */
-.tab.sess-count.calls {
+.sess-chip:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--ink);
+}
+
+/* One of the sessions behind wants looking at: the chip says so in its colour. */
+.sess-chip.calls {
   color: var(--c);
   background: color-mix(in srgb, var(--c) 14%, transparent);
+}
+
+/* In the card's first line the chip sits at the right, before what was written. */
+.who > .sess-chip {
+  margin-left: auto;
+}
+
+.who > .sess-chip + .count {
+  margin-left: 0;
 }
 
 /* The session on show, in the list of sessions. */

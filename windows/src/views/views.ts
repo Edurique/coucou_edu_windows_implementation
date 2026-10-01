@@ -11,7 +11,7 @@ import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
 import { buildGithub, enterGithubPanel, newsFacts } from "./github";
-import { buildSession, sessionName, sessionsCall } from "./session";
+import { buildSession, sessionName, sessionsChip } from "./session";
 import { diffLine, fileKind, plusMinus, readPatch } from "./code";
 import { hasPreview, stepIcon, stepName, stepPreview } from "./step";
 import { COLOR } from "./palette";
@@ -221,27 +221,10 @@ export function buildHeader(actions: ViewActions): ViewHost {
     actions.setView(v);
   }
 
-  // With several Claude Code sessions open: one more tab, with how many, that
-  // leads to the list of them. With the others on the left — the middle of the
-  // bar is where a Mac has its camera, and stays empty.
-  const sessionCount = h("span");
-  const tabSessions = h(
-    "button",
-    {
-      class: "tab sess-count",
-      onclick: () => {
-        actions.blip();
-        actions.openSessions();
-      },
-    },
-    svg(ICONS.stack, 12),
-    sessionCount,
-  );
-
   const el = h(
     "div",
     { id: "header" },
-    h("div", { class: "tabs" }, tabHome, tabChat, tabDrop, tabSessions),
+    h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
     h("div", { class: "header-actions" }, gearBtn, soundBtn),
   );
 
@@ -258,14 +241,6 @@ export function buildHeader(actions: ViewActions): ViewHost {
       gearBtn.append(svg(v === "settings" ? ICONS.gearFill : ICONS.gear, 14));
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
-      const several = State.sessions.length > 1;
-      tabSessions.style.display = several ? "" : "none";
-      sessionCount.textContent = String(State.sessions.length);
-      tabSessions.title = `${State.sessions.length} Claude Code sessions`;
-      // One of the sessions behind wants looking at: the tab takes its colour.
-      const call = several ? sessionsCall() : null;
-      tabSessions.classList.toggle("calls", call != null);
-      tabSessions.style.setProperty("--c", call ?? "currentColor");
       el.style.opacity = v === "confused" ? "0" : "1";
     },
   };
@@ -278,6 +253,11 @@ function buildOverview(actions: ViewActions): ViewHost {
   // What the session is doing: the step, and under it a look at what it did.
   const nowLine = h("div", { class: "now-line" });
   const nowBox = h("div", { class: "now-box" });
+  // With several sessions followed: how many, and the way to the list of them.
+  const sessionsBtn = sessionsChip(() => {
+    actions.blip();
+    actions.openSessions();
+  });
   const sessionBody = h("div", { class: "card-body" }, who, nowLine, nowBox);
   const leftBody = h("div", { class: "left-body" });
   const jump = h(
@@ -397,8 +377,11 @@ function buildOverview(actions: ViewActions): ViewHost {
           h("span", { class: "name", text: session.title ?? task.name, title: session.title ?? "" }),
           h("span", { class: "tool", text: session.title ? task.name : "Claude Code" }),
         );
-        // What the session has written so far: the lines added and removed.
-        const files = State.sessionFiles;
+        sessionsBtn.sync();
+        who.append(sessionsBtn.el);
+        // What the session has written so far: the lines added and removed —
+        // when the chip is not there: the title keeps the room, and the panel has them.
+        const files = State.sessions.length > 1 ? [] : State.sessionFiles;
         if (files.length > 0) {
           const size = plusMinus(files.reduce((n, f) => n + f.additions, 0), files.reduce((n, f) => n + f.deletions, 0));
           size.classList.add("count");

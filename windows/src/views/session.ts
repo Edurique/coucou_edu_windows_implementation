@@ -82,12 +82,25 @@ function standing(session: ClaudeSession): { color: string; words: string } {
 const calls = (session: ClaudeSession) => session.news != null || session.question != null || session.approval != null;
 
 /**
- * What the sessions behind the one on show have to say, as one colour: the
- * colour of the first that wants looking at, or null when none does.
+ * The way to the list of sessions, where a session is shown: a chip that says
+ * how many there are, kept in step by the function it returns. It is there
+ * only with more than one, and takes the colour of a session behind the one
+ * on show that wants looking at.
  */
-export function sessionsCall(): string | null {
-  const calling = State.sessions.find((s) => s.id !== State.frontId && calls(s));
-  return calling ? standing(calling).color : null;
+export function sessionsChip(onOpen: () => void): { el: HTMLElement; sync(): void } {
+  const el = h("button", { class: "sess-chip", onclick: onOpen });
+  return {
+    el,
+    sync() {
+      const count = State.sessions.length;
+      el.style.display = count > 1 ? "" : "none";
+      el.textContent = counted(count, "session");
+      const calling = State.sessions.find((s) => s.id !== State.frontId && calls(s));
+      el.classList.toggle("calls", calling != null);
+      el.style.setProperty("--c", calling ? standing(calling).color : "currentColor");
+      el.title = calling ? `${sessionName(calling)} ${standing(calling).words}` : "Every Claude Code session followed";
+    },
+  };
 }
 
 /** A session in the list of them: where it is at, its name, its project, and what it did last. */
@@ -265,8 +278,13 @@ export function buildSession(actions: ViewActions): ViewHost {
     { class: "gh-icon", title: "Open the session", onclick: () => actions.openTerminal() },
     svg(ICONS.arrowUpRight, 10),
   );
+  // With several sessions followed: the way to the list of them.
+  const sessionsBtn = sessionsChip(() => {
+    actions.blip();
+    go({ kind: "sessions" });
+  });
   const tab = h("div", { class: "gh-tab" }, badge, who);
-  const head = h("div", { class: "gh-head" }, backBtn, tab, aside, h("div", { class: "grow" }), sub, filesBtn, openBtn);
+  const head = h("div", { class: "gh-head" }, backBtn, tab, aside, h("div", { class: "grow" }), sub, sessionsBtn.el, filesBtn, openBtn);
   // The journal, and behind it the changes: one of the two is on screen.
   const journal = h("div", { class: "gh-list sess-journal" });
   const list = h("div", { class: "gh-list" });
@@ -472,6 +490,8 @@ export function buildSession(actions: ViewActions): ViewHost {
       const picked = opened ? (files.find((f) => f.path === opened) ?? null) : null;
       if (screen.kind === "file" && !picked) screen = { kind: "list" };
       const live = screen.kind === "live";
+      sessionsBtn.sync();
+      if (screen.kind === "sessions") sessionsBtn.el.style.display = "none";
       journal.style.display = live ? "" : "none";
       list.style.display = live ? "none" : "";
       if (!live) stopTyping();

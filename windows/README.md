@@ -115,10 +115,11 @@ Claude, there is Claude Code.
 
 Two conversations in the Claude app, one more in a terminal: each is followed on
 its own, and one of them is in front — the one the card, the panel and Mochi
-show. With more than one, the island's bar gets one more tab, with how many
-there are: it opens the list of them — each with its name, its project and where
-it is at: at work, waiting for you, finished — and a click puts one in front.
-The tab takes a colour when a session behind the one on show wants looking at.
+show. With more than one, the session's card and the panel's head say how many
+there are: that chip opens the list of them — each with its name, its project
+and where it is at: at work, waiting for you, finished — and a click puts one in
+front. The chip takes a colour when a session behind the one on show wants
+looking at.
 
 The island stays on the session it shows for as long as that one is at work or
 being looked at. Another one takes its place when the first has nothing going
