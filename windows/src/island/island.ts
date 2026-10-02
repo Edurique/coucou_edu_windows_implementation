@@ -19,6 +19,7 @@ import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
+import { Flock, STACK_BODY, STACK_GAP } from "./flock";
 
 const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
@@ -77,6 +78,14 @@ export class Island {
   private unfolding = false;
   /** The height the island is on its way to. */
   private goalH = 0;
+  /** The views' left edge, from the island's. */
+  private contentX = 0;
+  /** The small Mochis on their way between the stack and their pills, and which way they were last sent. */
+  private flock = new Flock();
+  private flockAsk: "out" | "back" | null = null;
+  /** The stack's corner, in the island. */
+  private stackX = 0;
+  private stackY = 0;
 
   // Rust starts the window at full size so the launch greeting has room.
   private collapsed = false;
@@ -213,6 +222,8 @@ export class Island {
       this.greetingCanvas,
       this.uploadCanvas.el,
       this.contentEl,
+      // Inside the island's shape: one of them out over the desktop would give the island away.
+      this.flock.el,
     );
     this.islandEl = h(
       "div",
@@ -289,6 +300,9 @@ export class Island {
       // nothing while hidden.
       UploadSeq.deactivate();
     }
+    // The small Mochis go with the island: out to their pills, or back.
+    this.flockAsk =
+      prev === "compact" && mode === "expanded" ? "out" : prev === "expanded" && mode === "compact" ? "back" : null;
     this.updateWindowCollapsed();
     this.animateGeometry(modeOrder(mode) < modeOrder(prev));
     State.notify();
@@ -506,11 +520,15 @@ export class Island {
       this.contentH = this.unfolding ? this.goalH : hh;
     }
     this.contentEl.style.height = `${this.contentH}px`;
-    this.contentEl.style.transform = `translateX(${(w - EXPANDED_W) / 2}px)`;
+    this.contentX = (w - EXPANDED_W) / 2;
+    this.contentEl.style.transform = `translateX(${this.contentX}px)`;
     // These follow the island as it resizes, so they belong here rather than in
     // the state-driven DOM sync.
-    this.miniGrid.style.left = `${w - 40 - 14.5}px`;
-    this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
+    const stackHalf = (2 * STACK_BODY + STACK_GAP) / 2;
+    this.stackX = w - 40 - stackHalf;
+    this.stackY = hh / 2 - stackHalf;
+    this.miniGrid.style.left = `${this.stackX}px`;
+    this.miniGrid.style.top = `${this.stackY}px`;
     this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
     this.uploadCanvas.el.style.left = `${(w - EXPANDED_W) / 2}px`;
 
@@ -730,6 +748,7 @@ export class Island {
       this.dirty = false;
       this.syncDom();
     }
+    this.stepFlock(dt);
 
     this.updateBotTargets();
     this.botCx.step(dt);
@@ -772,7 +791,7 @@ export class Island {
       ? settling
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
-        greetingActive || this.engine.busy || UploadSeq.isActive;
+        greetingActive || this.engine.busy || UploadSeq.isActive || this.flock.moving;
 
     if (busy) {
       requestAnimationFrame(this.frame);
@@ -781,6 +800,27 @@ export class Island {
       Sound.idle();
     }
   };
+
+  /**
+   * The small Mochis between the stack and their pills. They are sent off here
+   * rather than where the island changes shape: the pills they go to are only
+   * there once the view has been brought up to date. Only the overview has
+   * pills; any other view keeps the stack fading as it always did.
+   */
+  private stepFlock(dt: number) {
+    if (this.flockAsk) {
+      const out = this.flockAsk === "out";
+      this.flockAsk = null;
+      if (State.view === "overview" && !this.uploadActive) {
+        const pill = (id: string) =>
+          [...this.viewsEl.querySelectorAll<HTMLElement>(".pill")].find((p) => p.dataset.task === id)
+            ?.querySelector<HTMLElement>(".mini") ?? null;
+        this.flock.start(State.otherTasks.slice(0, 4), out, pill, this.contentEl);
+      }
+    }
+    if (this.flock.step(dt, this.stackX, this.stackY, this.contentX)) pruneMiniBots();
+    this.islandEl.classList.toggle("flocking", this.flock.moving);
+  }
 
   private updateBotTargets() {
     const p = botPosition(State.mode, State.view, this.height.value, State.uploadProgress);
@@ -918,7 +958,7 @@ export class Island {
         this.miniGrid.dataset.key = key;
         this.miniGrid.replaceChildren();
         for (const t of others) {
-          this.miniGrid.append(createMiniBot(t, 13));
+          this.miniGrid.append(createMiniBot(t, STACK_BODY));
         }
         pruneMiniBots();
       }
