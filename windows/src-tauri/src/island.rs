@@ -61,6 +61,8 @@ pub struct PollGate {
     pub rect: Mutex<IslandRect>,
     /// Mirrors the window flag so we only call into the OS when it changes.
     ignoring: AtomicBool,
+    /// What the island was last told about an app having the whole display.
+    fullscreen: AtomicBool,
 }
 
 impl PollGate {
@@ -71,6 +73,7 @@ impl PollGate {
             collapsed: AtomicBool::new(true),
             rect: Mutex::new(IslandRect::default()),
             ignoring: AtomicBool::new(false),
+            fullscreen: AtomicBool::new(false),
         }
     }
 
@@ -103,6 +106,24 @@ impl PollGate {
 
 pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(WINDOW_LABEL)
+}
+
+/// Looks whether an app has the whole display, and tells the island when that
+/// changed. Nothing watches for it while the island is hidden: it is looked up
+/// here, right before the island hears anything that could bring it back.
+pub fn note_fullscreen(app: &AppHandle, gate: &PollGate) -> bool {
+    let full = window(app).is_some_and(|win| platform::fullscreen_in_front(&win));
+    if gate.fullscreen.swap(full, Ordering::Relaxed) != full {
+        let _ = app.emit_to(WINDOW_LABEL, "fullscreen", full);
+    }
+    full
+}
+
+/// The same look, for whoever is about to send the island news.
+pub fn before_news(app: &AppHandle) {
+    if let Some(shared) = app.try_state::<crate::Shared>() {
+        note_fullscreen(app, &shared.gate);
+    }
 }
 
 fn monitor_contains(m: &Monitor, x: f64, y: f64) -> bool {
@@ -192,6 +213,14 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
         // moment the island comes back.
         let mut last_screen: Option<(i32, i32, u32, u32, u64)> = None;
         loop {
+            // The wake strip always takes the mouse. The tick that was running
+            // while the window shrank to it may have made it click-through,
+            // and then nothing could wake the island again: the last word on
+            // the flag is said here, once the poll has stopped.
+            if gate.collapsed.load(Ordering::Relaxed) {
+                set_ignore_cursor(&app, false);
+                gate.forget_ignore_state();
+            }
             gate.wait_until_active();
             let mut last = (f64::MIN, f64::MIN);
             let mut ticks: u32 = 0;
@@ -213,6 +242,9 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                             let _ = app.emit_to(WINDOW_LABEL, "screen-changed", ());
                         }
                     }
+                    // Same pace for an app taking the whole display while the
+                    // island is out: it folds away under it.
+                    note_fullscreen(&app, &gate);
                 }
 
                 let Some(win) = window(&app) else { continue };
@@ -225,7 +257,10 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     Ok(s) => (s.width as f64 / scale, s.height as f64 / scale),
                     Err(_) => (PANEL_W, PANEL_H),
                 };
-                if (x - last.0).abs() < 1.0 && (y - last.1).abs() < 1.0 {
+                // A still cursor and a button that did not change: nothing to say.
+                let down = left_button_down();
+                let moved = (x - last.0).abs() >= 1.0 || (y - last.1).abs() >= 1.0;
+                if !moved && down == was_down {
                     continue;
                 }
                 last = (x, y);
@@ -249,10 +284,13 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                 // the mouse, which also makes the drop zone as forgiving as the Mac's.
                 // A press may be the start of a drag: make sure the drop target is
                 // ours before the file arrives.
-                let down = left_button_down();
                 if down && !was_down {
                     let handle = app.clone();
                     let _ = app.run_on_main_thread(move || platform::unblock_webview_drops(&handle));
+                    // A press anywhere else is the user going back to their work.
+                    if !on_island {
+                        let _ = win.emit("outside-press", ());
+                    }
                 }
                 was_down = down;
 
@@ -268,7 +306,9 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     let _ = win.set_ignore_cursor_events(!accept);
                 }
 
-                let _ = win.emit("cursor", CursorPayload { x, y });
+                if moved {
+                    let _ = win.emit("cursor", CursorPayload { x, y });
+                }
             }
         }
     });

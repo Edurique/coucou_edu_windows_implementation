@@ -28,6 +28,10 @@ pub struct Settings {
     /// switched off, and absent from a settings.json written before it existed.
     #[serde(default = "yes")]
     pub announce_songs: bool,
+    /// The island stays away while an app has the whole display, and only a
+    /// request waiting for an answer brings it out. On until switched off.
+    #[serde(default = "yes")]
+    pub hide_in_fullscreen: bool,
 }
 
 fn yes() -> bool {
@@ -57,6 +61,7 @@ impl Default for Settings {
             model: default_model(),
             github_muted: Vec::new(),
             announce_songs: true,
+            hide_in_fullscreen: true,
         }
     }
 }

@@ -30,6 +30,15 @@ const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
 const HIT_MARGIN = 14;
 
+/**
+ * How long the mouse has to rest on the top edge before a hidden island comes
+ * out, in ms: a mouse on its way to a tab or a title bar crosses it faster.
+ */
+const WAKE_DWELL_MS = 400;
+
+/** Views with something being written: a click elsewhere does not fold those. */
+const WRITING_VIEWS: ReadonlySet<IslandViewName> = new Set(["prompt", "mail"]);
+
 /** The three views the drop sequence owns; leaving them stops the engine. */
 const UPLOAD_VIEWS: ReadonlySet<IslandViewName> = new Set(["upload", "uploading", "choose"]);
 
@@ -93,10 +102,35 @@ export class Island {
   private collapsed = false;
   private collapseTimer: number | null = null;
   private wasInIsland = false;
+  private wakeTimer: number | null = null;
+  /** An app has the whole display the island is on. */
+  private fullscreen = false;
 
   /** The cover's light, for a song that is being announced. */
   shineCover() {
     this.cover.shine();
+  }
+
+  /**
+   * True while the island keeps out of the way of an app that has the whole
+   * display: only a request waiting for an answer, or the user asking for the
+   * island, brings it out.
+   */
+  get shy(): boolean {
+    return this.fullscreen && State.settings.hideInFullscreen;
+  }
+
+  /** Rust's word on an app taking the whole display, or giving it back. */
+  setFullscreen(full: boolean) {
+    this.fullscreen = full;
+    if (this.shy && !State.isPinned && !this.uploadActive && this.fsm.state !== "hidden") this.fsm.forceHidden();
+  }
+
+  /** A press of the mouse anywhere but on the island: the user is back at their work. */
+  outsidePress() {
+    if (State.mode !== "expanded" || this.fsm.state !== "home") return;
+    if (State.isPinned || State.fileDragOver || this.uploadActive || WRITING_VIEWS.has(State.view)) return;
+    this.collapse();
   }
 
   /** True while the mouse is on the island: whoever opened it for a moment leaves it open. */
@@ -313,6 +347,11 @@ export class Island {
           this.setMode("hidden");
           break;
         case "petit":
+          // Folding under an app that has the whole display is going away.
+          if (this.shy && from === "home") {
+            this.fsm.forceHidden();
+            return;
+          }
           if (from === "coucou") this.greeting.interrupt();
           else if (from === "hidden") Sound.play("peek");
           this.setMode("compact");
@@ -465,14 +504,20 @@ export class Island {
     this.fsm.forcePetit();
   }
 
-  /** Alert from the hook server: open on this view. Pinned alerts never auto-close. */
-  alert(view: IslandViewName) {
+  /**
+   * Alert from the hook server: open on this view. Pinned alerts never
+   * auto-close. `asked` is the user opening the island themselves: that, and a
+   * request waiting for an answer, are all that unfold it over a full screen.
+   */
+  alert(view: IslandViewName, asked = false) {
+    if (this.shy && !asked && !State.isPinned) return;
     this.fsm.pinned = State.isPinned;
     this.fsm.forceHome();
     this.expand(view);
   }
 
   reveal() {
+    if (this.shy) return;
     this.fsm.reveal();
   }
 
@@ -490,7 +535,7 @@ export class Island {
         // enterZone must run before the island expands, so the sequence is
         // already active by the time the view becomes `upload`.
         UploadSeq.enterZone(State.mouseInIsland.x, State.mouseInIsland.y);
-        this.alert("upload");
+        this.alert("upload", true);
         break;
       }
       case "leave": {
@@ -675,8 +720,10 @@ export class Island {
     // The wake strip is the only thing the OS can hit while the island is hidden.
     this.wakeStrip.addEventListener("mouseenter", () => {
       Sound.resume();
-      if (State.mode === "hidden") this.fsm.mouseEntered();
+      if (State.mode !== "hidden" || this.wakeTimer != null) return;
+      this.wakeTimer = window.setTimeout(() => void this.wake(), WAKE_DWELL_MS);
     });
+    this.wakeStrip.addEventListener("mouseleave", () => this.cancelWake());
 
     this.islandEl.addEventListener("mousedown", (e) => {
       Sound.resume();
@@ -702,6 +749,22 @@ export class Island {
     // Outside Tauri (plain browser) drive the cursor from DOM events so the
     // island can be inspected with `npm run dev`.
     if (!IS_TAURI) this.followPageCursor();
+  }
+
+  private cancelWake() {
+    if (this.wakeTimer != null) window.clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+  }
+
+  /**
+   * The mouse stayed on the top edge: the island comes out, unless an app has
+   * the whole display. Nothing watched for one while the island was hidden,
+   * so Rust is asked now.
+   */
+  private async wake() {
+    this.wakeTimer = null;
+    if (State.settings.hideInFullscreen) this.fullscreen = (await Bridge.fullscreenApp()) ?? false;
+    if (State.mode === "hidden" && !this.shy) this.fsm.mouseEntered();
   }
 
   /**
@@ -803,7 +866,7 @@ export class Island {
     State.stateOverride = "dizzy";
     this.engine.setState("dizzy");
     Sound.play("dizzy");
-    this.alert("confused");
+    this.alert("confused", true);
     if (this.confusedRecovery != null) window.clearTimeout(this.confusedRecovery);
     this.confusedRecovery = window.setTimeout(() => {
       this.confusedRecovery = null;

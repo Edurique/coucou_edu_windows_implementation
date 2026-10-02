@@ -455,7 +455,8 @@ function handleAgent(island: Island, payload: HookPayload, agent: string) {
       ensurePill();
       State.updateTask(agentId, "working");
       State.appendStep(agentId, stepLabel(payload.tool_name ?? "Tool", payload.tool_input ?? {}));
-      reveal();
+      // No reveal: a turn shows itself when it starts and when it ends. Coming
+      // out again at each step would put the island back as fast as it leaves.
       break;
 
     case "PostToolUse":
@@ -602,7 +603,9 @@ export function handleHook(island: Island, payload: HookPayload) {
       const tool = payload.tool_name ?? "Tool";
       startStep(session, tool, payload.tool_input ?? {}, cwd);
       say(session, stepLabel(tool, payload.tool_input ?? {}));
-      surface("overview", false);
+      // Nothing surfaces here: a turn shows itself when it starts and when it
+      // ends. Coming out again at each step would put the island back as fast
+      // as it leaves.
       break;
     }
 

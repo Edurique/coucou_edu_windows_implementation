@@ -281,6 +281,8 @@ export interface Settings {
   githubMuted: string[];
   /** The island unfolds for a moment on each new song Spotify plays. */
   announceSongs: boolean;
+  /** The island stays away while an app has the whole display. */
+  hideInFullscreen: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -297,6 +299,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: "claude-opus-5",
   githubMuted: [],
   announceSongs: true,
+  hideInFullscreen: true,
 };
 
 type Listener = () => void;

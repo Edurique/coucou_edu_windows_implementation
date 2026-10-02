@@ -63,7 +63,7 @@ let announceTimer: number | null = null;
  */
 function announceSong(island: Island) {
   const front = State.focusTask;
-  if (State.mode === "expanded" || State.isPinned || (front && WAITING.has(front.state))) return;
+  if (State.mode === "expanded" || State.isPinned || island.shy || (front && WAITING.has(front.state))) return;
   if (State.focusId !== SPOTIFY_ID && State.focusId && !borrowedFrom.has(SPOTIFY_ID)) borrowedFrom.set(SPOTIFY_ID, State.focusId);
   if (State.focusId !== SPOTIFY_ID) State.setFocus(SPOTIFY_ID);
   island.alert("overview");
@@ -223,7 +223,7 @@ export function handleIntegration(island: Island, update: IntegrationUpdate) {
       const front = State.focusTask;
       let opened = false;
       if (
-        SPEAKS_UP.has(update.id) && State.mode !== "expanded" && State.focusId !== update.id &&
+        SPEAKS_UP.has(update.id) && State.mode !== "expanded" && !island.shy && State.focusId !== update.id &&
         State.focusId && !(front && WAITING.has(front.state))
       ) {
         if (!borrowedFrom.has(update.id)) borrowedFrom.set(update.id, State.focusId);
