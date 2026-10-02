@@ -27,6 +27,8 @@ import { FloatingCover, type CoverPlace } from "./cover";
 import { nowPlaying } from "../views/integrations";
 
 const BOT_OVERHANG = 40;
+/** Mochi's body, as a share of the canvas he is drawn on. */
+const BOT_BODY = 0.6;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
 const HIT_MARGIN = 14;
 
@@ -904,7 +906,7 @@ export class Island {
     }
 
     const coverPlace = this.coverPlace();
-    this.cover.place(coverPlace, dt);
+    this.cover.place(coverPlace, dt, this.mochiPlace());
     this.updateBotTargets(coverPlace != null);
     this.botCx.step(dt);
     this.botCy.step(dt);
@@ -981,11 +983,22 @@ export class Island {
     return box.width > 0 ? { x: box.left - island.left, y: box.top - island.top, size: box.width } : null;
   }
 
+  /**
+   * Where Mochi is drawn in the unfolded island, as a place a cover can start
+   * from: coming from another view, Spotify's cover grows out of him instead
+   * of landing on a card that is still on its way in.
+   */
+  private mochiPlace(): CoverPlace | null {
+    if (State.mode !== "expanded") return null;
+    const size = this.botSize.value * BOT_BODY;
+    return { x: this.botCx.value - size / 2, y: this.botCy.value - size / 2, size };
+  }
+
   private updateBotTargets(covered: boolean) {
     const p = botPosition(State.mode, State.view, this.height.value, State.uploadProgress);
     this.botCx.target = p.cx;
     this.botCy.target = p.cy;
-    this.botSize.target = p.diameter / 0.6;
+    this.botSize.target = p.diameter / BOT_BODY;
 
     const greetingActive = State.mode === "expanded" && State.view === "greeting";
     // The drop canvas draws its own Mochi; two of them would overlap. And the

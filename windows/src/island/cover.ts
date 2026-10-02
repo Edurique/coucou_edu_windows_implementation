@@ -57,10 +57,11 @@ export class FloatingCover {
   }
 
   /**
-   * Puts the cover where it belongs now, or takes it away. Appearing, it is
-   * simply there; already there, it travels.
+   * Puts the cover where it belongs now, or takes it away. Already there, it
+   * travels. Appearing, it is simply there — or, given where Mochi stands
+   * (`from`), it grows out of his place: he is the one it stands in for.
    */
-  place(to: CoverPlace | null, dt: number) {
+  place(to: CoverPlace | null, dt: number, from: CoverPlace | null = null) {
     const on = to != null && this.url != null;
     if (on && to) {
       if (this.shown) {
@@ -71,9 +72,13 @@ export class FloatingCover {
         this.y.step(dt);
         this.size.step(dt);
       } else {
-        this.x.set(to.x);
-        this.y.set(to.y);
-        this.size.set(to.size);
+        const start = from ?? to;
+        this.x.set(start.x);
+        this.y.set(start.y);
+        this.size.set(start.size);
+        this.x.target = to.x;
+        this.y.target = to.y;
+        this.size.target = to.size;
       }
       const side = Math.max(0, this.size.value);
       this.el.style.left = `${this.x.value}px`;
