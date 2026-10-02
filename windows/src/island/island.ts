@@ -765,7 +765,7 @@ export class Island {
    */
   private async wake() {
     this.wakeTimer = null;
-    if (State.settings.hideInFullscreen) this.fullscreen = (await Bridge.fullscreenApp()) ?? false;
+    if (State.settings.hideInFullscreen) this.fullscreen = (await Bridge.fullscreenApp()) ?? this.fullscreen;
     if (State.mode === "hidden" && !this.shy) this.fsm.mouseEntered();
   }
 
