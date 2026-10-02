@@ -169,6 +169,27 @@ body {
   transition: opacity 0.25s ease-in-out;
 }
 
+/* The small Mochis on their way between the stack and their pills (see
+   island/flock.ts). They stand in for the ones at both ends, which stay out
+   of sight until they have landed. */
+#mini-flight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#mini-flight .mini {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+
+#island.flocking #mini-grid,
+#island.flocking .pill .mini {
+  visibility: hidden;
+}
+
 /* A mini Mochi: the slot is the body, the canvas is larger and overflows it so
    hands, badges and particles are not cut off. */
 .mini {

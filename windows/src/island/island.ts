@@ -24,6 +24,7 @@ import { followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 import { FloatingCover, type CoverPlace } from "./cover";
+import { Flock, STACK_BODY, STACK_GAP } from "./flock";
 import { nowPlaying } from "../views/integrations";
 
 const BOT_OVERHANG = 40;
@@ -113,6 +114,12 @@ export class Island {
   private goalH = 0;
   /** The views' left edge, from the island's. */
   private contentX = 0;
+  /** The small Mochis on their way between the stack and their pills, and which way they were last sent. */
+  private flock = new Flock();
+  private flockAsk: "out" | "back" | null = null;
+  /** The stack's corner, in the island. */
+  private stackX = 0;
+  private stackY = 0;
 
   // Rust starts the window at full size so the launch greeting has room.
   private collapsed = false;
@@ -333,6 +340,8 @@ export class Island {
       // Inside the island's shape, unlike Mochi: a cover as large as a card
       // must fold away with the island, not hang under it while it shrinks.
       this.cover.el,
+      // Inside it too: one of them out over the desktop would give the island away.
+      this.flock.el,
     );
     this.islandEl = h(
       "div",
@@ -417,6 +426,9 @@ export class Island {
       // nothing while hidden.
       UploadSeq.deactivate();
     }
+    // The small Mochis go with the island: out to their pills, or back.
+    this.flockAsk =
+      prev === "compact" && mode === "expanded" ? "out" : prev === "expanded" && mode === "compact" ? "back" : null;
     this.updateWindowCollapsed();
     this.animateGeometry(modeOrder(mode) < modeOrder(prev));
     State.notify();
@@ -706,8 +718,11 @@ export class Island {
     this.contentEl.style.transform = `translateX(${this.contentX}px)`;
     // These follow the island as it resizes, so they belong here rather than in
     // the state-driven DOM sync.
-    this.miniGrid.style.left = `${w - 40 - 14.5}px`;
-    this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
+    const stackHalf = (2 * STACK_BODY + STACK_GAP) / 2;
+    this.stackX = w - 40 - stackHalf;
+    this.stackY = hh / 2 - stackHalf;
+    this.miniGrid.style.left = `${this.stackX}px`;
+    this.miniGrid.style.top = `${this.stackY}px`;
     this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
     this.uploadCanvas.el.style.left = `${(w - EXPANDED_W) / 2}px`;
 
@@ -955,6 +970,7 @@ export class Island {
       this.dirty = false;
       this.syncDom();
     }
+    this.stepFlock(dt);
 
     const coverPlace = this.coverPlace();
     this.cover.place(coverPlace, dt, this.mochiPlace(), this.contentX);
@@ -1000,6 +1016,7 @@ export class Island {
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
         greetingActive || this.engine.busy || UploadSeq.isActive || this.tintSettling || this.cover.moving ||
+        this.flock.moving ||
         // A view showing something live keeps its Mochis moving: a run's crew
         // would otherwise freeze the moment the big one came to rest.
         this.viewState != null;
@@ -1011,6 +1028,27 @@ export class Island {
       Sound.idle();
     }
   };
+
+  /**
+   * The small Mochis between the stack and their pills. They are sent off here
+   * rather than where the island changes shape: the pills they go to are only
+   * there once the view has been brought up to date. Only the overview has
+   * pills; any other view keeps the stack fading as it always did.
+   */
+  private stepFlock(dt: number) {
+    if (this.flockAsk) {
+      const out = this.flockAsk === "out";
+      this.flockAsk = null;
+      if (State.view === "overview" && !this.uploadActive) {
+        const pill = (id: string) =>
+          [...this.viewsEl.querySelectorAll<HTMLElement>(".pill")].find((p) => p.dataset.task === id)
+            ?.querySelector<HTMLElement>(".mini") ?? null;
+        this.flock.start(State.otherTasks.slice(0, 4), out, pill, this.contentEl);
+      }
+    }
+    if (this.flock.step(dt, this.stackX, this.stackY, this.contentX)) pruneMiniBots();
+    this.islandEl.classList.toggle("flocking", this.flock.moving);
+  }
 
   /**
    * Where the cover of what Spotify plays goes, with Spotify's pill in front:
@@ -1223,7 +1261,7 @@ export class Island {
         this.miniGrid.dataset.key = key;
         this.miniGrid.replaceChildren();
         for (const t of others) {
-          this.miniGrid.append(createMiniBot(t, 13));
+          this.miniGrid.append(createMiniBot(t, STACK_BODY));
         }
         pruneMiniBots();
       }
