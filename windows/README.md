@@ -53,6 +53,8 @@ your integrations sit in the coloured pills next to Mochi.
 
 ### Out of the way
 
+<img src="screenshots/out-of-the-way.gif" width="760" alt="The island waking on a mouse that rests on the top edge, folding on a click elsewhere, and staying hidden under a full-screen app until Claude asks for something">
+
 There is no notch on a PC: the island sits on tabs and title bars, so it leaves
 as soon as it has nothing to say.
 

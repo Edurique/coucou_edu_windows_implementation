@@ -798,7 +798,10 @@ export class Island {
       x >= rect.x - HIT_MARGIN && x <= rect.x + rect.w + HIT_MARGIN &&
       y >= rect.y - HIT_MARGIN && y <= rect.y + rect.h + HIT_MARGIN;
 
-    if (inIsland && !this.wasInIsland) {
+    // Hidden, only the wake strip brings the island out: where the page reports
+    // the cursor itself, the top edge is "on the island" too, and would wake it
+    // without the rest the strip asks for.
+    if (inIsland && !this.wasInIsland && State.mode !== "hidden") {
       if (this.fsm.state === "coucou") this.greeting.hover();
       this.fsm.mouseEntered();
       this.homeCollapseAt = null;
