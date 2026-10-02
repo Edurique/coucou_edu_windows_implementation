@@ -15,7 +15,7 @@ const CORNER = 0.16;
 const RESPONSE = 0.42;
 const DAMPING = 0.78;
 
-/** Where the cover goes, in the island's own coordinates. */
+/** Where the cover goes: from the views' left edge, and the island's top. */
 export interface CoverPlace {
   x: number;
   y: number;
@@ -60,8 +60,11 @@ export class FloatingCover {
    * Puts the cover where it belongs now, or takes it away. Already there, it
    * travels. Appearing, it is simply there — or, given where Mochi stands
    * (`from`), it grows out of his place: he is the one it stands in for.
+   * Places are told from the views' left edge, which `shift` gives from the
+   * island's: the views stay put on the screen while the island's edge moves,
+   * and a cover told from that edge would chase its place all the way.
    */
-  place(to: CoverPlace | null, dt: number, from: CoverPlace | null = null) {
+  place(to: CoverPlace | null, dt: number, from: CoverPlace | null = null, shift = 0) {
     const on = to != null && this.url != null;
     if (on && to) {
       if (this.shown) {
@@ -81,7 +84,7 @@ export class FloatingCover {
         this.size.target = to.size;
       }
       const side = Math.max(0, this.size.value);
-      this.el.style.left = `${this.x.value}px`;
+      this.el.style.left = `${this.x.value + shift}px`;
       this.el.style.top = `${this.y.value}px`;
       this.el.style.width = `${side}px`;
       this.el.style.height = `${side}px`;

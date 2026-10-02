@@ -5,7 +5,7 @@ import { Tracked, Spring, clamp, mixColor } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import { wipe } from "../core/canvas";
 import {
-  EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
+  COMPACT_W, EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
   islandSize,
   type BotStateName, type IslandMode, type IslandViewName,
@@ -111,6 +111,8 @@ export class Island {
   private unfolding = false;
   /** The height the island is on its way to. */
   private goalH = 0;
+  /** The views' left edge, from the island's. */
+  private contentX = 0;
 
   // Rust starts the window at full size so the launch greeting has room.
   private collapsed = false;
@@ -700,7 +702,8 @@ export class Island {
       this.contentH = this.unfolding ? this.goalH : hh;
     }
     this.contentEl.style.height = `${this.contentH}px`;
-    this.contentEl.style.transform = `translateX(${half - EXPANDED_W / 2}px)`;
+    this.contentX = half - EXPANDED_W / 2;
+    this.contentEl.style.transform = `translateX(${this.contentX}px)`;
     // These follow the island as it resizes, so they belong here rather than in
     // the state-driven DOM sync.
     this.miniGrid.style.left = `${w - 40 - 14.5}px`;
@@ -954,7 +957,7 @@ export class Island {
     }
 
     const coverPlace = this.coverPlace();
-    this.cover.place(coverPlace, dt, this.mochiPlace());
+    this.cover.place(coverPlace, dt, this.mochiPlace(), this.contentX);
     this.updateBotTargets(coverPlace != null);
     this.botCx.step(dt);
     this.botCy.step(dt);
@@ -1021,14 +1024,18 @@ export class Island {
     if (!now?.cover) return null;
     if (State.mode === "compact") {
       const p = botPosition("compact", State.view, this.height.value);
-      return { x: p.cx - p.diameter / 2, y: p.cy - p.diameter / 2, size: p.diameter };
+      // Told from where the views' edge will be once the island is folded,
+      // not from where it is on the way there: a place that moved with the
+      // island's edge is one the cover would chase all the way.
+      const edge = this.halfWidth(COMPACT_W) - EXPANDED_W / 2;
+      return { x: p.cx - p.diameter / 2 - edge, y: p.cy - p.diameter / 2, size: p.diameter };
     }
     if (State.mode !== "expanded" || State.view !== "overview") return null;
     const slot = this.viewsEl.querySelector<HTMLElement>(".media-cover");
     if (!slot?.isConnected) return null;
     const box = slot.getBoundingClientRect();
-    const island = this.islandEl.getBoundingClientRect();
-    return box.width > 0 ? { x: box.left - island.left, y: box.top - island.top, size: box.width } : null;
+    const views = this.contentEl.getBoundingClientRect();
+    return box.width > 0 ? { x: box.left - views.left, y: box.top - views.top, size: box.width } : null;
   }
 
   /**
@@ -1039,7 +1046,7 @@ export class Island {
   private mochiPlace(): CoverPlace | null {
     if (State.mode !== "expanded") return null;
     const size = this.botSize.value * BOT_BODY;
-    return { x: this.botCx.value - size / 2, y: this.botCy.value - size / 2, size };
+    return { x: this.botCx.value - size / 2 - this.contentX, y: this.botCy.value - size / 2, size };
   }
 
   private updateBotTargets(covered: boolean) {
