@@ -142,10 +142,7 @@ const CLAUDE_APP_URL: &str = "claude://";
 /// the interface sends is run.
 #[tauri::command]
 fn open_claude_app() {
-    let _ = Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", CLAUDE_APP_URL])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+    platform::open_url(CLAUDE_APP_URL);
 }
 
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
