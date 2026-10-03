@@ -425,6 +425,8 @@ pub struct Snapshot {
     pub repos: Vec<Repo>,
     /// The year of contributions behind the graph; None if GitHub gave none.
     pub contributions: Option<Contributions>,
+    /// The open pull requests waiting for your review, most recently updated first.
+    pub to_review: Vec<ReviewRequest>,
     /// Unix milliseconds of the last complete refresh, so the panel can say how
     /// old what it shows is when GitHub can't be reached.
     pub fetched_at: u64,
@@ -493,6 +495,24 @@ pub struct Activity {
     pub target: Option<Target>,
 }
 
+/// An open pull request somebody asked you to review.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRequest {
+    /// "owner/name".
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// None for an account that is gone.
+    pub author: Option<String>,
+    pub draft: bool,
+    /// When it last changed, ISO 8601.
+    pub at: String,
+    /// Its sheet in the panel.
+    pub target: Target,
+}
+
 /// Enough for the panel, with room left for the kinds we skip.
 const MAX_ACTIVITY: usize = 20;
 /// The events feed goes back 30 days and 300 events; 50 is plenty once
@@ -520,6 +540,9 @@ struct Cache {
     merged: Option<String>,
     /// The same for the latest pull request somebody else opened.
     opened: Option<String>,
+    /// The pull requests that were waiting for your review at the last look,
+    /// so only one that joins them is news. None until the first refresh.
+    to_review: Option<Vec<(String, u64)>>,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
@@ -638,6 +661,30 @@ fn parse_opened(viewer: &Value) -> Vec<Opened> {
         .collect()
 }
 
+/// The open pull requests your review is asked on. A search rather than a
+/// field of the viewer: GitHub has no other list of them.
+fn parse_to_review(data: &Value) -> Vec<ReviewRequest> {
+    let mut seen = std::collections::HashSet::new();
+    nodes(data, "/toReview/nodes")
+        .iter()
+        .filter_map(|n| {
+            let number = n.get("number")?.as_u64()?;
+            let repo = text(n.pointer("/repository/nameWithOwner"))?;
+            Some(ReviewRequest {
+                number,
+                title: text(n.get("title")).unwrap_or_default(),
+                url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{repo}/pull/{number}")),
+                author: text(n.pointer("/author/login")),
+                draft: flag(n, "isDraft"),
+                at: text(n.get("updatedAt"))?,
+                target: Target::Pull { repo: repo.clone(), number },
+                repo,
+            })
+        })
+        .filter(|pull| seen.insert((pull.repo.clone(), pull.number)))
+        .collect()
+}
+
 /// A piece of news, and what to ask GitHub about to say more of it on the card.
 type News = (IntegrationEvent, Target);
 
@@ -716,6 +763,30 @@ fn came_in(seen: Option<&str>, opened: &[Opened], login: &str) -> Option<News> {
         })),
     };
     Some((event, target))
+}
+
+/// A pull request your review was asked on since the last look: one that was
+/// not among those waiting (`seen`), which is None on the first refresh — it
+/// only learns how things stand. GitHub does not say when the request was
+/// made, so being new to the list is what makes it news.
+fn asked(seen: Option<&[(String, u64)]>, to_review: &[ReviewRequest], muted: &[String]) -> Option<News> {
+    let seen = seen?;
+    let pull = to_review
+        .iter()
+        .find(|p| !muted.contains(&p.repo) && !seen.iter().any(|(repo, number)| *repo == p.repo && *number == p.number))?;
+    let event = IntegrationEvent {
+        success: true,
+        label: format!("Review requested on {}", short_name(&pull.repo)),
+        detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
+        open: Some(json!({
+            "target": pull.target,
+            "label": format!("#{}", pull.number),
+            "url": pull.url,
+            "title": format!("#{} {}", pull.number, pull.title),
+            "says": "review requested",
+        })),
+    };
+    Some((event, pull.target.clone()))
 }
 
 /// What the card says under a pull request somebody opened: where, by whom, how big.
@@ -822,11 +893,12 @@ pub async fn refresh(app: AppHandle) {
     match fetch().await {
         Ok((snapshot, mut merged, mut opened)) => {
             log::line(format!(
-                "github refresh: {} events, {} projects, {} with a build, {} contribution days",
+                "github refresh: {} events, {} projects, {} with a build, {} contribution days, {} to review",
                 snapshot.activity.len(),
                 snapshot.repos.len(),
                 snapshot.repos.iter().filter(|r| r.build.is_some()).count(),
                 snapshot.contributions.as_ref().map_or(0, |c| c.counts.len()),
+                snapshot.to_review.len(),
             ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
             let muted = muted(&app);
@@ -842,8 +914,12 @@ pub async fn refresh(app: AppHandle) {
                     .snapshot
                     .as_ref()
                     .and_then(|before| broke(&before.repos, &snapshot.repos, &muted))
+                    // A pull request opened on your project with your review
+                    // asked is told once, as the review it asks for.
+                    .or_else(|| asked(cache.to_review.as_deref(), &snapshot.to_review, &muted))
                     .or_else(|| went_in(cache.merged.as_deref(), &merged))
                     .or_else(|| came_in(cache.opened.as_deref(), &opened, &snapshot.login));
+                cache.to_review = Some(snapshot.to_review.iter().map(|p| (p.repo.clone(), p.number)).collect());
                 let seen = cache.merged.take().filter(|seen| *seen >= newest_merge);
                 cache.merged = Some(seen.unwrap_or(newest_merge));
                 let seen = cache.opened.take().filter(|seen| *seen >= newest_pull);
@@ -904,6 +980,8 @@ const CONTRIBUTED_REPOS: usize = MAX_REPOS * 2;
 const MERGED_PULLS: usize = 5;
 /// Open pull requests looked at for news, the newest of each project.
 const OPENED_PULLS: usize = 3;
+/// Pull requests waiting for your review that are asked for.
+const REVIEW_PULLS: usize = 10;
 /// How long a project whose runs the token may not read is left alone.
 const REFUSED_FOR: u64 = 3600;
 
@@ -913,7 +991,10 @@ const REFUSED_FOR: u64 = 3600;
 /// contributed to elsewhere — as far as the token can see, which for a
 /// fine-grained token means your own repositories, organisations it was made
 /// for, and public ones — and asks for no more of them than it shows.
-const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!, $opened: Int!) { viewer { login url \
+const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!, $opened: Int!, $review: Int!) { \
+    toReview: search(query: \"is:pr is:open archived:false review-requested:@me sort:updated-desc\", type: ISSUE, first: $review) { \
+    nodes { ... on PullRequest { number title url isDraft updatedAt author { login } repository { nameWithOwner } } } } \
+    viewer { login url \
     contributionsCollection { contributionCalendar { totalContributions \
     weeks { firstDay contributionDays { contributionCount contributionLevel } } } } \
     starred: repositories(ownerAffiliations: OWNER, first: $stars, orderBy: {field: PUSHED_AT, direction: DESC}) { \
@@ -933,7 +1014,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>), GhError> {
     let gh = Gh::from_store()?;
     let sizes = json!({
         "stars": STAR_REPOS, "owned": MAX_REPOS, "contributed": CONTRIBUTED_REPOS,
-        "merged": MERGED_PULLS, "opened": OPENED_PULLS,
+        "merged": MERGED_PULLS, "opened": OPENED_PULLS, "review": REVIEW_PULLS,
     });
     let (data, _) = gh.graphql_with(PROFILE_QUERY, sizes).await?;
     let viewer = data.get("viewer").ok_or(GhError::BadResponse)?;
@@ -958,6 +1039,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>), GhError> {
         total_stars,
         activity,
         repos,
+        to_review: parse_to_review(&data),
         fetched_at: unix_now() * 1000,
     }, merged, opened))
 }
@@ -1801,6 +1883,7 @@ mod tests {
             profile_url: String::new(),
             total_stars: 0,
             activity: Vec::new(),
+            to_review: Vec::new(),
             repos: builds
                 .iter()
                 .map(|(name, build)| Repo {
@@ -1893,6 +1976,37 @@ mod tests {
         assert_eq!(target, Target::Pull { repo: "edu/coucou".into(), number: 7 });
         // Nothing but your own since.
         assert!(came_in(Some("2026-10-01T15:00:00Z"), &opened, "edu").is_none());
+    }
+
+    #[test]
+    fn a_review_asked_is_news_once() {
+        let data = json!({ "toReview": { "nodes": [
+            { "number": 7, "title": "Fix the hook", "url": "https://github.com/ada/tools/pull/7", "isDraft": false,
+              "updatedAt": "2026-10-03T09:00:00Z", "author": { "login": "ada" }, "repository": { "nameWithOwner": "ada/tools" } },
+            { "number": 7, "title": "Fix the hook", "updatedAt": "2026-10-03T09:00:00Z", "repository": { "nameWithOwner": "ada/tools" } },
+            { "number": 3, "title": "Old one", "isDraft": true, "updatedAt": "2026-09-30T09:00:00Z",
+              "author": null, "repository": { "nameWithOwner": "edu/coucou" } },
+            {},
+        ] } });
+        let to_review = parse_to_review(&data);
+        assert_eq!(to_review.len(), 2);
+        assert_eq!(to_review[0].author.as_deref(), Some("ada"));
+        assert_eq!(to_review[1].url, "https://github.com/edu/coucou/pull/3");
+        assert!(to_review[1].draft && to_review[1].author.is_none());
+
+        // The first look only learns how things stand.
+        assert!(asked(None, &to_review, &[]).is_none());
+        let known = vec![("edu/coucou".to_string(), 3)];
+        let (event, target) = asked(Some(&known), &to_review, &[]).unwrap();
+        assert_eq!(event.label, "Review requested on tools");
+        assert_eq!(event.detail.as_deref(), Some("Fix the hook"));
+        assert_eq!(target, Target::Pull { repo: "ada/tools".into(), number: 7 });
+        // Not for a muted project, nor once it is among those waiting.
+        assert!(asked(Some(&known), &to_review, &["ada/tools".to_string()]).is_none());
+        let known = vec![("edu/coucou".to_string(), 3), ("ada/tools".to_string(), 7)];
+        assert!(asked(Some(&known), &to_review, &[]).is_none());
+        // Nothing waiting before, one now: news too.
+        assert!(asked(Some(&[]), &to_review, &[]).is_some());
     }
 
     const NOW: u64 = 1_000_000;

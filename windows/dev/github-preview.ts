@@ -299,6 +299,13 @@ const data: GithubData = {
   // `pushed`: pushes GitHub gave no message for come first, as they often do.
   activity: params.has("empty") ? [] : params.has("pushed") ? [{ ...activity[8], at: minutesAgo(14) }, { ...activity[8], at: minutesAgo(31) }, ...activity] : activity,
   repos: params.has("empty") ? [] : repos,
+  // `review`: two pull requests waiting for your review, above the activity.
+  toReview: params.has("review") || params.get("news") === "review"
+    ? [
+      { repo: "louis/coucou", number: 57, title: "Windows: the GitHub panel", url: "https://github.com", author: "edu", draft: false, at: minutesAgo(6), target: pullTarget("louis/coucou", 57) },
+      { repo: "mochi/notch", number: 31, title: "Fold the island when the mouse leaves", url: "https://github.com", author: "ada", draft: true, at: minutesAgo(190), target: pullTarget("mochi/notch", 31) },
+    ]
+    : [],
   contributions: {
     total: counts.reduce((a, b) => a + b, 0),
     start: new Date(firstSunday).toISOString().slice(0, 10),
@@ -371,11 +378,13 @@ State.integrations.integration_github = {
   loaded: true,
   configured: true,
 };
-// `news=fail` or `news=merge`: what the panel shows when the pill's news comes
+// `news=fail`, `news=review` or `news=merge`: what the panel shows when the pill's news comes
 // in while it is open.
 if (params.has("news")) {
   State.integrations.integration_github.news = params.get("news") === "merge"
     ? { success: true, label: "#12 merged", detail: "GitHub panel for the Windows island", open: { target: pullTarget("mochi/coucou", 12), label: "#12", url: "https://github.com", title: "#12 GitHub panel for the Windows island", facts: [{ kind: "repo", text: "coucou" }, { kind: "by", verb: "merged by", text: "louis" }, { kind: "diff", additions: 1332, deletions: 64 }, { kind: "files", text: "14 files" }] } }
+    : params.get("news") === "review"
+    ? { success: true, label: "Review requested on coucou", detail: "Windows: the GitHub panel", open: { target: pullTarget("louis/coucou", 57), label: "#57", url: "https://github.com", title: "#57 Windows: the GitHub panel", says: "review requested", facts: [{ kind: "repo", text: "coucou" }, { kind: "by", verb: "opened by", text: "edu" }, { kind: "diff", additions: 1332, deletions: 64 }, { kind: "files", text: "14 files" }] } }
     : { success: false, label: "CI failed on coucou", detail: "main", open: { target: { kind: "run", repo: "mochi/coucou", id: 1 }, label: "CI", url: "https://github.com", title: "CI failed on coucou", facts: [{ kind: "step", text: "test \u203a cargo test" }, { kind: "branch", text: "main" }, { kind: "commit", text: "Keep the last snapshot through an error" }, { kind: "by", verb: "by", text: "mochi" }] } };
 }
 // With the news, Mochi's state as the island's handler sets it. `view=pill`

@@ -434,8 +434,23 @@ export interface GithubData {
   repos: GithubRepo[];
   /** The year behind the contribution graph. */
   contributions: GithubContributions | null;
+  /** The open pull requests waiting for your review, most recently updated first. */
+  toReview: GithubReviewRequest[];
   /** Unix ms of the last complete refresh. */
   fetchedAt: number;
+}
+
+export interface GithubReviewRequest {
+  /** "owner/name". */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string | null;
+  draft: boolean;
+  /** When it last changed, ISO 8601. */
+  at: string;
+  target: GithubTarget;
 }
 
 export interface GithubContributions {
