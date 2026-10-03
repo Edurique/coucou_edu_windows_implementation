@@ -4,6 +4,7 @@ import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./l
 import type { EyeShape } from "../mochi/engine";
 import type { IntegrationNews } from "./bridge";
 import { PROVIDERS, PROVIDER_IDS, type ChatProvider } from "./chat";
+import type { PlanUsage } from "./plan";
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -302,6 +303,8 @@ export interface Settings {
   /** Where the local model servers are, once connected; empty until then. */
   ollamaServerUrl: string;
   lmstudioServerUrl: string;
+  /** The Claude plan gauge shows in the island's header. */
+  showPlanInNotch: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -326,6 +329,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lmstudioChatModel: "local-model",
   ollamaServerUrl: "",
   lmstudioServerUrl: "",
+  showPlanInNotch: false,
 };
 
 type Listener = () => void;
@@ -367,6 +371,13 @@ class AppState {
   changes = new Map<string, ChangedFile[]>();
 
   integrations: Record<string, IntegrationInfo> = {};
+
+  /** The Claude plan's limits, as Claude Code last reported them; null until it has. */
+  planUsage: PlanUsage | null = null;
+  /** The status line relay that brings them is in ~/.claude/settings.json. */
+  planRelayInstalled = false;
+  /** The gauge's card is open over the overview's. Shut by leaving the overview, or the pill it was opened on. */
+  showingPlanDetail = false;
 
   lastActivity = performance.now();
 

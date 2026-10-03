@@ -288,6 +288,101 @@ body {
   color: var(--ink);
 }
 
+/* The Claude plan gauge, beside the header's icons: a dot in the colour of how
+   much is used, and the percentage. Lit while its card is open or under the mouse. */
+.header-actions .plan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: -6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--plan) 14%, transparent);
+  background: #0e0f11;
+  font: 600 10px var(--font);
+  color: var(--dim-3);
+  white-space: nowrap;
+  transition: background 0.2s ease-out, border-color 0.2s ease-out, color 0.2s ease-out;
+}
+
+.plan-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--plan);
+}
+
+.header-actions .plan-pill:hover,
+.header-actions .plan-pill.on {
+  background: color-mix(in srgb, var(--plan) 18%, transparent);
+  border-color: color-mix(in srgb, var(--plan) 55%, transparent);
+  color: color-mix(in srgb, var(--plan) 70%, white);
+}
+
+/* Its card, laid over the overview's own while it is open. */
+.plan-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  background: var(--card);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease-in;
+}
+
+.plan-layer.on {
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0.28s ease-out;
+}
+
+.plan-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+}
+
+.plan-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 400 11px var(--font);
+  color: var(--dim-3);
+}
+
+.plan-name {
+  width: 40px;
+}
+
+.plan-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.plan-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.plan-row b {
+  width: 30px;
+  text-align: right;
+  font: 600 11px var(--font);
+  color: #c5c8cd;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-reset {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 #views {
   position: relative;
   flex: 1 1 auto;

@@ -53,6 +53,10 @@ pub struct Settings {
     pub ollama_server_url: String,
     #[serde(default)]
     pub lmstudio_server_url: String,
+    /// The Claude plan gauge shows in the island's header. Off until asked for:
+    /// it needs the status line relay in ~/.claude/settings.json.
+    #[serde(default)]
+    pub show_plan_in_notch: bool,
 }
 
 // The models a provider starts on, as on macOS (ChatProvider.defaultModel).
@@ -107,6 +111,7 @@ impl Default for Settings {
             lmstudio_chat_model: default_lmstudio_model(),
             ollama_server_url: String::new(),
             lmstudio_server_url: String::new(),
+            show_plan_in_notch: false,
         }
     }
 }

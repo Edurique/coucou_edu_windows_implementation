@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { ChatProvider } from "./chat";
+import type { PlanUsage } from "./plan";
 import type { Settings } from "./state";
 
 export const IS_TAURI =
@@ -63,7 +64,9 @@ export const Bridge = {
 
   quit: () => call<void>("quit_app"),
 
-  openSettingsWindow: () => call<void>("open_settings_window"),
+  /** The settings window — on one of its sections ("agents", "chat", "integrations") when one is asked for. */
+  openSettingsWindow: (section?: string) =>
+    section ? call<void>("open_settings_section", { section }) : call<void>("open_settings_window"),
 
   /** Writes to %LOCALAPPDATA%\Coucou\coucou.log, next to the Rust lines. */
   log: (message: string) => call<void>("log_line", { message }),
@@ -78,6 +81,16 @@ export const Bridge = {
    */
   hooksApply: (install: boolean, fingerprint: string) =>
     callOrThrow<string>("hooks_apply", { install, fingerprint }),
+
+  // ── Claude plan usage ─────────────────────────────────────────────────────
+  /** The limits Claude Code last reported, for an island that just loaded. */
+  planUsage: () => call<PlanUsage | null>("plan_usage"),
+  planRelayStatus: () => call<PlanRelayStatus>("plan_relay_status"),
+  /** The diff of the status line going in or out, to show before anything is written. */
+  planRelayPreview: (install: boolean) => callOrThrow<HookPreview>("plan_relay_preview", { install }),
+  /** Writes ~/.claude/settings.json — after an explicit click, on the file the preview was made from. */
+  planRelayApply: (install: boolean, fingerprint: string) =>
+    callOrThrow<string>("plan_relay_apply", { install, fingerprint }),
 
   approvalDecision: (requestId: string, decision: "allow" | "deny" | "skip") =>
     call<void>("approval_decision", { requestId, decision }),
@@ -546,6 +559,10 @@ export interface HookStatus {
   settingsPath: string;
   hookPath: string;
   hookReady: boolean;
+}
+
+export interface PlanRelayStatus {
+  installed: boolean;
 }
 
 export interface HookPreview {

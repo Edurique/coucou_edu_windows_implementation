@@ -4,6 +4,7 @@ import "./style.css";
 import { Bridge, IS_TAURI, onEvent } from "./core/bridge";
 import { Sound } from "./core/sound";
 import { State, type Settings } from "./core/state";
+import type { PlanUsage } from "./core/plan";
 import { Island } from "./island/island";
 import { registerHookHandlers } from "./island/hooks";
 import { registerIntegrationHandlers, refreshConfigured } from "./island/integrations";
@@ -65,6 +66,19 @@ async function main() {
 
   // A key saved or removed in the settings window.
   await onEvent<null>("secrets-changed", () => void refreshConfigured());
+
+  // The Claude plan gauge: what was last heard, then each new figure as Claude
+  // Code's status line reports it. Figures only — nothing opens for them.
+  State.planUsage = (await Bridge.planUsage()) ?? null;
+  State.planRelayInstalled = (await Bridge.planRelayStatus())?.installed ?? false;
+  await onEvent<PlanUsage>("plan-usage", (usage) => {
+    State.planUsage = usage;
+    State.notify();
+  });
+  await onEvent<boolean>("plan-relay-changed", (installed) => {
+    State.planRelayInstalled = installed;
+    State.notify();
+  });
 
   registerHookHandlers(island);
   registerIntegrationHandlers(island);

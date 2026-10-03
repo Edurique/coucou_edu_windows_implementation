@@ -55,7 +55,7 @@ const OPEN_URLS: Record<string, string> = {
   integration_calcom: "https://app.cal.com/bookings",
 };
 
-function idleCard(task: AgentTask, openSettings: () => void, chatWith: (provider: ChatProvider) => void): HTMLElement {
+function idleCard(task: AgentTask, openSettings: (section: string) => void, chatWith: (provider: ChatProvider) => void): HTMLElement {
   const info = State.integrations[task.id];
   const configured = info?.configured ?? false;
   const error = info?.error ?? null;
@@ -118,8 +118,10 @@ function idleCard(task: AgentTask, openSettings: () => void, chatWith: (provider
       }),
     );
   } else if (!configured) {
+    // To the section of the settings window that has what this pill is missing.
+    const section = ai ? "chat" : task.id === "integration_claude" ? "agents" : "integrations";
     actions.append(
-      h("button", { class: "link-btn", style: "color:#8e939c", text: "Settings…", onclick: openSettings }),
+      h("button", { class: "link-btn", style: "color:#8e939c", text: "Settings…", onclick: () => openSettings(section) }),
     );
   }
 
@@ -647,7 +649,8 @@ export interface IntegrationCardHooks {
   detailOpen: boolean;
   openDetail(): void;
   closeDetail(): void;
-  openSettings(): void;
+  /** The settings window, on the section ("agents", "chat", "integrations") that has what is missing. */
+  openSettings(section: string): void;
   /** Into the chat, talking to this provider. */
   chatWith(provider: ChatProvider): void;
   /** A view of its own, for the pills that outgrew the card (GitHub) — on a sheet, or on its lists. */

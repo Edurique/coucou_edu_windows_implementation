@@ -193,6 +193,14 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         return;
     }
 
+    // The plan's limits from Claude Code's status line: figures for the gauge,
+    // nothing to show, nothing to wake the island for.
+    if payload.get("coucou_kind").and_then(Value::as_str) == Some(crate::plan::KIND) {
+        crate::plan::receive(&app, &payload);
+        pipe.finish();
+        return;
+    }
+
     let event = payload
         .get("hook_event_name")
         .and_then(Value::as_str)

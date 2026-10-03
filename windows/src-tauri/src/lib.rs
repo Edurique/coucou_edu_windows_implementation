@@ -12,6 +12,7 @@ mod local_chat;
 mod log;
 mod media;
 mod pipe;
+mod plan;
 mod platform;
 mod providers;
 mod secrets;
@@ -28,7 +29,7 @@ use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 use claude::{Chat, ChatContext, ChatReply};
 use files::DroppedFile;
-use hooks::{HookPreview, HookStatus};
+use hooks::{HookPreview, HookStatus, PlanRelayStatus};
 use island::{PollGate, ScreenInfo};
 use pipe::Pending;
 use providers::Provider;
@@ -235,6 +236,34 @@ fn hooks_apply(
     Ok(backup)
 }
 
+// ── Claude plan usage ─────────────────────────────────────────────────────────
+
+/// The last limits Claude Code reported, for an island that just loaded.
+#[tauri::command]
+fn plan_usage() -> Option<plan::PlanUsage> {
+    plan::last()
+}
+
+#[tauri::command]
+fn plan_relay_status() -> PlanRelayStatus {
+    hooks::plan_relay_status()
+}
+
+/// The diff of the status line going in or out, to look at before anything is written.
+#[tauri::command]
+fn plan_relay_preview(install: bool) -> Result<HookPreview, String> {
+    hooks::plan_relay_preview(install)
+}
+
+/// Only ever called from an explicit click in the settings window, on the
+/// settings.json the preview was made from.
+#[tauri::command]
+fn plan_relay_apply(app: AppHandle, install: bool, fingerprint: String) -> Result<String, String> {
+    let backup = hooks::plan_relay_write(install, &fingerprint)?;
+    let _ = app.emit_to(island::WINDOW_LABEL, "plan-relay-changed", install);
+    Ok(backup)
+}
+
 #[tauri::command]
 fn approval_decision(app: AppHandle, request_id: String, decision: String) {
     pipe::answer(&app, &request_id, &decision);
@@ -385,6 +414,14 @@ async fn media_key(action: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || media::press(&action)).await.map_err(|e| e.to_string())?
 }
 
+/// Opens the settings window on one of its sections: "agents", "chat",
+/// "integrations". The island sends the user where what they miss is set up.
+#[tauri::command]
+fn open_settings_section(app: AppHandle, section: String) {
+    show_settings_window(&app);
+    let _ = app.emit_to("settings", "settings-section", section);
+}
+
 /// Lets the island write to the same log as the Rust side.
 #[tauri::command]
 fn log_line(message: String) {
@@ -421,8 +458,8 @@ fn create_settings_window(app: &AppHandle) {
     match WebviewWindowBuilder::new(app, "settings", url)
         .additional_browser_args(BROWSER_ARGS)
         .title("Settings — Coucou")
-        .inner_size(560.0, 680.0)
-        .min_inner_size(460.0, 480.0)
+        .inner_size(780.0, 620.0)
+        .min_inner_size(640.0, 460.0)
         .resizable(true)
         .visible(false)
         .center()
@@ -488,6 +525,10 @@ pub fn run() {
             hooks_status,
             hooks_preview,
             hooks_apply,
+            plan_usage,
+            plan_relay_status,
+            plan_relay_preview,
+            plan_relay_apply,
             approval_decision,
             approval_ack,
             approval_decline,
@@ -509,6 +550,7 @@ pub fn run() {
             media_key,
             open_n8n,
             open_settings_window,
+            open_settings_section,
             set_paused,
         ])
         .setup(move |app| {

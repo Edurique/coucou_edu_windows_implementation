@@ -292,7 +292,7 @@ export class Island {
         void Bridge.saveSettings(State.settings);
         State.notify();
       },
-      openSettingsWindow: () => void Bridge.openSettingsWindow(),
+      openSettingsWindow: (section) => void Bridge.openSettingsWindow(section),
       blip: () => Sound.play("blip"),
       emote: (e) => this.engine.triggerEmote(e),
       tintMochi: (color) => {

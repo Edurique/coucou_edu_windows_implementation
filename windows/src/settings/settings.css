@@ -11,6 +11,7 @@
   --dim: #9398a1;
   --dim-2: #6b7079;
   --bg: #0b0c0e;
+  --side: #101114;
   --card: #141518;
   --hairline: rgba(255, 255, 255, 0.07);
   --green: #22c55e;
@@ -29,27 +30,200 @@ body.settings-window {
   color: var(--ink);
   font: 400 13px/1.45 var(--font);
   -webkit-font-smoothing: antialiased;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
+/* A sidebar of sections and the one that is picked, as on macOS. */
 #settings-root {
-  padding: 22px 24px 32px;
+  height: 100%;
+  display: flex;
+}
+
+aside {
+  flex: 0 0 200px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  max-width: 720px;
-  margin: 0 auto;
+  padding: 16px 10px 14px;
+  background: var(--side);
+  border-right: 1px solid var(--hairline);
+}
+
+aside .app {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 8px 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+aside .app b {
+  font: 600 13px var(--font);
+}
+
+aside .app span {
+  font: 400 11px var(--font);
+  color: var(--dim-2);
+}
+
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A section, by its name and its icon on a tile of its own colour. */
+button.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: transparent;
+  font: 400 13px var(--font);
+  text-align: left;
+}
+
+button.nav-row:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+button.nav-row:active:not(:disabled) {
+  transform: none;
+}
+
+button.nav-row.on {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  flex: 0 0 auto;
+}
+
+.footnote {
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--dim-2);
+}
+
+main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 h1 {
-  font: 600 17px var(--font);
+  padding: 20px 20px 12px;
+  font: 600 20px var(--font);
   letter-spacing: -0.01em;
 }
 
-h1 .version {
+.detail-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  scrollbar-width: thin;
+}
+
+/* What the last action did, at the foot of the window. */
+.status-line {
+  display: none;
+  padding: 8px 20px;
+  border-top: 1px solid var(--hairline);
   font: 400 12px var(--font);
-  color: var(--dim-2);
-  margin-left: 8px;
+  color: var(--dim);
+}
+
+.status-line.on {
+  display: block;
+}
+
+.status-line.err {
+  color: #ff8d97;
+}
+
+hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stack.tight {
+  gap: 6px;
+}
+
+.stack.wide {
+  gap: 16px;
+}
+
+.row.tight {
+  gap: 8px;
+}
+
+.row b {
+  font: 600 12.5px var(--font);
+}
+
+.figure {
+  width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+.connected {
+  font: 400 10.5px var(--font);
+  color: var(--green);
+}
+
+/* Active pills: one line a pill, by what they are. */
+.pill-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.pill-category {
+  font: 600 11px var(--font);
+  color: var(--dim);
+}
+
+.pill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.pill-row .dot {
+  width: 10px;
+  height: 10px;
+}
+
+.pill-row.off {
+  color: var(--dim);
+}
+
+.hint.full {
+  color: var(--amber);
 }
 
 section {

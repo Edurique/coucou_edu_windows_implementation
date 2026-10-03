@@ -271,12 +271,17 @@ pub fn preview(install: bool) -> Result<HookPreview, String> {
 }
 
 /// Writes the merged (or cleaned) settings after taking a dated backup.
+pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
+    write_settings(fingerprint, |current| if install { merged(current) } else { without_ours(current) })
+}
+
+/// Writes what `change` makes of the current settings, after a dated backup.
 ///
 /// `fingerprint` is the one the preview was computed from. If the file changed
 /// in between — another tool, another window, the user's own editor — we stop
 /// and make them look at a fresh diff, because the only thing worse than not
 /// installing the hooks is silently reverting somebody else's edit.
-pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
+fn write_settings(fingerprint: &str, change: impl FnOnce(&Value) -> Value) -> Result<String, String> {
     let path = settings_path();
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -296,7 +301,7 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
         std::fs::copy(&path, &backup).map_err(|e| format!("backup failed: {e}"))?;
     }
 
-    let next = if install { merged(&current) } else { without_ours(&current) };
+    let next = change(&current);
     let mut text = pretty(&next);
     text.push('\n');
 
@@ -317,6 +322,115 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
         return Err(format!("write failed: {err}"));
     }
     Ok(backup.to_string_lossy().to_string())
+}
+
+// ── The plan usage relay: Claude Code's status line ───────────────────────────
+//
+// Claude Code hands its status line command the plan's rate limits after each
+// reply. Coucou's relay takes that place, forwards the limits, and runs the
+// status line that was there before so it still shows. Written under the same
+// rule as the hooks: preview, backup, then write, and only what was reviewed.
+
+/// The flag that makes coucou-hook a status line.
+const STATUSLINE_FLAG: &str = "--statusline";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanRelayStatus {
+    pub installed: bool,
+}
+
+/// The status line the user had before ours, kept beside the relay — which
+/// reads it there to run theirs — and put back on uninstall.
+pub fn previous_statusline_path() -> PathBuf {
+    settings::hook_exe_path().with_file_name("statusline-previous.json")
+}
+
+fn statusline_command() -> String {
+    hook_command(STATUSLINE_FLAG)
+}
+
+fn statusline_is_ours(settings: &Value) -> bool {
+    settings
+        .get("statusLine")
+        .and_then(|sl| sl.get("command"))
+        .and_then(Value::as_str)
+        .map(|c| c.contains(MARKER))
+        .unwrap_or(false)
+}
+
+/// The settings with our status line in, and the one it takes the place of —
+/// to keep, so it can go on running and be put back.
+fn with_statusline(existing: &Value) -> (Value, Option<Value>) {
+    let mut root = existing.as_object().cloned().unwrap_or_default();
+    let command = Value::String(statusline_command());
+    let (next, replaced) = match root.get("statusLine").and_then(Value::as_object) {
+        // Theirs, or ours from an older path: the object is kept, its padding
+        // and refresh interval with it, and only the command changes.
+        Some(current) => {
+            let ours = statusline_is_ours(existing);
+            let mut updated = current.clone();
+            updated.insert("command".into(), command);
+            (Value::Object(updated), (!ours).then(|| Value::Object(current.clone())))
+        }
+        None => (json!({ "type": "command", "command": command }), None),
+    };
+    root.insert("statusLine".into(), next);
+    (Value::Object(root), replaced)
+}
+
+/// The settings with our status line out: theirs back if they had one, none
+/// otherwise. A status line that is not ours is left as it is.
+fn without_statusline(existing: &Value, previous: Option<Value>) -> Value {
+    let mut root = existing.as_object().cloned().unwrap_or_default();
+    if statusline_is_ours(existing) {
+        match previous.filter(Value::is_object) {
+            Some(theirs) => root.insert("statusLine".into(), theirs),
+            None => root.remove("statusLine"),
+        };
+    }
+    Value::Object(root)
+}
+
+fn read_previous_statusline() -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(previous_statusline_path()).ok()?).ok()
+}
+
+pub fn plan_relay_status() -> PlanRelayStatus {
+    PlanRelayStatus { installed: statusline_is_ours(&read_settings_lossy()) }
+}
+
+pub fn plan_relay_preview(install: bool) -> Result<HookPreview, String> {
+    let current = read_settings()?;
+    let next = if install { with_statusline(&current).0 } else { without_statusline(&current, read_previous_statusline()) };
+    Ok(HookPreview {
+        diff: unified_diff(&pretty(&current), &pretty(&next)),
+        backup: backup_path().to_string_lossy().to_string(),
+        settings_path: settings_path().to_string_lossy().to_string(),
+        fingerprint: current_fingerprint(),
+    })
+}
+
+/// Writes the status line in or out. The user's own is kept aside, or dropped
+/// once put back, only after settings.json was written.
+pub fn plan_relay_write(install: bool, fingerprint: &str) -> Result<String, String> {
+    let mut replaced: Option<Value> = None;
+    let backup = write_settings(fingerprint, |current| {
+        if install {
+            let (next, theirs) = with_statusline(current);
+            replaced = theirs;
+            next
+        } else {
+            without_statusline(current, read_previous_statusline())
+        }
+    })?;
+    let kept = previous_statusline_path();
+    if !install {
+        let _ = std::fs::remove_file(&kept);
+    } else if let Some(theirs) = replaced {
+        let _ = std::fs::write(&kept, pretty(&theirs));
+    }
+    Ok(backup)
 }
 
 /// Writes `bytes` to `temp`, which is about to replace `original`.
@@ -572,6 +686,41 @@ mod tests {
         // And removing ours puts it back exactly as it was.
         let cleaned = without_ours(&after);
         assert_eq!(cleaned, existing);
+    }
+
+    #[test]
+    fn our_status_line_takes_the_place_of_theirs_and_gives_it_back() {
+        let existing = serde_json::json!({
+            "model": "claude-opus-5",
+            "statusLine": { "type": "command", "command": "my-line.sh", "padding": 2 }
+        });
+        let (after, replaced) = with_statusline(&existing);
+        assert!(statusline_is_ours(&after));
+        assert_eq!(after["statusLine"]["padding"], 2, "their padding stays");
+        assert_eq!(after["model"], "claude-opus-5");
+        assert_eq!(replaced, Some(existing["statusLine"].clone()));
+
+        // Installing again over ours keeps nothing aside: there is nothing of theirs there.
+        let (again, replaced_again) = with_statusline(&after);
+        assert_eq!(again, after);
+        assert_eq!(replaced_again, None);
+
+        assert_eq!(without_statusline(&after, replaced), existing);
+    }
+
+    #[test]
+    fn with_no_status_line_before_ours_leaves_none_behind() {
+        let existing = serde_json::json!({ "theme": "dark" });
+        let (after, replaced) = with_statusline(&existing);
+        assert!(statusline_is_ours(&after));
+        assert_eq!(replaced, None);
+        assert_eq!(without_statusline(&after, None), existing);
+    }
+
+    #[test]
+    fn a_status_line_that_is_not_ours_is_left_alone_on_uninstall() {
+        let existing = serde_json::json!({ "statusLine": { "type": "command", "command": "my-line.sh" } });
+        assert_eq!(without_statusline(&existing, None), existing);
     }
 
     #[test]

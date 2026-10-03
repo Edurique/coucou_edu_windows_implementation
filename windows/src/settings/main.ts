@@ -1,14 +1,18 @@
-// Settings window — the place where anything that writes to disk is confirmed.
-// Stage 2 covers the Claude Code hooks and the general preferences; API keys and
-// integrations land here too in a later stage.
+// Settings window — a sidebar of sections and the one that is picked, laid out
+// like SettingsView.swift: General, Active pills, Agents, Chat, Integrations.
+// Anything that writes outside Coucou's own files is confirmed here first.
 
 import "./settings.css";
-import { Bridge, onEvent, type GithubAccount, type HookStatus } from "../core/bridge";
-import { DEFAULT_SETTINGS, type Settings } from "../core/state";
-import { h, clear } from "../views/dom";
+import { Bridge, onEvent, type GithubAccount, type HookStatus, type PlanRelayStatus } from "../core/bridge";
+import { PROVIDERS, PROVIDER_IDS, serverUrl, type ChatProvider } from "../core/chat";
+import { DEFAULT_SETTINGS, INTEGRATION_AGENTS, CLAUDE_ID, type Settings } from "../core/state";
+import { h, svg, clear } from "../views/dom";
+import { ICONS } from "../views/icons";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let version = "";
+/** Which keys are in the keychain, by name. Never their values. */
+const present: Record<string, boolean> = {};
 
 const root = document.getElementById("settings-root")!;
 
@@ -35,6 +39,10 @@ function statusDot(ok: boolean): HTMLElement {
   return h("i", { class: "dot", style: `background:${statusColor(ok)}` });
 }
 
+function colorDot(color: string): HTMLElement {
+  return h("i", { class: "dot", style: `background:${color}` });
+}
+
 function renderDiff(text: string): HTMLElement {
   const box = h("div", { class: "diff" });
   for (const line of text.split("\n")) {
@@ -44,28 +52,245 @@ function renderDiff(text: string): HTMLElement {
   return box;
 }
 
-// ── Claude Code section ───────────────────────────────────────────────────────
+/** A titled box of a section, like a GroupBox. */
+function group(title: string | null, ...children: (Node | null)[]): HTMLElement {
+  return h("section", {}, title ? h("h2", {}, h("span", { text: title })) : null, ...children);
+}
 
-function claudeSection(status: HookStatus): HTMLElement {
-  const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
-  const section = h(
-    "section",
-    {},
-    h("h2", {}, statusDot(status.installed), h("span", { text: "Claude Code" })),
-    body,
+const cleanError = (err: unknown) => String(err).replace(/^Error:\s*/, "");
+
+/** The line at the bottom of the window: what the last action did. */
+const statusLine = h("div", { class: "status-line" });
+
+function say(message: string) {
+  statusLine.textContent = message;
+  statusLine.classList.toggle("err", message.startsWith("❌"));
+  statusLine.classList.toggle("on", message !== "");
+}
+
+// ── A key, kept in the keychain ───────────────────────────────────────────────
+
+/**
+ * A field for a key and its Save button. The value goes to the keychain and
+ * never comes back: the field only ever says whether one is stored.
+ */
+function keyField(key: string, placeholder: string, saved: string, opts: { secret?: boolean; after?: () => void } = {}): HTMLElement {
+  const secret = opts.secret ?? true;
+  const stored = () => (present[key] ? "••••••••••••  (stored)" : placeholder);
+  const field = h("input", {
+    type: secret ? "password" : "text", placeholder: stored(), autocomplete: "off", spellcheck: "false",
+    style: "flex:1 1 auto;min-width:0",
+  }) as HTMLInputElement;
+  const dot = statusDot(present[key] ?? false);
+  const remove = h("button", { class: "danger", text: "Remove" });
+  const show = () => {
+    field.placeholder = stored();
+    dot.style.background = statusColor(present[key] ?? false);
+    remove.style.display = present[key] ? "" : "none";
+  };
+  const saveBtn = h("button", { class: "primary", text: "Save" });
+  saveBtn.addEventListener("click", async () => {
+    const value = field.value.trim();
+    if (!value) return;
+    try {
+      await Bridge.secretSet(key, value);
+      present[key] = true;
+      field.value = "";
+      show();
+      say(saved);
+      opts.after?.();
+    } catch (err) {
+      say(`❌ Could not save: ${cleanError(err)}`);
+    }
+  });
+  remove.addEventListener("click", async () => {
+    try {
+      await Bridge.secretClear(key);
+      present[key] = false;
+      show();
+      say("Key removed.");
+      opts.after?.();
+    } catch (err) {
+      say(`❌ Could not remove: ${cleanError(err)}`);
+    }
+  });
+  show();
+  return h("div", { class: "row" }, field, saveBtn, remove, dot);
+}
+
+// ── General ───────────────────────────────────────────────────────────────────
+
+/** The volume slider's range, as the island's own sound engine has it. */
+const VOLUME_MAX = 0.2;
+
+function generalSection(): HTMLElement[] {
+  const percent = h("span", { class: "figure" });
+  const showPercent = () => (percent.textContent = `${Math.round((settings.soundVolume / VOLUME_MAX) * 100)} %`);
+  const volume = h("input", {
+    type: "range", min: "0", max: String(VOLUME_MAX), step: "0.005", value: String(settings.soundVolume),
+    style: "flex:1 1 auto",
+  }) as HTMLInputElement;
+  volume.disabled = !settings.soundEnabled;
+  volume.addEventListener("input", () => {
+    settings.soundVolume = Number(volume.value);
+    showPercent();
+    void save();
+  });
+  showPercent();
+
+  const autoClose = h("input", {
+    type: "number", min: "5", max: "120", step: "1", value: String(Math.round(settings.autoCloseInterval)), style: "width:64px",
+  }) as HTMLInputElement;
+  autoClose.addEventListener("change", () => {
+    settings.autoCloseInterval = Math.max(5, Math.min(120, Number(autoClose.value) || 15));
+    autoClose.value = String(settings.autoCloseInterval);
+    void save();
+  });
+
+  const screen = h("select", {}) as HTMLSelectElement;
+  screen.append(
+    h("option", { value: "primary", text: "Main display" }),
+    h("option", { value: "cursor", text: "Display under the cursor" }),
   );
+  screen.value = settings.screen;
+  screen.addEventListener("change", () => {
+    settings.screen = screen.value as Settings["screen"];
+    void save();
+  });
+
+  return [
+    group(
+      "Sound",
+      h("div", { class: "row" },
+        toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; volume.disabled = !v; void save(); }),
+        h("span", { text: "Enable sounds" }),
+      ),
+      h("div", { class: "row" }, h("label", { style: "min-width:56px", text: "Volume" }), volume, percent),
+    ),
+    group(
+      "Behavior",
+      h("div", { class: "row" }, h("span", { text: "Close after" }), autoClose, h("span", { text: "s inactive" })),
+      h("div", { class: "row" }, h("label", { text: "Island lives on" }), screen),
+      h("div", { class: "row" },
+        toggle(settings.hideInFullscreen, (v) => { settings.hideInFullscreen = v; void save(); }),
+        h("span", { text: "Hide in full screen" }),
+        h("span", { class: "hint", text: "only a request from Claude brings the island out" }),
+      ),
+    ),
+    group(
+      "Startup",
+      h("div", { class: "row" },
+        toggle(settings.autostart, (v) => { settings.autostart = v; void save(); }),
+        h("span", { text: "Launch at startup" }),
+      ),
+    ),
+  ];
+}
+
+// ── Active pills ──────────────────────────────────────────────────────────────
+
+const MAX_ACTIVE = 4;
+
+/** The pills, by what they are — the categories of PillCatalog.swift. */
+const PILL_CATEGORIES: { title: string; ids: string[] }[] = [
+  { title: "Where you code", ids: [CLAUDE_ID] },
+  { title: "AI for the chat", ids: PROVIDER_IDS.map((id) => PROVIDERS[id].pill) },
+  {
+    title: "Services",
+    ids: [
+      "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
+      "integration_notion", "integration_calcom", "integration_stripe", "integration_spotify",
+    ],
+  },
+];
+
+/** The key a service's pill cannot do without. */
+const SERVICE_KEYS: Record<string, string> = {
+  integration_resend: "resend-api-key", integration_n8n: "n8n-api-key", integration_vercel: "vercel-token",
+  integration_github: "github-token", integration_notion: "notion-api-key", integration_calcom: "calcom-api-key",
+  integration_stripe: "stripe-api-key",
+};
+
+/** What a pill still needs before it has anything to show, or null. */
+function pillHint(id: string): string | null {
+  const provider = PROVIDER_IDS.find((p) => PROVIDERS[p].pill === id);
+  if (provider) {
+    const { secret } = PROVIDERS[provider];
+    if (!secret) return serverUrl(settings, provider) === "" ? "Not connected" : null;
+    return present[secret] ? null : "Key not configured";
+  }
+  const key = SERVICE_KEYS[id];
+  return key && !present[key] ? "Key not configured" : null;
+}
+
+function activePillsSection(): HTMLElement[] {
+  const slots = h("div", { class: "hint" });
+  const rows = h("div", { class: "pill-rows" });
+
+  function draw() {
+    const used = settings.activeIntegrations.length;
+    slots.textContent = `${used}/${MAX_ACTIVE} slots used`;
+    slots.classList.toggle("full", used >= MAX_ACTIVE);
+    clear(rows);
+    for (const category of PILL_CATEGORIES) {
+      rows.append(h("hr", {}), h("div", { class: "pill-category", text: category.title }));
+      for (const id of category.ids) {
+        const def = INTEGRATION_AGENTS.find((t) => t.id === id);
+        if (!def) continue;
+        const main = id === CLAUDE_ID;
+        const on = settings.activeIntegrations.includes(id);
+        const atMax = used >= MAX_ACTIVE && !on && !main;
+        const hint = main ? null : pillHint(id);
+        const sw = h("button", { class: on ? "switch on" : "switch" });
+        sw.disabled = atMax;
+        sw.addEventListener("click", () => {
+          settings.activeIntegrations = on
+            ? settings.activeIntegrations.filter((x) => x !== id)
+            : [...settings.activeIntegrations, id];
+          void save();
+          draw();
+        });
+        rows.append(
+          h("div", { class: atMax ? "pill-row off" : "pill-row" },
+            colorDot(def.color),
+            h("span", { text: def.name }),
+            h("span", { class: "spacer" }),
+            main ? h("span", { class: "hint", text: "Main" }) : hint ? h("span", { class: "hint", text: hint }) : null,
+            main ? null : sw,
+          ),
+        );
+      }
+    }
+  }
+
+  draw();
+  return [
+    group(
+      null,
+      h("div", { class: "hint", text: "Choose the tools you use. Coucou only shows what you declare here." }),
+      slots,
+      rows,
+    ),
+  ];
+}
+
+// ── Agents: the Claude Code hooks, and the plan usage relay ───────────────────
+
+function hooksGroup(status: HookStatus): HTMLElement {
+  const body = h("div", { class: "stack" });
+  const head = h("h2", {});
+  const section = h("section", {}, head, body);
 
   const rebuild = async () => {
     const fresh = await Bridge.hooksStatus();
     if (fresh) Object.assign(status, fresh);
     clear(body);
     draw();
-    const head = section.querySelector("h2")!;
-    clear(head);
-    head.append(statusDot(status.installed), h("span", { text: "Claude Code" }));
   };
 
   function draw() {
+    clear(head);
+    head.append(statusDot(status.installed), h("span", { text: "Claude Code Hooks" }));
     body.append(
       h("div", {
         class: "hint",
@@ -105,11 +330,7 @@ function claudeSection(status: HookStatus): HTMLElement {
     }
     actions.append(install);
     if (status.installed) {
-      actions.append(h("button", {
-        class: "danger",
-        text: "Uninstall hooks…",
-        onclick: () => showPreview(false),
-      }));
+      actions.append(h("button", { class: "danger", text: "Uninstall hooks…", onclick: () => showPreview(false) }));
     }
     body.append(actions);
   }
@@ -123,11 +344,8 @@ function claudeSection(status: HookStatus): HTMLElement {
       // treated as empty and written over.
       clear(body);
       body.append(
-        h("div", { class: "notice err", text: String(err).replace(/^Error:\s*/, "") }),
-        h("div", { class: "row" }, h("button", {
-          text: "Back",
-          onclick: () => { clear(body); draw(); },
-        })),
+        h("div", { class: "notice err", text: cleanError(err) }),
+        h("div", { class: "row" }, h("button", { text: "Back", onclick: () => { clear(body); draw(); } })),
       );
       return;
     }
@@ -141,9 +359,7 @@ function claudeSection(status: HookStatus): HTMLElement {
           : "This removes Coucou's entries only. Your own hooks are left untouched.",
       }),
       renderDiff(preview.diff),
-      h("div", { class: "row" },
-        h("span", { class: "path", text: `Backup → ${preview.backup}` }),
-      ),
+      h("div", { class: "row" }, h("span", { class: "path", text: `Backup → ${preview.backup}` })),
     );
     const confirm = h("button", {
       class: install ? "primary" : "danger",
@@ -164,100 +380,267 @@ function claudeSection(status: HookStatus): HTMLElement {
         body.append(h("div", { class: "notice err", text: `Could not write: ${String(err)}` }));
       }
     });
-    body.append(h("div", { class: "row" }, confirm, h("button", {
-      text: "Cancel",
-      onclick: () => { clear(body); draw(); },
-    })));
+    body.append(h("div", { class: "row" }, confirm, h("button", { text: "Cancel", onclick: () => { clear(body); draw(); } })));
   }
 
   draw();
   return section;
 }
 
-// ── Claude API section ────────────────────────────────────────────────────────
+/**
+ * Plan usage: a switch to show the gauge in the island's header, and the
+ * relay it reads from — a status line in ~/.claude/settings.json, written
+ * only after its diff was looked at.
+ */
+function planGroup(relay: PlanRelayStatus): HTMLElement {
+  const body = h("div", { class: "stack" });
+  /** The switch was turned on with no relay yet: it holds until the relay is written, or given up. */
+  let pending = false;
 
-const MODELS: [string, string][] = [
+  const rebuild = async () => {
+    const fresh = await Bridge.planRelayStatus();
+    if (fresh) Object.assign(relay, fresh);
+    draw();
+  };
+
+  function draw() {
+    clear(body);
+    const sw = toggle(settings.showPlanInNotch || pending, (on) => {
+      if (!on) {
+        settings.showPlanInNotch = false;
+        pending = false;
+        void save();
+      } else if (relay.installed) {
+        settings.showPlanInNotch = true;
+        void save();
+      } else {
+        pending = true;
+        void showPreview(true);
+      }
+    });
+    body.append(
+      h("div", {
+        class: "hint",
+        text: "Shows your Claude plan usage (5-hour and weekly limits) in the island's header. Coucou adds a status line relay to ~/.claude/settings.json. If you already have a status line, it keeps working as before. Pro and Max plans only.",
+      }),
+      h("div", { class: "row" }, sw, h("span", { text: "Show in the island" })),
+      h("div", { class: "row" },
+        h("span", { class: "hint", text: relay.installed ? "Relay: installed" : "Relay: not installed" }),
+        relay.installed
+          ? h("button", { text: "Uninstall relay…", onclick: () => void showPreview(false) })
+          : h("button", { class: "primary", text: "Install relay…", onclick: () => void showPreview(true) }),
+      ),
+    );
+  }
+
+  async function showPreview(install: boolean) {
+    let preview;
+    try {
+      preview = await Bridge.planRelayPreview(install);
+    } catch (err) {
+      pending = false;
+      draw();
+      say(`❌ ${cleanError(err)}`);
+      return;
+    }
+    clear(body);
+    body.append(
+      h("div", {
+        class: "hint",
+        text: install
+          ? "This is exactly what will change in your settings.json: only the status line. A status line of your own keeps running, through Coucou's relay."
+          : "This takes Coucou's relay out and puts your own status line back, if you had one.",
+      }),
+      renderDiff(preview.diff),
+      h("div", { class: "row" }, h("span", { class: "path", text: `Backup → ${preview.backup}` })),
+    );
+    const confirm = h("button", { class: install ? "primary" : "danger", text: install ? "Back up and write" : "Back up and remove" });
+    confirm.addEventListener("click", async () => {
+      confirm.disabled = true;
+      try {
+        await Bridge.planRelayApply(install, preview.fingerprint);
+        if (install && pending) settings.showPlanInNotch = true;
+        if (!install) settings.showPlanInNotch = false;
+        pending = false;
+        void save();
+        say(install ? "✓ Status line installed." : "✓ Status line removed.");
+        await rebuild();
+      } catch (err) {
+        confirm.disabled = false;
+        say(`❌ ${cleanError(err)}`);
+      }
+    });
+    body.append(
+      h("div", { class: "row" }, confirm, h("button", { text: "Cancel", onclick: () => { pending = false; draw(); } })),
+    );
+  }
+
+  draw();
+  return h("section", {}, h("h2", {}, h("span", { text: "Plan usage" })), body);
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+/** Shown until the account's own list is here, and when it cannot be had. */
+const FALLBACK_MODELS: [string, string][] = [
   ["claude-opus-5", "Claude Opus 5"],
   ["claude-sonnet-5", "Claude Sonnet 5"],
   ["claude-haiku-4-5", "Claude Haiku 4.5"],
 ];
+const CUSTOM_MODEL = "__custom__";
 
-function apiSection(hasKey: boolean): HTMLElement {
-  const dot = statusDot(hasKey);
-  const state = h("span", { class: "hint", text: hasKey ? "Key saved in the Windows Credential Manager." : "No key yet — the chat needs one." });
+function anthropicGroup(): HTMLElement {
+  const model = h("select", { style: "flex:1 1 auto;min-width:0" }) as HTMLSelectElement;
+  const custom = h("input", { type: "text", placeholder: "Model ID (e.g. claude-sonnet-5)", style: "flex:1 1 auto;min-width:0", spellcheck: "false" }) as HTMLInputElement;
+  const customRow = h("div", { class: "row" }, custom);
+  let models: [string, string][] = FALLBACK_MODELS;
 
-  const field = h("input", {
-    type: "password",
-    placeholder: hasKey ? "••••••••••••  (stored)" : "sk-ant-...",
-    style: "flex:1 1 auto;min-width:0",
-    autocomplete: "off",
-    spellcheck: "false",
-  }) as HTMLInputElement;
-
-  const saveBtn = h("button", { class: "primary", text: "Save key" });
-  const clearBtn = h("button", { class: "danger", text: "Remove" });
-  const feedback = h("div", {});
-
-  async function refresh() {
-    const present = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
-    dot.style.background = statusColor(present);
-    state.textContent = present
-      ? "Key saved in the Windows Credential Manager."
-      : "No key yet — the chat needs one.";
-    field.placeholder = present ? "••••••••••••  (stored)" : "sk-ant-...";
-    clearBtn.style.display = present ? "" : "none";
+  function draw() {
+    clear(model);
+    for (const [id, label] of models) model.append(h("option", { value: id, text: label }));
+    model.append(h("option", { value: CUSTOM_MODEL, text: "Custom…" }));
+    const listed = models.some(([id]) => id === settings.model);
+    model.value = listed ? settings.model : CUSTOM_MODEL;
+    custom.value = listed ? "" : settings.model;
+    customRow.style.display = listed ? "none" : "";
   }
 
-  saveBtn.addEventListener("click", async () => {
-    const value = field.value.trim();
-    if (!value) return;
-    clear(feedback);
+  async function load() {
+    if (!present["anthropic-api-key"]) return;
     try {
-      await Bridge.secretSet("anthropic-api-key", value);
-      field.value = "";
-      feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk." }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
+      const fetched = await Bridge.chatModels("anthropic");
+      if (fetched.length > 0) {
+        models = fetched.map((m) => [m.id, m.label]);
+        draw();
+      }
+    } catch {
+      /* the static list stays */
     }
-  });
-
-  clearBtn.addEventListener("click", async () => {
-    clear(feedback);
-    try {
-      await Bridge.secretClear("anthropic-api-key");
-      feedback.append(h("div", { class: "notice ok", text: "Key removed." }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: `Could not remove: ${String(err)}` }));
-    }
-  });
-
-  const model = h("select", {}) as HTMLSelectElement;
-  for (const [id, label] of MODELS) model.append(h("option", { value: id, text: label }));
-  if (!MODELS.some(([id]) => id === settings.model)) {
-    model.append(h("option", { value: settings.model, text: settings.model }));
   }
-  model.value = settings.model;
+
   model.addEventListener("change", () => {
+    if (model.value === CUSTOM_MODEL) {
+      customRow.style.display = "";
+      custom.focus();
+      return;
+    }
+    customRow.style.display = "none";
     settings.model = model.value;
     void save();
   });
+  custom.addEventListener("change", () => {
+    const id = custom.value.trim();
+    if (!id) return;
+    settings.model = id;
+    void save();
+  });
 
-  clearBtn.style.display = hasKey ? "" : "none";
-
-  return h(
-    "section",
-    {},
-    h("h2", {}, dot, h("span", { text: "Claude" })),
-    state,
-    h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
-    h("div", { class: "row" }, h("label", { text: "Model" }), model),
-    feedback,
+  draw();
+  void load();
+  return group(
+    "Anthropic API",
+    keyField("anthropic-api-key", "API key (sk-ant-…)", "✓ Key saved.", { after: () => void load() }),
+    h("hr", {}),
+    h("div", { class: "row" }, h("label", { style: "min-width:56px", text: "Model" }), model),
+    customRow,
+    h("div", { class: "hint", text: "Used by the chat. The list comes from your Anthropic account." }),
   );
 }
 
-// ── GitHub setup ──────────────────────────────────────────────────────────────
+function otherProvidersGroup(): HTMLElement {
+  const head = (provider: ChatProvider, name: string) =>
+    h("div", { class: "row tight" }, colorDot(PROVIDERS[provider].accent), h("b", { text: name }));
+  return group(
+    "Chat — other providers",
+    h("div", { class: "hint", text: "To use Google Gemini or OpenAI from the chat. Keys are stored in the Windows Credential Manager." }),
+    head("google", "Google AI"),
+    keyField("google-api-key", "API key (AI Studio)", "✓ Google key saved."),
+    h("hr", {}),
+    head("openai", "OpenAI"),
+    keyField("openai-api-key", "API key (sk-…)", "✓ OpenAI key saved."),
+  );
+}
+
+/** Where each local server listens when nothing was changed. */
+const LOCAL_DEFAULTS: Partial<Record<ChatProvider, string>> = {
+  ollama: "http://127.0.0.1:11434",
+  lmstudio: "http://127.0.0.1:1234",
+};
+
+function localModelsGroup(): HTMLElement {
+  const body = h("div", { class: "stack" });
+
+  function setUrl(provider: ChatProvider, url: string) {
+    if (provider === "ollama") settings.ollamaServerUrl = url;
+    else settings.lmstudioServerUrl = url;
+  }
+
+  function server(provider: ChatProvider): HTMLElement {
+    const def = PROVIDERS[provider];
+    const url = serverUrl(settings, provider);
+    const box = h("div", { class: "stack tight" });
+    box.append(
+      h("div", { class: "row tight" },
+        colorDot(def.accent), h("b", { text: def.name }),
+        url ? h("span", { class: "connected", text: "Connected" }) : null,
+      ),
+    );
+    if (url) {
+      box.append(
+        h("div", { class: "path", text: url }),
+        h("div", { class: "row" },
+          h("button", {
+            text: "Disconnect",
+            onclick: () => {
+              setUrl(provider, "");
+              // The chat cannot go on talking to a server that is gone.
+              if (settings.chatProvider === provider) settings.chatProvider = "anthropic";
+              void save();
+              say(`${def.name} disconnected.`);
+              draw();
+            },
+          }),
+        ),
+      );
+      return box;
+    }
+    const field = h("input", { type: "text", placeholder: LOCAL_DEFAULTS[provider] ?? "", spellcheck: "false", style: "flex:1 1 auto;min-width:0" }) as HTMLInputElement;
+    const connect = h("button", { class: "primary", text: "Connect" });
+    connect.addEventListener("click", async () => {
+      connect.disabled = true;
+      connect.textContent = "Connecting…";
+      say("");
+      try {
+        const found = await Bridge.localConnect(provider, field.value);
+        setUrl(provider, found.url);
+        void save();
+        say(`✓ Connected · ${found.models} model${found.models === 1 ? "" : "s"}`);
+        draw();
+      } catch (err) {
+        connect.disabled = false;
+        connect.textContent = "Connect";
+        say(cleanError(err));
+      }
+    });
+    box.append(h("div", { class: "row" }, field, connect));
+    return box;
+  }
+
+  function draw() {
+    clear(body);
+    body.append(
+      h("div", { class: "hint", text: "Connect to a local model server. No API key needed." }),
+      server("ollama"),
+      h("hr", {}),
+      server("lmstudio"),
+    );
+  }
+
+  draw();
+  return h("section", {}, h("h2", {}, h("span", { text: "Local models" })), body);
+}
+
+// ── Integrations ──────────────────────────────────────────────────────────────
 
 const GITHUB_ID = "integration_github";
 const GITHUB_KEY = "github-token";
@@ -266,84 +649,21 @@ const DAY_MS = 86_400_000;
 /** A token this close to its end gets a word about it. */
 const EXPIRES_SOON_DAYS = 7;
 
-/** GitHub's line in the integrations, and what opens under it once it is on. */
-function githubSetup(present: Record<string, boolean>): IntegrationSetup {
-  const hasToken = present[GITHUB_KEY] ?? false;
-  const dot = statusDot(hasToken);
-  const state = h("span", { class: "hint" });
-
-  const field = h("input", {
-    type: "password",
-    style: "flex:1 1 auto;min-width:0",
-    autocomplete: "off",
-    spellcheck: "false",
-  }) as HTMLInputElement;
-
-  const saveBtn = h("button", { class: "primary", text: "Save token" });
-  const clearBtn = h("button", { class: "danger", text: "Remove" });
-  const testBtn = h("button", { text: "Test connection" });
+/** GitHub's token, how to make one, and a test of what it can reach. */
+function githubSetup(): HTMLElement {
   const feedback = h("div", {});
+  const testBtn = h("button", { text: "Test connection" });
 
-  function show(present: boolean) {
-    dot.style.background = statusColor(present);
-    state.textContent = present
-      ? "Token saved in the Windows Credential Manager."
-      : "No token yet — the GitHub pill needs one.";
-    field.placeholder = present ? "••••••••••••  (stored)" : "github_pat_…";
-    clearBtn.style.display = present ? "" : "none";
-  }
-
-  async function refresh() {
-    show((await Bridge.secretPresent(GITHUB_KEY)) ?? false);
-  }
-
-  /** Saves whatever is in the field. True when there was nothing to save, too. */
-  async function store(): Promise<boolean> {
-    const value = field.value.trim();
-    if (!value) return true;
-    try {
-      await Bridge.secretSet(GITHUB_KEY, value);
-      field.value = "";
-      await refresh();
-      // Fill the pill now rather than at the next poll.
-      void Bridge.refreshIntegration(GITHUB_ID);
-      return true;
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
-      return false;
-    }
-  }
-
-  saveBtn.addEventListener("click", async () => {
-    if (!field.value.trim()) return;
-    clear(feedback);
-    if (await store()) {
-      feedback.append(h("div", { class: "notice ok", text: "Saved. It never touches disk — test it below." }));
-    }
-  });
-
-  clearBtn.addEventListener("click", async () => {
-    clear(feedback);
-    try {
-      await Bridge.secretClear(GITHUB_KEY);
-      feedback.append(h("div", { class: "notice ok", text: "Token removed." }));
-      await refresh();
-    } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: `Could not remove: ${String(err)}` }));
-    }
-  });
-
-  // A token pasted but not saved yet is saved first: the test only ever runs on
-  // the stored token, so the value never has to travel anywhere else.
+  // The test only ever runs on the stored token, so the value never has to
+  // travel anywhere else.
   testBtn.addEventListener("click", async () => {
     clear(feedback);
-    if (!(await store())) return;
     testBtn.disabled = true;
     testBtn.textContent = "Testing…";
     try {
       feedback.append(githubResult(await Bridge.githubTest()));
     } catch (err) {
-      feedback.append(h("div", { class: "notice err", text: String(err).replace(/^Error:\s*/, "") }));
+      feedback.append(h("div", { class: "notice err", text: cleanError(err) }));
     } finally {
       testBtn.disabled = false;
       testBtn.textContent = "Test connection";
@@ -356,13 +676,13 @@ function githubSetup(present: Record<string, boolean>): IntegrationSetup {
     onclick: () => void Bridge.openUrl(GITHUB_NEW_TOKEN_URL),
   });
 
-  show(hasToken);
-
-  const status = h("div", { class: "row", style: "gap:8px;padding-top:5px" }, dot, state);
-  const panel = h(
+  return h(
     "div",
-    { class: "setup" },
-    h("div", { class: "row" }, h("label", { text: "Token" }), field, saveBtn, clearBtn),
+    { class: "stack tight" },
+    keyField(GITHUB_KEY, "github_pat_…", "✓ Token saved. It never touches disk — test it below.", {
+      // Fill the pill now rather than at the next poll.
+      after: () => void Bridge.refreshIntegration(GITHUB_ID),
+    }),
     h(
       "div",
       { class: "hint" },
@@ -379,7 +699,6 @@ function githubSetup(present: Record<string, boolean>): IntegrationSetup {
     h("div", { class: "row" }, testBtn),
     feedback,
   );
-  return { status, panel };
 }
 
 function githubResult(account: GithubAccount): HTMLElement {
@@ -412,213 +731,76 @@ function tokenExpiry(raw: string | null): string {
   return `Token expires on ${when}.`;
 }
 
-// ── Integrations section ──────────────────────────────────────────────────────
-
-interface IntegrationDef {
-  id: string;
+interface ServiceDef {
   name: string;
   color: string;
-  /** Credential Manager keys, in the order they are shown. */
-  fields: { key: string; label: string; placeholder: string; secret: boolean }[];
-  /** For an integration that needs more than its fields. */
-  setup?: (present: Record<string, boolean>) => IntegrationSetup;
+  /** Keychain keys, in the order they are shown. */
+  fields: { key: string; placeholder: string; secret: boolean }[];
+  /** For a service that needs more than its fields. */
+  setup?: () => HTMLElement;
   /** For one that needs nothing: what it reads, in a line. */
   note?: string;
   /** A choice of its own, kept with the settings: a switch and what it does. */
   option?: { setting: "announceSongs"; label: string };
 }
 
-interface IntegrationSetup {
-  /** Where it stands, on the integration's own line. */
-  status: HTMLElement;
-  /** Opens under the line while the integration is on. */
-  panel: HTMLElement;
-}
-
-const INTEGRATIONS: IntegrationDef[] = [
-  { id: "integration_stripe", name: "Stripe", color: "#0570DE",
-    fields: [{ key: "stripe-api-key", label: "Secret key", placeholder: "sk_live_…", secret: true }] },
-  { id: "integration_github", name: "GitHub", color: "#F4505E",
-    fields: [], setup: githubSetup },
-  { id: "integration_vercel", name: "Vercel", color: "#7C5CFF",
-    fields: [{ key: "vercel-token", label: "Token", placeholder: "…", secret: true }] },
-  { id: "integration_n8n", name: "n8n", color: "#F29B38",
-    fields: [
-      { key: "n8n-url", label: "Instance URL", placeholder: "https://n8n.example.com", secret: false },
-      { key: "n8n-api-key", label: "API key", placeholder: "…", secret: true },
-    ] },
-  { id: "integration_resend", name: "Resend", color: "#22C55E",
-    fields: [{ key: "resend-api-key", label: "API key", placeholder: "re_…", secret: true }] },
-  { id: "integration_notion", name: "Notion", color: "#8C8C8C",
-    fields: [{ key: "notion-api-key", label: "Integration token", placeholder: "ntn_…", secret: true }] },
-  { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
-    fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
-  { id: "integration_spotify", name: "Spotify", color: "#1DB954", fields: [],
+const SERVICES: ServiceDef[] = [
+  { name: "Resend", color: "#22C55E", fields: [{ key: "resend-api-key", placeholder: "API key  (re_…)", secret: true }] },
+  { name: "n8n", color: "#F29B38", fields: [
+    { key: "n8n-url", placeholder: "Instance URL  (https://…)", secret: false },
+    { key: "n8n-api-key", placeholder: "API key", secret: true },
+  ] },
+  { name: "Vercel", color: "#7C5CFF", fields: [{ key: "vercel-token", placeholder: "Token", secret: true }] },
+  { name: "GitHub", color: "#F4505E", fields: [], setup: githubSetup },
+  { name: "Stripe", color: "#0570DE", fields: [{ key: "stripe-api-key", placeholder: "Secret key  (sk_live_… or sk_test_…)", secret: true }] },
+  { name: "Cal.com", color: "#C9956A", fields: [{ key: "calcom-api-key", placeholder: "API key  (cal_live_…)", secret: true }] },
+  { name: "Notion", color: "#E8E8E8", fields: [{ key: "notion-api-key", placeholder: "Integration token  (ntn_…)", secret: true }] },
+  { name: "Spotify", color: "#1DB954", fields: [],
     note: "No key: asks Windows what the Spotify desktop app is playing. Nothing is asked of Spotify.",
     option: { setting: "announceSongs", label: "Show each new song: the island unfolds for a moment when the song changes" } },
 ];
 
-const MAX_ACTIVE = 4;
-
-function integrationsSection(present: Record<string, boolean>): HTMLElement {
-  const note = h("div", { class: "hint" });
-  const list = h("div", { style: "display:flex;flex-direction:column;gap:14px" });
-
-  function updateNote() {
-    const used = settings.activeIntegrations.length;
-    note.textContent = `Pick up to ${MAX_ACTIVE} pills to show next to Mochi — ${used}/${MAX_ACTIVE} in use. Keys are stored in the Windows Credential Manager, never on disk.`;
-  }
-
-  for (const def of INTEGRATIONS) {
-    const active = settings.activeIntegrations.includes(def.id);
-    const sw = h("button", { class: active ? "switch on" : "switch" });
-    const setup = def.setup?.(present);
-    const drawer = setup ? h("div", { class: "drawer" }, h("div", {}, setup.panel)) : null;
-    const open = (on: boolean) => {
-      drawer?.classList.toggle("open", on);
-      // Folded away, its fields are out of reach of the keyboard too.
-      if (setup) setup.panel.inert = !on;
-    };
-    open(active);
-    sw.addEventListener("click", () => {
-      const on = settings.activeIntegrations.includes(def.id);
-      if (on) {
-        settings.activeIntegrations = settings.activeIntegrations.filter((x) => x !== def.id);
-      } else {
-        if (settings.activeIntegrations.length >= MAX_ACTIVE) return;
-        settings.activeIntegrations = [...settings.activeIntegrations, def.id];
-      }
-      sw.classList.toggle("on", !on);
-      open(!on);
-      updateNote();
-      void save();
-    });
-
-    const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
-    if (setup) rows.append(setup.status);
-    if (def.note) rows.append(h("span", { class: "hint", style: "padding-top:5px", text: def.note }));
+function integrationsSection(): HTMLElement[] {
+  const list = h("div", { class: "stack wide" });
+  for (const def of SERVICES) {
+    const box = h("div", { class: "stack tight" }, h("div", { class: "row tight" }, colorDot(def.color), h("b", { text: def.name })));
+    for (const field of def.fields) {
+      box.append(keyField(field.key, field.placeholder, `✓ ${def.name} saved.`, { secret: field.secret }));
+    }
+    if (def.setup) box.append(def.setup());
+    if (def.note) box.append(h("div", { class: "hint", text: def.note }));
     if (def.option) {
       const { setting, label } = def.option;
-      rows.append(
+      box.append(
         h("div", { class: "row" },
-          toggle(settings[setting], (on) => {
-            settings[setting] = on;
-            void save();
-          }),
-          h("span", { style: "font-size:12.5px", text: label }),
+          toggle(settings[setting], (on) => { settings[setting] = on; void save(); }),
+          h("span", { text: label }),
         ),
       );
     }
-    for (const field of def.fields) {
-      const input = h("input", {
-        type: field.secret ? "password" : "text",
-        placeholder: present[field.key] ? "••••••••  (stored)" : field.placeholder,
-        autocomplete: "off",
-        spellcheck: "false",
-        style: "flex:1 1 auto;min-width:0",
-      }) as HTMLInputElement;
-      const saveBtn = h("button", { text: "Save" });
-      const dotEl = statusDot(present[field.key] ?? false);
-      saveBtn.addEventListener("click", async () => {
-        const value = input.value.trim();
-        try {
-          await Bridge.secretSet(field.key, value);
-          present[field.key] = value.length > 0;
-          input.value = "";
-          input.placeholder = value ? "••••••••  (stored)" : field.placeholder;
-          dotEl.style.background = value ? "#22c55e" : "#f4505e";
-        } catch {
-          dotEl.style.background = "#f5a524";
-        }
-      });
-      rows.append(
-        h("div", { class: "row" },
-          h("label", { style: "min-width:104px", text: field.label }),
-          input, saveBtn, dotEl,
-        ),
-      );
-    }
-
-    const line = h("div", { style: "display:flex;gap:12px;align-items:flex-start" },
-      h("div", { style: "display:flex;align-items:center;gap:8px;min-width:132px;padding-top:4px" },
-        sw,
-        h("i", { class: "dot", style: `background:${def.color}` }),
-        h("span", { style: "font-size:12.5px", text: def.name }),
-      ),
-      rows,
-    );
-    list.append(drawer ? h("div", {}, line, drawer) : line);
+    list.append(box);
   }
-
-  updateNote();
-  return h("section", {}, h("h2", {}, h("span", { text: "Integrations" })), note, list);
+  return [
+    group(
+      null,
+      h("div", { class: "hint", text: "Keys are stored in the Windows Credential Manager, never on disk. Switch a service's pill on in Active pills." }),
+      list,
+    ),
+  ];
 }
 
-// ── General section ───────────────────────────────────────────────────────────
+// ── The window: a sidebar, and the section that is picked ─────────────────────
 
-function generalSection(): HTMLElement {
-  const volume = h("input", {
-    type: "range", min: "0", max: "0.2", step: "0.005",
-    value: String(settings.soundVolume),
-  }) as HTMLInputElement;
-  volume.addEventListener("input", () => {
-    settings.soundVolume = Number(volume.value);
-    void save();
-  });
-
-  const autoClose = h("input", {
-    type: "number", min: "5", max: "120", step: "1",
-    value: String(Math.round(settings.autoCloseInterval)),
-    style: "width:72px",
-  }) as HTMLInputElement;
-  autoClose.addEventListener("change", () => {
-    settings.autoCloseInterval = Math.max(5, Math.min(120, Number(autoClose.value) || 15));
-    autoClose.value = String(settings.autoCloseInterval);
-    void save();
-  });
-
-  const screen = h("select", {}) as HTMLSelectElement;
-  screen.append(
-    h("option", { value: "primary", text: "Main display" }),
-    h("option", { value: "cursor", text: "Display under the cursor" }),
-  );
-  screen.value = settings.screen;
-  screen.addEventListener("change", () => {
-    settings.screen = screen.value as Settings["screen"];
-    void save();
-  });
-
-  return h(
-    "section",
-    {},
-    h("h2", {}, h("span", { text: "General" })),
-    h("div", { class: "row" },
-      h("label", { text: "Sound" }),
-      toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; void save(); }),
-      volume,
-    ),
-    h("div", { class: "row" },
-      h("label", { text: "Auto-close" }),
-      autoClose,
-      h("span", { class: "hint", text: "seconds after you leave the island" }),
-    ),
-    h("div", { class: "row" },
-      h("label", { text: "Island lives on" }),
-      screen,
-    ),
-    h("div", { class: "row" },
-      h("label", { text: "Hide in full screen" }),
-      toggle(settings.hideInFullscreen, (v) => { settings.hideInFullscreen = v; void save(); }),
-      h("span", { class: "hint", text: "only a request from Claude brings the island out" }),
-    ),
-    h("div", { class: "row" },
-      h("label", { text: "Launch at startup" }),
-      toggle(settings.autostart, (v) => { settings.autostart = v; void save(); }),
-    ),
-  );
+interface Section {
+  id: string;
+  title: string;
+  icon: string;
+  color: string;
+  build: () => HTMLElement[];
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
+/** Remembered from one opening of the window to the next. */
+const SECTION_KEY = "settingsSection";
 
 async function main() {
   const boot = await Bridge.boot();
@@ -626,34 +808,83 @@ async function main() {
     settings = { ...settings, ...boot.settings };
     version = boot.version;
   }
-  const status = (await Bridge.hooksStatus()) ?? {
-    installed: false, settingsPath: "", hookPath: "", hookReady: false,
-  };
-
-  const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
+  const hooks = (await Bridge.hooksStatus()) ?? { installed: false, settingsPath: "", hookPath: "", hookReady: false };
+  const relay = (await Bridge.planRelayStatus()) ?? { installed: false };
 
   const keys = [
+    "anthropic-api-key", "google-api-key", "openai-api-key",
     "stripe-api-key", "github-token", "vercel-token",
     "n8n-url", "n8n-api-key", "resend-api-key", "notion-api-key", "calcom-api-key",
   ];
-  const present: Record<string, boolean> = {};
   for (const k of keys) present[k] = (await Bridge.secretPresent(k)) ?? false;
+
+  const sections: Section[] = [
+    { id: "general", title: "General", icon: ICONS.gearFill, color: "#8E939C", build: generalSection },
+    { id: "activepills", title: "Active pills", icon: ICONS.stack, color: "#F5A524", build: activePillsSection },
+    { id: "agents", title: "Agents", icon: ICONS.terminal, color: "#3B9EFF", build: () => [hooksGroup(hooks), planGroup(relay)] },
+    { id: "chat", title: "Chat", icon: ICONS.bubble, color: "#E07950", build: () => [anthropicGroup(), otherProvidersGroup(), localModelsGroup()] },
+    { id: "integrations", title: "Integrations", icon: ICONS.plus, color: "#7C5CFF", build: integrationsSection },
+  ];
+
+  const title = h("h1", {});
+  const content = h("div", { class: "detail-content" });
+  const nav = h("nav", {});
+  let current = "";
+
+  function show(id: string) {
+    const section = sections.find((s) => s.id === id) ?? sections[0];
+    current = section.id;
+    try {
+      localStorage.setItem(SECTION_KEY, section.id);
+    } catch {
+      /* a window that cannot remember still works */
+    }
+    say("");
+    title.textContent = section.title;
+    clear(content);
+    content.append(...section.build());
+    for (const row of nav.children) row.classList.toggle("on", (row as HTMLElement).dataset.id === section.id);
+  }
+
+  for (const section of sections) {
+    const row = h(
+      "button",
+      { class: "nav-row", onclick: () => show(section.id) },
+      h("i", { class: "nav-icon", style: `background:${section.color}` }, svg(section.icon, 12)),
+      h("span", { text: section.title }),
+    );
+    row.dataset.id = section.id;
+    nav.append(row);
+  }
 
   clear(root);
   root.append(
-    h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
-    claudeSection(status),
-    apiSection(hasKey),
-    integrationsSection(present),
-    generalSection(),
-    h("div", {
-      class: "hint",
-      text: "No telemetry. Network requests only go to the services you configure yourself.",
-    }),
+    h("aside", {},
+      h("div", { class: "app" }, h("b", { text: "Coucou" }), h("span", { text: version })),
+      nav,
+      h("div", { class: "spacer" }),
+      h("div", { class: "hint footnote", text: "No telemetry. Network requests only go to the services you configure yourself." }),
+    ),
+    h("main", {}, title, content, statusLine),
   );
+
+  let remembered: string | null = null;
+  try {
+    remembered = localStorage.getItem(SECTION_KEY);
+  } catch {
+    /* starts on General */
+  }
+  show(remembered ?? "general");
 
   void onEvent<Settings>("settings-changed", (s) => {
     settings = { ...settings, ...s };
+  });
+  // The island sends the user to the section that has what they are missing.
+  void onEvent<string>("settings-section", (id) => show(id));
+  // A key saved or removed elsewhere: the hints must not go stale.
+  void onEvent<null>("secrets-changed", async () => {
+    for (const k of keys) present[k] = (await Bridge.secretPresent(k)) ?? false;
+    if (current === "activepills") show(current);
   });
 }
 

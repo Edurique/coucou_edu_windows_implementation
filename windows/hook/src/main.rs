@@ -16,6 +16,10 @@
 //!   as if Coucou were not installed.
 //!
 //! Usage: `coucou-hook <EventName>` (the name is also read from the JSON).
+//!
+//! `coucou-hook --statusline` is the other thing it can be: Claude Code's status
+//! line. It forwards the plan's rate limits to Coucou's gauge, then runs the
+//! status line the user had before, so theirs still shows.
 
 use std::io::{Read, Write};
 use std::sync::mpsc;
@@ -62,6 +66,14 @@ const MAX_LAST_MESSAGE: usize = 6_000;
 /// Longest string forwarded for any single field; the island truncates to far
 /// less than this anyway.
 const MAX_FIELD_LEN: usize = 2_000;
+/// The flag that makes the relay a status line.
+const STATUSLINE_FLAG: &str = "--statusline";
+/// What marks a payload as a status line's for Coucou, not a hook event's.
+const STATUSLINE_KIND: &str = "statusline";
+/// The status line the user had before Coucou's, kept beside the relay.
+const PREVIOUS_STATUSLINE: &str = "statusline-previous.json";
+/// How long their status line may take before Claude Code gets nothing from it.
+const PREVIOUS_STATUSLINE_BUDGET: Duration = Duration::from_secs(10);
 
 #[cfg(windows)]
 mod win;
@@ -74,6 +86,10 @@ mod unix;
 use unix::connect;
 
 fn main() {
+    if std::env::args().skip(1).any(|arg| arg == STATUSLINE_FLAG) {
+        statusline();
+        std::process::exit(0);
+    }
     let Some(Event { line: payload, name: event, tool_input }) = read_event() else { std::process::exit(0) };
 
     // Only a permission request waits for a human, so only it gets the long budget.
@@ -98,6 +114,75 @@ fn main() {
     }
     // Nothing printed: Claude Code asks in the terminal, as if we were not here.
     std::process::exit(0);
+}
+
+/// Claude Code's status line: hands the plan's rate limits to Coucou — nothing
+/// else of the payload leaves — then lets the user's own status line speak.
+/// Invalid or empty input still runs theirs: a gauge is no reason to lose it.
+fn statusline() {
+    let mut raw = Vec::new();
+    let _ = std::io::stdin().read_to_end(&mut raw);
+    let payload = serde_json::from_slice::<serde_json::Value>(raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&raw))
+        .unwrap_or(serde_json::Value::Null);
+
+    let relay = serde_json::json!({
+        "coucou_kind": STATUSLINE_KIND,
+        "session_id": payload.get("session_id").and_then(|v| v.as_str()).unwrap_or_default(),
+        "rate_limits": payload.get("rate_limits").cloned().unwrap_or_else(|| serde_json::json!({})),
+    });
+    let line = format!("{relay}\n");
+    let (tx, rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let _ = talk(&line, false);
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(FIRE_AND_FORGET_BUDGET);
+
+    if let Some(output) = previous_statusline(&raw) {
+        let mut out = std::io::stdout();
+        let _ = out.write_all(&output);
+        let _ = out.flush();
+    }
+}
+
+/// What the status line the user had before Coucou's prints for this payload.
+/// None when they had none, or when it failed or took too long.
+fn previous_statusline(input: &[u8]) -> Option<Vec<u8>> {
+    let kept = std::env::current_exe().ok()?.with_file_name(PREVIOUS_STATUSLINE);
+    let previous = serde_json::from_slice::<serde_json::Value>(&std::fs::read(kept).ok()?).ok()?;
+    let command = previous.get("command")?.as_str()?.to_string();
+    if command.is_empty() {
+        return None;
+    }
+    // Run the way Claude Code runs it: through `sh`, which is on the PATH it
+    // gives its commands on every platform (Git Bash on Windows).
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", &command])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input);
+    }
+    let (tx, rx) = mpsc::channel::<Option<Vec<u8>>>();
+    let mut stdout = child.stdout.take()?;
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let read = stdout.read_to_end(&mut output).is_ok();
+        let _ = tx.send(read.then_some(output));
+    });
+    match rx.recv_timeout(PREVIOUS_STATUSLINE_BUDGET) {
+        Ok(output) => {
+            let _ = child.wait();
+            output.filter(|bytes| !bytes.is_empty())
+        }
+        Err(_) => {
+            let _ = child.kill();
+            None
+        }
+    }
 }
 
 /// The documented PermissionRequest output. Anything we do not recognise prints

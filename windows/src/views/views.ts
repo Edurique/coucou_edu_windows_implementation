@@ -16,7 +16,8 @@ import { diffLine, fileKind, plusMinus, readPatch } from "./code";
 import { hasPreview, stepIcon, stepName, stepPreview } from "./step";
 import { COLOR } from "./palette";
 import type { IntegrationNews } from "../core/bridge";
-import type { ChatProvider } from "../core/chat";
+import { chatModel, providerOfPill, type ChatProvider } from "../core/chat";
+import { dominantPct, effectivePct, planAge, planColor, planLabel, resetLabel, type PlanWindow } from "../core/plan";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -30,7 +31,8 @@ export interface ViewActions {
   toggleSound(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
-  openSettingsWindow(): void;
+  /** The settings window, on the section that has what is missing when one is named. */
+  openSettingsWindow(section?: string): void;
   blip(): void;
   /** Mochi reacts to something a view just showed (the GitHub panel's news). */
   emote(e: BotEmoteName): void;
@@ -253,6 +255,24 @@ export function buildHeader(actions: ViewActions): ViewHost {
   const gearBtn = h("button", { title: "Settings", onclick: () => go("settings") }, svg(ICONS.gear, 14));
   const soundBtn = h("button", { title: "Mute", onclick: () => actions.toggleSound() }, svg(ICONS.speakerOn, 14));
 
+  // The Claude plan gauge: how much of the plan's limits is used, on the
+  // overview, once the user asked for it. A click opens its card.
+  const planDot = h("i");
+  const planText = h("span");
+  const planPill = h(
+    "button",
+    {
+      class: "plan-pill",
+      title: "Claude plan usage",
+      onclick: () => {
+        actions.blip();
+        State.showingPlanDetail = !State.showingPlanDetail;
+        State.notify();
+      },
+    },
+    planDot, planText,
+  );
+
   function go(v: IslandViewName) {
     actions.blip();
     actions.setView(v);
@@ -262,7 +282,7 @@ export function buildHeader(actions: ViewActions): ViewHost {
     "div",
     { id: "header" },
     h("div", { class: "tabs" }, tabHome, tabChat, tabDrop),
-    h("div", { class: "header-actions" }, gearBtn, soundBtn),
+    h("div", { class: "header-actions" }, planPill, gearBtn, soundBtn),
   );
 
   return {
@@ -279,6 +299,16 @@ export function buildHeader(actions: ViewActions): ViewHost {
       clear(soundBtn);
       soundBtn.append(svg(State.settings.soundEnabled ? ICONS.speakerOn : ICONS.speakerOff, 14));
       el.style.opacity = v === "confused" ? "0" : "1";
+
+      const gauge = v === "overview" && State.settings.showPlanInNotch && State.planRelayInstalled;
+      // Its card belongs to the overview: leaving it, or folding, shuts it.
+      if (!gauge || State.mode !== "expanded") State.showingPlanDetail = false;
+      planPill.style.display = gauge ? "" : "none";
+      if (gauge) {
+        planPill.style.setProperty("--plan", planColor(dominantPct(State.planUsage)));
+        planPill.classList.toggle("on", State.showingPlanDetail);
+        planText.textContent = planLabel(State.planUsage);
+      }
     },
   };
 }
@@ -302,12 +332,15 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
     { class: "icon-btn jump", title: "Open", onclick: () => actions.openTarget() },
     svg(ICONS.arrowUpRight, 8),
   );
-  const left = card(null, leftBody, jump);
+  // The Claude plan's card, over whatever the pill in front shows, while the
+  // header's gauge is open.
+  const planLayer = h("div", { class: "plan-layer" });
+  const left = card(null, leftBody, planLayer, jump);
   // A session is its card: a click anywhere on it opens the session panel —
   // the file being written, the steps, the changes. The ↗ stays the way out
   // to where the session runs.
   left.addEventListener("click", (e) => {
-    if (mode !== "session" || (e.target as Element).closest("button")) return;
+    if (mode !== "session" || State.showingPlanDetail || (e.target as Element).closest("button")) return;
     actions.blip();
     actions.openSession();
   });
@@ -320,6 +353,9 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
   );
 
   let pillIds = "";
+  let planKey = "";
+  /** Keeps the card's "3 min ago" and "in 1 h 20" true while it is open. */
+  let planClock: number | null = null;
   let detailOpen = false;
   let lastFocus: string | null = null;
   let mode: "session" | "card" | null = null;
@@ -343,7 +379,7 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
       cardKey = "";
       State.notify();
     },
-    openSettings: () => actions.openSettingsWindow(),
+    openSettings: (section) => actions.openSettingsWindow(section),
     chatWith: (provider) => actions.chatWith(provider),
     // The card's figure asks for the panel as a whole: while the pill has
     // news, that leads to what the news is about.
@@ -395,6 +431,8 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
     sync() {
       const task = State.focusTask;
       if (task?.id !== lastFocus) {
+        // Another pill came to the front: the gauge's card was over the last one's.
+        if (lastFocus != null) State.showingPlanDetail = false;
         lastFocus = task?.id ?? null;
         detailOpen = false;
         cardKey = "";
@@ -434,10 +472,11 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
         syncNow(session);
       } else if (task) {
         const info = State.integrations[task.id];
+        const ai = providerOfPill(task.id);
         const key = [
           task.id, detailOpen, task.state, task.steps.join("|"),
           info?.loaded, info?.error, info?.configured,
-          integrationKey(task.id),
+          integrationKey(task.id), ai ? chatModel(State.settings, ai) : "",
         ].join("~");
         if (key !== cardKey) {
           cardKey = key;
@@ -453,7 +492,28 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
         }
       }
 
-      jump.style.display = detailOpen ? "none" : "";
+      const plan = State.showingPlanDetail;
+      planLayer.classList.toggle("on", plan);
+      if (plan) {
+        const usage = State.planUsage;
+        const color = planColor(dominantPct(usage));
+        const next = [usage?.updatedAt, color, planAge(usage), usage?.fiveHour && resetLabel(usage.fiveHour, false)].join("~");
+        if (next !== planKey) {
+          planKey = next;
+          clear(planLayer);
+          planLayer.append(planCard());
+          // Mochi wears the gauge's colour while its card is open.
+          actions.tintMochi(color);
+        }
+        planClock ??= window.setInterval(() => State.notify(), PLAN_CLOCK_MS);
+      } else if (planKey !== "") {
+        planKey = "";
+        actions.tintMochi(null);
+        if (planClock != null) window.clearInterval(planClock);
+        planClock = null;
+      }
+
+      jump.style.display = detailOpen || plan ? "none" : "";
       if (mode !== sized) {
         sized = mode;
         onResize();
@@ -472,6 +532,47 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
       }
     },
   };
+}
+
+/** How often the plan card's ages and countdowns are brought up to date. */
+const PLAN_CLOCK_MS = 30_000;
+/** How wide a gauge's bar is, in px. */
+const PLAN_BAR = 50;
+
+/** One limit of the plan: its name, a bar, the percentage used, and when it resets. */
+function planRow(label: string, window: PlanWindow | null, weekly: boolean): HTMLElement {
+  const row = h("div", { class: "plan-row" }, h("span", { class: "plan-name", text: label }));
+  if (!window) {
+    row.append(h("span", { class: "plan-none", text: "—" }));
+    return row;
+  }
+  const pct = effectivePct(window);
+  const fill = h("i");
+  fill.style.width = `${Math.max(0, (PLAN_BAR * pct) / 100)}px`;
+  fill.style.background = planColor(pct);
+  const bar = h("span", { class: "plan-bar" }, fill);
+  bar.style.width = `${PLAN_BAR}px`;
+  row.append(
+    bar,
+    h("b", { text: `${Math.round(pct)}%` }),
+    svg(ICONS.refresh, 8, { stroke: 2.4 }),
+    h("span", { class: "plan-reset", text: resetLabel(window, weekly) }),
+  );
+  return row;
+}
+
+/** The Claude plan's card — ClaudePlanCardView.swift: both limits, and how fresh the figures are. */
+function planCard(): HTMLElement {
+  const usage = State.planUsage;
+  return h(
+    "div",
+    { class: "int-card plan-card" },
+    h("div", { class: "int-head" },
+      dot(planColor(dominantPct(usage)), 7), h("b", { text: "Claude plan" }), h("span", { text: planAge(usage) })),
+    h("div", { class: "plan-rows" },
+      planRow("5 hours", usage?.fiveHour ?? null, false),
+      planRow("Week", usage?.sevenDay ?? null, true)),
+  );
 }
 
 function buildPill(task: AgentTask, actions: ViewActions): HTMLElement {
