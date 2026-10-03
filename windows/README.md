@@ -175,12 +175,37 @@ message simply stop showing. None of it is written to the log.
 
 ## Chat and keys
 
-**Settings… → Claude** takes your Anthropic API key. Keys live in the **Windows
-Credential Manager**, never on disk and never in the interface — the island can
-only ask whether a key exists. Same for every integration key.
+The chat talks to **Anthropic**, **Google**, **OpenAI**, or a model running on
+your own machine through **Ollama** or **LM Studio**. Click the model's name
+under the conversation to pick who answers, and which of their models.
+
+- **Settings… → Chat** takes the API keys, and the Anthropic model: the list
+  comes from your own account. Keys live in the **Windows Credential Manager**,
+  never on disk and never in the interface — the island can only ask whether a
+  key exists. Same for every integration key.
+- **Local models** need no key: under **Settings… → Chat → Local models**, press
+  Connect (the usual addresses are `http://127.0.0.1:11434` for Ollama and
+  `http://127.0.0.1:1234` for LM Studio). Their answers stream in as they are
+  written, and a reasoning model's thinking stays hidden.
+- Answers are drawn as Markdown: lists, bold, quotes, and code blocks with a
+  button to copy them. Only web links can be followed.
+
+Each provider also has a pill of its own, to switch on in **Settings… → Active
+pills**.
 
 No telemetry. The only network requests Coucou makes are to the services you
 configure yourself.
+
+### Plan usage
+
+**Settings… → Agents → Plan usage** shows how much of your Claude plan's 5-hour
+and weekly limits is used: a small pill in the island's header, and a card
+behind it with both limits and when they reset. Pro and Max plans only.
+
+The figures come from Claude Code itself, through its status line: Coucou adds a
+relay to `~/.claude/settings.json` — after showing you the diff and taking a
+dated backup — that forwards the limits and then runs the status line you
+already had, so yours keeps working. Nothing is asked of Anthropic.
 
 ## GitHub
 
@@ -383,7 +408,10 @@ problems. It stays on your machine.
   attach it as context, and jumping to a specific terminal window — "Open
   terminal" opens the working folder in VS Code when `code` is on your `PATH`.
 - Cal.com shows the next bookings as a list rather than the Mac's calendar.
-- The [Spotify](#spotify) pill is Windows-only for now.
+- The [Spotify](#spotify) pill is Windows-only for now; it is what Mochi dances
+  to here, where the Mac has Apple Music.
+- Not here yet: the Codex, Cursor, Gemini CLI and Antigravity pills, the choice
+  of a main coding tool, and the shortcut that shows the island.
 - GitHub goes further than the Mac's card: the [panel](#github), the news of a
   broken build or a merged pull request, and comments are Windows-only for now.
 
