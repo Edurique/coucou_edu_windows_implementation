@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { ChatProvider } from "./chat";
 import type { Settings } from "./state";
 
 export const IS_TAURI =
@@ -93,6 +94,11 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
+  /** What a provider offers, fetched with its stored key or from its local server. Throws what the picker says instead. */
+  chatModels: (provider: ChatProvider) => callOrThrow<ChatModel[]>("chat_models", { provider }),
+  /** Settings → Chat → Connect: the server answers at this address and has a model, or the reason it does not. */
+  localConnect: (provider: ChatProvider, url: string) =>
+    callOrThrow<{ url: string; models: number }>("local_connect", { provider, url }),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
@@ -517,6 +523,12 @@ export interface IntegrationUpdate {
   data: Record<string, unknown>;
   error: string | null;
   event: IntegrationNews | null;
+}
+
+/** A model a provider offers: what it is asked for by, and what it is shown as. */
+export interface ChatModel {
+  id: string;
+  label: string;
 }
 
 export type ChatContext =

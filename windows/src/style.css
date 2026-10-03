@@ -816,12 +816,269 @@ input[type="range"]::-webkit-slider-thumb {
   user-select: text;
 }
 
-.reply {
-  font: 400 12.5px var(--font);
-  color: #b0b5be;
-  white-space: pre-wrap;
+/* An answer, as Markdown — sizes and colours of ChatMarkdownView.swift. The
+   chat is small: paragraphs, lists, a little bold, code that can be copied. */
+.chat-md {
+  gap: 6px;
   padding-right: 8px;
+  font: 400 12.5px/1.4 var(--font);
+  color: #b0b5be;
   user-select: text;
+  min-width: 0;
+}
+
+.chat-md b {
+  color: var(--ink-2);
+}
+
+.chat-md .md-h {
+  margin-top: 0;
+  font: 600 13px var(--font);
+  color: var(--ink-2);
+}
+
+.chat-md .md-h.big {
+  font: 700 14px var(--font);
+}
+
+.chat-md .md-item {
+  gap: 6px;
+}
+
+.chat-md .md-item > i {
+  color: var(--dim-3);
+}
+
+.chat-md .md-rule {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
+  opacity: 0.3;
+}
+
+/* A quoted line: a bar, and the words a shade quieter. */
+.md-quote {
+  padding-left: 8px;
+  border-left: 2px solid #4b5563;
+  border-radius: 1px;
+  color: #8a8f98;
+}
+
+/* A link to the web can be followed; any other is only shown. */
+.md-link.go {
+  cursor: pointer;
+}
+
+.md-link.go:hover {
+  color: var(--ink);
+}
+
+/* Code, with a button that copies all of it. */
+.md-codebox {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #0d0e12;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.md-codebox .md-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: 400 11px/1.45 var(--mono);
+  color: #c8cdd4;
+}
+
+.md-copy {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dim-3);
+  display: grid;
+  place-items: center;
+  cursor: default;
+  transition: color 0.2s ease-out, background 0.2s ease-out;
+}
+
+.md-copy:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.md-copy.copied {
+  color: #22c55e;
+}
+
+/* Who answers, under the conversation: a click opens the picker. */
+.model-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 10px;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font: 500 10.5px var(--font);
+  color: #7b8089;
+  cursor: default;
+  transition: background 0.18s ease-out;
+}
+
+.model-chip:hover,
+.model-chip.on {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.model-chip svg {
+  color: #5c6370;
+}
+
+.model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* The picker: who the chat can talk to, then what each offers. macOS opens it
+   as a popover under the island; here it has to live inside it, so it lies
+   over the conversation, and the island grows to give its list room. */
+.model-picker {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  right: 16px;
+  bottom: 86px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #16171b;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  transform-origin: bottom right;
+  pointer-events: none;
+  transition: opacity 0.16s ease-out, transform 0.3s cubic-bezier(0.3, 1.2, 0.4, 1);
+}
+
+.model-picker.open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.picker-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  font: 400 12px var(--font);
+  color: var(--ink-2);
+  cursor: default;
+  transition: background 0.2s ease-out, border-color 0.2s ease-out;
+}
+
+.provider-chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.provider-chip.on {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.picker-rule {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  opacity: 0.2;
+}
+
+.picker-models {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.picker-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: 400 12px var(--font);
+  color: #c8cdd4;
+  text-align: left;
+  cursor: default;
+}
+
+.picker-model:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.picker-model.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.picker-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font: 400 11px var(--font);
+  color: #8a8f98;
+}
+
+.picker-spin {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #8a8f98;
+  animation: picker-spin 0.8s linear infinite;
+}
+
+@keyframes picker-spin {
+  to { transform: rotate(360deg); }
 }
 
 .typing {

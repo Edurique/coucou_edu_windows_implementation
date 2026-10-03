@@ -11,6 +11,7 @@ use ::windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, HWND, LPARAM, Lo
 use ::windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
+use ::windows::Win32::Security::Authentication::Identity::{GetUserNameExW, NameDisplay};
 use ::windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use ::windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use ::windows::Win32::System::Ole::RevokeDragDrop;
@@ -112,6 +113,26 @@ pub fn find_on_path(stem: &str) -> Option<PathBuf> {
 // keeps two accounts on the same machine from ever meeting on `coucou-*`.
 // coucou-hook computes the same string (hook/src/win.rs) and additionally checks
 // that the process serving the pipe really is us.
+
+/// The account holder's full name ("Ada Lovelace"), when the account has one:
+/// a local account made with only a user name does not.
+pub fn user_full_name() -> Option<String> {
+    unsafe {
+        // First call sizes the buffer, second fills it.
+        let mut size = 0u32;
+        let _ = GetUserNameExW(NameDisplay, None, &mut size);
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; size as usize + 1];
+        let mut len = buf.len() as u32;
+        if !GetUserNameExW(NameDisplay, Some(PWSTR(buf.as_mut_ptr())), &mut len) {
+            return None;
+        }
+        let name = String::from_utf16_lossy(&buf[..len as usize]);
+        (!name.trim().is_empty()).then_some(name)
+    }
+}
 
 /// The SID of the account this process runs as, as `S-1-5-21-…`.
 pub fn current_user_sid() -> Option<String> {

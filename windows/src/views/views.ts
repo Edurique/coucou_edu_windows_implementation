@@ -16,6 +16,7 @@ import { diffLine, fileKind, plusMinus, readPatch } from "./code";
 import { hasPreview, stepIcon, stepName, stepPreview } from "./step";
 import { COLOR } from "./palette";
 import type { IntegrationNews } from "../core/bridge";
+import type { ChatProvider } from "../core/chat";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -67,6 +68,8 @@ export interface ViewActions {
   openSessions(): void;
   /** Puts another Claude Code session in front: the island shows that one. */
   pickSession(id: string): void;
+  /** Into the chat, talking to this provider: an AI pill's button. */
+  chatWith(provider: ChatProvider): void;
 }
 
 /** Lines of a step's preview the overview has room for. */
@@ -341,6 +344,7 @@ function buildOverview(actions: ViewActions, onResize: () => void): ViewHost {
       State.notify();
     },
     openSettings: () => actions.openSettingsWindow(),
+    chatWith: (provider) => actions.chatWith(provider),
     // The card's figure asks for the panel as a whole: while the pill has
     // news, that leads to what the news is about.
     openPanel: (open) => {
@@ -1087,7 +1091,7 @@ export function buildViews(
   map.set("confused", buildConfused());
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));
-  map.set("prompt", buildPrompt(onChatHeightChange));
+  map.set("prompt", buildPrompt(onChatHeightChange, (url) => actions.openUrl(url), () => actions.emote("surprised")));
   map.set("upload", buildUpload());
   map.set("uploading", buildUploading());
   map.set("choose", buildChoose(actions));

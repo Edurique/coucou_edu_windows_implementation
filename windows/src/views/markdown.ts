@@ -6,12 +6,25 @@
 // stays as it was written. Everything is built as text nodes: nothing an
 // answer contains is ever read as HTML, and a link is shown, not followed.
 
-import { h } from "./dom";
+import { h, svg } from "./dom";
+import { ICONS } from "./icons";
 
 const INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\)|\*[^*\s][^*\n]*\*)/g;
 
+/** What a place that shows Markdown may add to it. The chat does; a session's reply is only read. */
+export interface MarkdownOptions {
+  /** Lines that start with `>` are drawn as quotes. */
+  quotes?: boolean;
+  /** Links to the web can be followed: this opens one. Any other kind of link is only shown. */
+  open?: (url: string) => void;
+  /** Code blocks get a button that hands their code, and itself, to this. */
+  copy?: (code: string, button: HTMLElement) => void;
+}
+
+const WEB_LINK = /^https?:\/\//i;
+
 /** A line's words, with what is bold, in italics, code or a link marked as such. */
-function inline(text: string): Node[] {
+function inlineOf(text: string, open?: (url: string) => void): Node[] {
   const out: Node[] = [];
   let at = 0;
   for (const match of text.matchAll(INLINE)) {
@@ -20,7 +33,15 @@ function inline(text: string): Node[] {
     if (start > at) out.push(document.createTextNode(text.slice(at, start)));
     if (piece.startsWith("**")) out.push(h("b", { text: piece.slice(2, -2) }));
     else if (piece.startsWith("`")) out.push(h("code", { text: piece.slice(1, -1) }));
-    else if (piece.startsWith("[")) out.push(h("span", { class: "md-link", text: piece.slice(1, piece.indexOf("](")) }));
+    else if (piece.startsWith("[")) {
+      const label = piece.slice(1, piece.indexOf("]("));
+      const url = piece.slice(piece.indexOf("](") + 2, -1).trim();
+      if (open && WEB_LINK.test(url)) {
+        out.push(h("span", { class: "md-link go", title: url, text: label, onclick: () => open(url) }));
+      } else {
+        out.push(h("span", { class: "md-link", text: label }));
+      }
+    }
     else out.push(h("em", { text: piece.slice(1, -1) }));
     at = start + piece.length;
   }
@@ -34,6 +55,7 @@ const FENCE = /^\s*```/;
 const RULE = /^\s*([-*_])\s*(\1\s*){2,}$/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const QUOTE = /^\s*>(?: (.*))?$/;
 /** Spaces of indentation that make a list item one level deeper, and how far in a level sits, in px. */
 const INDENT = 2;
 const LEVEL_PX = 12;
@@ -41,8 +63,9 @@ const LEVEL_PX = 12;
 const cells = (row: string) => row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
 
 /** An answer, block by block. */
-export function markdown(source: string): HTMLElement {
+export function markdown(source: string, options: MarkdownOptions = {}): HTMLElement {
   const root = h("div", { class: "md" });
+  const inline = (text: string) => inlineOf(text, options.open);
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   let paragraph: string[] = [];
   const flush = () => {
@@ -58,7 +81,23 @@ export function markdown(source: string): HTMLElement {
       flush();
       const code: string[] = [];
       for (i++; i < lines.length && !FENCE.test(lines[i]); i++) code.push(lines[i]);
-      root.append(h("pre", { class: "md-code", text: code.join("\n") }));
+      const text = code.join("\n");
+      const block = h("pre", { class: "md-code", text });
+      const { copy } = options;
+      if (copy) {
+        const button = h("button", { class: "md-copy", title: "Copy" }, svg(ICONS.copy, 10));
+        button.addEventListener("click", () => copy(text, button));
+        root.append(h("div", { class: "md-codebox" }, block, button));
+      } else {
+        root.append(block);
+      }
+      continue;
+    }
+
+    const quote = options.quotes ? QUOTE.exec(line) : null;
+    if (quote) {
+      flush();
+      root.append(h("div", { class: "md-quote" }, ...inline(quote[1] ?? "")));
       continue;
     }
 

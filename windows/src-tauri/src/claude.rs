@@ -4,12 +4,13 @@
 // Everything happens here rather than in the island: the API key never leaves
 // the Credential Manager, and file bytes never cross the IPC boundary.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::secrets;
+use crate::providers::Model;
+use crate::{identity, secrets};
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -21,11 +22,30 @@ const MAX_TOKENS: u32 = 4096;
 const MAX_INLINE_TEXT: u64 = 200_000;
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
+/// The key's name in the keychain.
+pub const KEY: &str = "anthropic-api-key";
+const MODELS_ENDPOINT: &str = "https://api.anthropic.com/v1/models?limit=100";
+const MODELS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-const SYSTEM_PROMPT: &str = "You are Mochi, a personal AI assistant living at the top of the user's screen. \
+/// What Mochi is told he is, whoever answers — the same words as
+/// ClaudeService.makeSystemPrompt. He greets the user by their first name when
+/// the account has one worth using, and stays neutral otherwise. Worked out
+/// once: the name cannot change under us while the app runs.
+pub fn system_prompt() -> &'static str {
+    static PROMPT: OnceLock<String> = OnceLock::new();
+    PROMPT.get_or_init(|| {
+        let opening = match identity::first_name() {
+            Some(first) => format!("You are Mochi, {first}'s personal AI assistant living at the top of their screen."),
+            None => "You are Mochi, a personal AI assistant living at the top of the user's screen.".to_string(),
+        };
+        format!(
+            "{opening} \
 You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions. \
 Respond in the user's language. Be thorough and complete — use as much detail as the task requires. \
-No markdown formatting (no **, no ##, no bullet dashes). Use plain text with line breaks.";
+Use light Markdown when it helps: short paragraphs, bullet lists, **bold**, `inline code` and fenced code blocks. Avoid tables and big headings: the chat window is small."
+        )
+    })
+}
 
 #[derive(Default)]
 pub struct Chat {
@@ -38,19 +58,19 @@ impl Chat {
         self.messages.lock().unwrap().clear();
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.messages.lock().unwrap().is_empty()
     }
 
-    fn push(&self, message: Value) {
+    pub(crate) fn push(&self, message: Value) {
         self.messages.lock().unwrap().push(message);
     }
 
-    fn pop(&self) {
+    pub(crate) fn pop(&self) {
         self.messages.lock().unwrap().pop();
     }
 
-    fn snapshot(&self) -> Vec<Value> {
+    pub(crate) fn snapshot(&self) -> Vec<Value> {
         self.messages.lock().unwrap().clone()
     }
 }
@@ -76,7 +96,7 @@ pub async fn send(
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    let key = secrets::get("anthropic-api-key")
+    let key = secrets::get(KEY)
         .ok_or_else(|| "API key missing. Open settings.".to_string())?;
 
     let mut content: Vec<Value> = Vec::new();
@@ -108,13 +128,13 @@ pub async fn send(
     let body = json!({
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": SYSTEM_PROMPT,
+        "system": system_prompt(),
         "tools": [{ "type": "web_search_20260209", "name": "web_search", "max_uses": 5 }],
         "fallbacks": "default",
         "messages": chat.snapshot(),
     });
 
-    let response = match call(&key, &body).await {
+    let response = match call(&key, &body, model).await {
         Ok(v) => v,
         Err(err) => {
             chat.pop(); // keep the history consistent with what the model saw
@@ -157,7 +177,40 @@ pub async fn send(
     Ok(ChatReply { text })
 }
 
-async fn call(key: &str, body: &Value) -> Result<Value, String> {
+/// The models the key's account can use, the newest first, as the API lists
+/// them. Empty on any error: whoever asks falls back on what it has.
+pub async fn fetch_models(key: &str) -> Vec<Model> {
+    let Ok(client) = reqwest::Client::builder().timeout(MODELS_TIMEOUT).build() else { return Vec::new() };
+    let Ok(response) = client
+        .get(MODELS_ENDPOINT)
+        .header("x-api-key", key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .send()
+        .await
+    else {
+        return Vec::new();
+    };
+    if response.status().as_u16() != 200 {
+        return Vec::new();
+    }
+    let Ok(json) = response.json::<Value>().await else { return Vec::new() };
+    json.get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(Model {
+                        id: item.get("id")?.as_str()?.to_string(),
+                        label: item.get("display_name")?.as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn call(key: &str, body: &Value, model: &str) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .build()
@@ -177,6 +230,13 @@ async fn call(key: &str, body: &Value) -> Result<Value, String> {
     let status = response.status();
     let text = response.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
+        // A model the account does not have is said as that, with where to go.
+        let kind = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.get("error")?.get("type")?.as_str().map(str::to_string));
+        if kind.as_deref() == Some("not_found_error") {
+            return Err(format!("Model not found: {model}. Pick another one in Settings."));
+        }
         // Surface the API's own message, which is what makes a bad key obvious.
         let detail = serde_json::from_str::<Value>(&text)
             .ok()

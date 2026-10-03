@@ -5,12 +5,15 @@ mod files;
 mod github;
 mod github_detail;
 mod hooks;
+mod identity;
 mod integrations;
 mod island;
+mod local_chat;
 mod log;
 mod media;
 mod pipe;
 mod platform;
+mod providers;
 mod secrets;
 mod settings;
 mod tray;
@@ -28,6 +31,7 @@ use files::DroppedFile;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
 use pipe::Pending;
+use providers::Provider;
 use settings::Settings;
 
 pub struct Shared {
@@ -259,16 +263,36 @@ fn approval_answer(app: AppHandle, request_id: String, answers: serde_json::Map<
 
 // ── Chat, files and secrets ───────────────────────────────────────────────────
 
-/// One chat turn. The API key and any file bytes stay on the Rust side.
+/// One chat turn, with whoever the chat is set to talk to. The API key and any
+/// file bytes stay on the Rust side.
 #[tauri::command]
 async fn chat_send(
+    app: AppHandle,
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    let model = shared.settings.lock().unwrap().model.clone();
-    claude::send(&chat, &model, query, context).await
+    let settings = shared.settings.lock().unwrap().clone();
+    match settings.chat_provider {
+        Provider::Anthropic => claude::send(&chat, &settings.model, query, context).await,
+        provider => providers::send(&app, &chat, &settings, provider, query, context).await,
+    }
+}
+
+/// The models a provider offers, for the picker in the chat. Fetched with the
+/// stored key, or from the local server: neither comes back to the island.
+#[tauri::command]
+async fn chat_models(shared: State<'_, Shared>, provider: Provider) -> Result<Vec<providers::Model>, String> {
+    let settings = shared.settings.lock().unwrap().clone();
+    providers::models(provider, &settings).await
+}
+
+/// Settings → Chat → Connect: checks a local model server answers at this
+/// address and has a model, and gives the address back as it is to be kept.
+#[tauri::command]
+async fn local_connect(provider: Provider, url: String) -> Result<providers::LocalServer, String> {
+    providers::connect_local(provider, &url).await
 }
 
 #[tauri::command]
@@ -470,6 +494,8 @@ pub fn run() {
             approval_answer,
             log_line,
             chat_send,
+            chat_models,
+            local_connect,
             chat_reset,
             ingest_file,
             secret_present,

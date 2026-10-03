@@ -20,6 +20,7 @@ import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { githubData } from "../views/integrations";
 import { enterSessionPanel } from "../views/session";
+import { switchChatProvider } from "../views/chat";
 import { followNews } from "./integrations";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
@@ -304,6 +305,10 @@ export class Island {
         State.notify();
       },
       followNews: () => followNews(this),
+      chatWith: (provider) => {
+        switchChatProvider(provider, () => this.engine.triggerEmote("surprised"));
+        this.setView("prompt");
+      },
     };
 
     this.wakeStrip = h("div", { id: "wake-strip" });

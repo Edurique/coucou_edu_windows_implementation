@@ -8,6 +8,7 @@ import { h, svg, clear, dot, replay } from "./dom";
 import { ICONS } from "./icons";
 import { COLOR } from "./palette";
 import { SPOTIFY_ID, State, type AgentTask } from "../core/state";
+import { PROVIDERS, chatModel, providerOfPill, type ChatProvider } from "../core/chat";
 import { Bridge, type GithubActivityKind, type GithubData, type GithubTarget } from "../core/bridge";
 
 /** Same shape as the Swift `timeAgo` computed properties. */
@@ -54,18 +55,30 @@ const OPEN_URLS: Record<string, string> = {
   integration_calcom: "https://app.cal.com/bookings",
 };
 
-function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
+function idleCard(task: AgentTask, openSettings: () => void, chatWith: (provider: ChatProvider) => void): HTMLElement {
   const info = State.integrations[task.id];
   const configured = info?.configured ?? false;
   const error = info?.error ?? null;
+  // A pill that stands for who the chat can talk to: its key or its server, and the model chosen for it.
+  const ai = providerOfPill(task.id);
+  const local = ai != null && PROVIDERS[ai].local;
   // The Claude Code pill is about hooks, not a key — the macOS wording would be
   // misleading here.
-  const missing = task.id === "integration_claude" ? "Hooks not installed" : "Key not configured";
-  const label = error ?? (configured ? "Connected · loading…" : missing);
+  const missing = task.id === "integration_claude" ? "Hooks not installed" : local ? "Not connected" : "Key not configured";
+  const ready = ai
+    ? `${local ? "Connected" : "Key configured"} · ${chatModel(State.settings, ai)}`
+    : "Connected · loading…";
+  const label = error ?? (configured ? ready : missing);
   const statusColor = error || !configured ? "#F4505E" : "#22C55E";
 
   const actions = h("div", { class: "int-actions" });
-  if (task.id === "integration_claude") {
+  if (ai) {
+    if (configured) {
+      actions.append(
+        h("button", { class: "link-btn", style: `color:${task.color}d9`, text: `Chat with ${task.name}`, onclick: () => chatWith(ai) }),
+      );
+    }
+  } else if (task.id === "integration_claude") {
     actions.append(
       h("button", {
         class: "link-btn",
@@ -95,7 +108,7 @@ function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
       }),
     );
   }
-  if (configured) {
+  if (configured && !ai) {
     actions.append(
       h("button", {
         class: "link-btn",
@@ -104,7 +117,7 @@ function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
         onclick: () => void Bridge.refreshIntegration(task.id),
       }),
     );
-  } else {
+  } else if (!configured) {
     actions.append(
       h("button", { class: "link-btn", style: "color:#8e939c", text: "Settings…", onclick: openSettings }),
     );
@@ -113,7 +126,7 @@ function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
   return h(
     "div",
     { class: "int-card" },
-    header(task.color, task.id === "integration_claude" ? State.clientName : task.name, "Integration"),
+    header(task.color, task.id === "integration_claude" ? State.clientName : task.name, ai ? "Chat" : "Integration"),
     h("div", { class: "int-status" }, dot(statusColor, 5), h("span", { text: label })),
     actions,
   );
@@ -573,9 +586,9 @@ function calcomCard(): HTMLElement {
 
 // ── n8n ───────────────────────────────────────────────────────────────────────
 
-function n8nCard(task: AgentTask, onDetail: () => void, openSettings: () => void): HTMLElement {
+function n8nCard(task: AgentTask, onDetail: () => void, hooks: IntegrationCardHooks): HTMLElement {
   const hasActivity = task.steps.length > 0 && (task.state === "finished" || task.state === "error");
-  if (!hasActivity) return idleCard(task, openSettings);
+  if (!hasActivity) return idleCard(task, hooks.openSettings, hooks.chatWith);
   const success = task.state === "finished";
   const accent = success ? "#22C55E" : "#F4505E";
   return h(
@@ -635,6 +648,8 @@ export interface IntegrationCardHooks {
   openDetail(): void;
   closeDetail(): void;
   openSettings(): void;
+  /** Into the chat, talking to this provider. */
+  chatWith(provider: ChatProvider): void;
   /** A view of its own, for the pills that outgrew the card (GitHub) — on a sheet, or on its lists. */
   openPanel(open?: GithubOpening): void;
 }
@@ -668,12 +683,12 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
     const hasActivity = task.steps.length > 0 && (task.state === "finished" || task.state === "error");
     return hooks.detailOpen && hasActivity
       ? n8nDetail(task, hooks.closeDetail)
-      : n8nCard(task, hooks.openDetail, hooks.openSettings);
+      : n8nCard(task, hooks.openDetail, hooks);
   }
   if (task.id === "integration_vercel" && hasIntegrationData(task.id)) {
     return hooks.detailOpen ? vercelDetail(hooks.closeDetail) : vercelCard(hooks.openDetail);
   }
-  if (!hasIntegrationData(task.id)) return idleCard(task, hooks.openSettings);
+  if (!hasIntegrationData(task.id)) return idleCard(task, hooks.openSettings, hooks.chatWith);
 
   switch (task.id) {
     case "integration_resend":
@@ -689,7 +704,7 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
     case SPOTIFY_ID:
       return spotifyCard(task);
     default:
-      return idleCard(task, hooks.openSettings);
+      return idleCard(task, hooks.openSettings, hooks.chatWith);
   }
 }
 

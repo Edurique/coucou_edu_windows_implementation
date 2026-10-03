@@ -119,6 +119,24 @@ pub fn relay_socket_path() -> Option<PathBuf> {
     is_private_dir(&dir).then(|| dir.join("coucou.sock"))
 }
 
+// ── Who we are ────────────────────────────────────────────────────────────────
+
+/// The account holder's full name, from the account's GECOS field ("Ada
+/// Lovelace,,,"), when it has one.
+pub fn user_full_name() -> Option<String> {
+    let entry = unsafe { libc::getpwuid(libc::getuid()) };
+    if entry.is_null() {
+        return None;
+    }
+    let gecos = unsafe { (*entry).pw_gecos };
+    if gecos.is_null() {
+        return None;
+    }
+    let gecos = unsafe { std::ffi::CStr::from_ptr(gecos) }.to_str().ok()?;
+    let name = gecos.split(',').next()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 // ── Processes ─────────────────────────────────────────────────────────────────
 
 /// Nothing to hide: a spawned process only gets a terminal if it asks for one.

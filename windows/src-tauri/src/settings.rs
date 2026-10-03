@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::providers::Provider;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -32,6 +34,42 @@ pub struct Settings {
     /// request waiting for an answer brings it out. On until switched off.
     #[serde(default = "yes")]
     pub hide_in_fullscreen: bool,
+    /// Who the chat talks to, picked in the chat itself, and the model chosen
+    /// for each provider (Anthropic's is `model`). All absent from a
+    /// settings.json written before the chat had more than one.
+    #[serde(default)]
+    pub chat_provider: Provider,
+    #[serde(default = "default_google_model")]
+    pub google_chat_model: String,
+    #[serde(default = "default_openai_model")]
+    pub openai_chat_model: String,
+    #[serde(default = "default_ollama_model")]
+    pub ollama_chat_model: String,
+    #[serde(default = "default_lmstudio_model")]
+    pub lmstudio_chat_model: String,
+    /// Where the local model servers are, once connected in the settings
+    /// window; empty until then. Addresses, not secrets.
+    #[serde(default)]
+    pub ollama_server_url: String,
+    #[serde(default)]
+    pub lmstudio_server_url: String,
+}
+
+// The models a provider starts on, as on macOS (ChatProvider.defaultModel).
+fn default_google_model() -> String {
+    "gemini-2.0-flash".to_string()
+}
+
+fn default_openai_model() -> String {
+    "gpt-4o".to_string()
+}
+
+fn default_ollama_model() -> String {
+    "llama3.2".to_string()
+}
+
+fn default_lmstudio_model() -> String {
+    "local-model".to_string()
 }
 
 fn yes() -> bool {
@@ -62,6 +100,13 @@ impl Default for Settings {
             github_muted: Vec::new(),
             announce_songs: true,
             hide_in_fullscreen: true,
+            chat_provider: Provider::default(),
+            google_chat_model: default_google_model(),
+            openai_chat_model: default_openai_model(),
+            ollama_chat_model: default_ollama_model(),
+            lmstudio_chat_model: default_lmstudio_model(),
+            ollama_server_url: String::new(),
+            lmstudio_server_url: String::new(),
         }
     }
 }

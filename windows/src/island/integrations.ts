@@ -5,6 +5,7 @@
 import { onEvent, Bridge, type GithubData, type IntegrationUpdate } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { CLAUDE_ID, SPOTIFY_ID, State } from "../core/state";
+import { PROVIDERS, PROVIDER_IDS, serverUrl } from "../core/chat";
 import { enterGithubPanel, sawRunEnd } from "../views/github";
 import { announceOnCard, nowPlaying } from "../views/integrations";
 import type { Island } from "./island";
@@ -167,6 +168,13 @@ export async function refreshConfigured() {
     // They speak only when what they say changes: one just switched on, or
     // an island just loaded, asks for what there is to say now.
     if (!info.loaded && State.settings.activeIntegrations.includes(id)) void Bridge.refreshIntegration(id);
+  }
+  // Who the chat can talk to: a key for the ones on the network, an address for the ones on this machine.
+  for (const provider of PROVIDER_IDS) {
+    const { pill, secret } = PROVIDERS[provider];
+    const present = secret ? ((await Bridge.secretPresent(secret)) ?? false) : serverUrl(State.settings, provider) !== "";
+    const info = State.integrations[pill] ?? { data: {}, error: null, loaded: false, configured: false };
+    State.integrations[pill] = { ...info, configured: present };
   }
   const hooks = State.settings.hooksInstalled;
   const claude = State.integrations.integration_claude ?? {

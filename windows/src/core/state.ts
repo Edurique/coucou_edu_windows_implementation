@@ -3,6 +3,7 @@
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
 import type { EyeShape } from "../mochi/engine";
 import type { IntegrationNews } from "./bridge";
+import { PROVIDERS, PROVIDER_IDS, type ChatProvider } from "./chat";
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -205,6 +206,7 @@ export function newSession(id: string): ClaudeSession {
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
+  /** Grows while a local model writes its answer. */
   content: string;
 }
 
@@ -236,9 +238,16 @@ export const CLAUDE_ID = "integration_claude";
 /** The pill that shows what Spotify plays. */
 export const SPOTIFY_ID = "integration_spotify";
 
+/** What each provider's pill is called (PillCatalog.swift): Google's says what of Google it is. */
+const AI_PILL_NAMES: Record<ChatProvider, string> = {
+  anthropic: "Anthropic", google: "Google AI", openai: "OpenAI", ollama: "Ollama", lmstudio: "LM Studio",
+};
+
 /** AgentTask.integrationAgents — same ids, names and colours as macOS. */
 export const INTEGRATION_AGENTS: AgentTask[] = [
   task("integration_claude", "VS Code", "#F5F6F8", "claudeCode"),
+  // AI for the chat: one pill per provider, in its colour.
+  ...PROVIDER_IDS.map((id) => task(PROVIDERS[id].pill, AI_PILL_NAMES[id], PROVIDERS[id].accent, "n8n")),
   task("integration_resend", "Resend", "#22C55E", "n8n"),
   task("integration_n8n", "n8n", "#F29B38", "n8n"),
   task("integration_vercel", "Vercel", "#7C5CFF", "n8n"),
@@ -251,6 +260,7 @@ export const INTEGRATION_AGENTS: AgentTask[] = [
 ];
 
 export const TOGGLEABLE_INTEGRATION_IDS = [
+  ...PROVIDER_IDS.map((id) => PROVIDERS[id].pill),
   "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
   "integration_notion", "integration_calcom", "integration_stripe",
   SPOTIFY_ID,
@@ -283,6 +293,15 @@ export interface Settings {
   announceSongs: boolean;
   /** The island stays away while an app has the whole display. */
   hideInFullscreen: boolean;
+  /** Who the chat talks to, and the model chosen for each provider (Anthropic's is `model`). */
+  chatProvider: ChatProvider;
+  googleChatModel: string;
+  openaiChatModel: string;
+  ollamaChatModel: string;
+  lmstudioChatModel: string;
+  /** Where the local model servers are, once connected; empty until then. */
+  ollamaServerUrl: string;
+  lmstudioServerUrl: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -300,6 +319,13 @@ export const DEFAULT_SETTINGS: Settings = {
   githubMuted: [],
   announceSongs: true,
   hideInFullscreen: true,
+  chatProvider: "anthropic",
+  googleChatModel: "gemini-2.0-flash",
+  openaiChatModel: "gpt-4o",
+  ollamaChatModel: "llama3.2",
+  lmstudioChatModel: "local-model",
+  ollamaServerUrl: "",
+  lmstudioServerUrl: "",
 };
 
 type Listener = () => void;
