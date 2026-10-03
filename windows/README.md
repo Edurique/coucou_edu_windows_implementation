@@ -89,7 +89,7 @@ your latest activity. Click the figure — or the arrow — and the island opens
 
 | Where | What you see |
 |---|---|
-| **Activity** | The contribution graph and your latest events. Click a day of the graph for what was done that day; click a line for its sheet |
+| **Activity** | The contribution graph, the pull requests waiting for your review, and your latest events. Click a day of the graph for what was done that day; click a line for its sheet |
 | **Projects** | Your repositories, most recently pushed first, each with its latest build |
 | A project | Description, languages, its last builds, its latest pull request, its latest deployment |
 | A pull request | State, branches, labels, review, checks, the files with their diff |
@@ -109,13 +109,20 @@ one click away. The arrow at the top right opens the same thing on github.com.
 
 <img src="screenshots/github-news-merge.png" width="640" alt="The island opened on a merged pull request, with Open and OK">
 
-Three things make Mochi speak up, with a sound and a card: **a build of yours
-breaks**, **a pull request of yours is merged**, and **somebody opens a pull
-request on one of your projects** — the ones the Projects tab lists. **Open**
+Four things make Mochi speak up, with a sound and a card: **a build of yours
+breaks**, **somebody asks for your review**, **a pull request of yours is
+merged**, and **somebody opens a pull request on one of your projects** — the
+ones the Projects tab lists. **Open**
 goes straight to the run or the pull request. Each project of that tab has a
 bell: click it to mute a project you do not want to hear from, and again to give
 it its voice back. **OK** folds the island and leaves the news on the pill
 for five minutes, so it isn't lost: click Mochi, or the card, to go to it.
+
+<img src="screenshots/github-review.png" width="640" alt="The Activity tab with two pull requests waiting for your review above the recent activity">
+
+A pull request your review is asked on stays at the top of the Activity tab,
+under **Waiting for your review**, for as long as it waits: the request is told
+once, when it comes in.
 
 ### The token
 

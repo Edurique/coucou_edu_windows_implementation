@@ -14,7 +14,7 @@ import {
   type GithubActivity, type GithubBuild, type GithubCommentsDetail, type GithubCommitsDetail, type GithubContributions,
   type GithubData, type GithubDay, type GithubDeploy, type GithubDetail, type GithubEntry, type GithubFile,
   type GithubIssueDetail, type GithubJob, type GithubLabel, type GithubProject, type GithubPull, type GithubPullDetail,
-  type GithubReleaseDetail, type GithubRemark, type GithubRepo, type GithubRunDetail, type GithubTarget,
+  type GithubReleaseDetail, type GithubRemark, type GithubRepo, type GithubReviewRequest, type GithubRunDetail, type GithubTarget,
   type GithubThread, type GithubTimed, type IntegrationNews,
 } from "../core/bridge";
 import type { BotEmoteName, BotStateName } from "../core/layout";
@@ -503,6 +503,12 @@ function eventRow(
 
 function activityRow(a: GithubActivity, login: string): HTMLElement {
   return eventRow(a, login, timeAgo(a.at));
+}
+
+/** A pull request waiting for your review: whose it is, and since when it last moved. */
+function reviewRow(r: GithubReviewRequest, login: string): HTMLElement {
+  const detail = [`#${r.number}`, r.author, r.draft && "draft"].filter(Boolean).join(" · ");
+  return eventRow({ kind: "review", repo: r.repo, title: r.title, detail, url: r.url, target: r.target }, login, timeAgo(r.at));
 }
 
 /** A state's mark: a check, a cross, a dash — or, while it goes, a turning ring. */
@@ -2395,6 +2401,14 @@ export function buildGithub(actions: ViewActions): ViewHost {
         }),
       );
       return section;
+    }
+    // What is asked of you comes before what happened; `?? []` for a snapshot
+    // an older build left in the island.
+    const toReview = d.toReview ?? [];
+    if (toReview.length > 0) {
+      section.append(heading("Waiting for your review"));
+      for (const r of toReview) section.append(reviewRow(r, d.login));
+      section.append(heading("Recent activity"));
     }
     if (d.activity.length === 0) {
       section.append(h("div", { class: "int-empty", text: "Nothing in the last 30 days." }));
