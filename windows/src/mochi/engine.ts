@@ -118,6 +118,11 @@ const EMOTE_EYE: Record<BotEmoteName, EyeShape> = {
 
 const now = () => performance.now() / 1000;
 
+/** The beat Mochi dances on, and how long the dance takes to come in and to go. */
+const DANCE_BPM = 112;
+const DANCE_IN_S = 0.3;
+const DANCE_OUT_S = 0.5;
+
 export function hexToRGB(hex: string): RGB {
   const h = hex.replace("#", "");
   const v = parseInt(h, 16);
@@ -192,6 +197,11 @@ export class BotEngine {
   eyeOverride: EyeShape | null = null;
   eyeOverrideUntil = 0;
   permanentEye: EyeShape | null = null;
+
+  /** Music is playing and Mochi has nothing more pressing to show: he dances. */
+  isDancing = false;
+  /** How much of the dance shows: in over 0.3 s, out over 0.5 s. */
+  dancingLevel = 0;
   permanentEmote: BotEmoteName | null = null;
   miniNextBehavior = 0;
 
@@ -452,9 +462,33 @@ export class BotEngine {
     this.morph = 0;
   }
 
+  setDancing(dancing: boolean) {
+    this.isDancing = dancing;
+  }
+
+  /**
+   * The dance: a hop, a sway and a squash on landing, on the beat, around the
+   * bottom of the body. Called before anything of Mochi is drawn.
+   */
+  private applyDance(x: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.dancingLevel <= 0.001) return;
+    const R = W * 0.3;
+    const px = W / 2 + this.ox * R;
+    const py = H / 2 + this.particleOverhang / 2 + this.oy * R + R * 0.06 + R * 0.88;
+    const beat = (now() * DANCE_BPM) / 60;
+    const hop = Math.abs(Math.sin(Math.PI * beat));
+    const land = Math.pow(1 - hop, 6);
+    const l = this.dancingLevel;
+    x.translate(px + 0.08 * R * Math.sin(Math.PI * beat) * l, py - 0.2 * R * hop * l);
+    x.rotate(0.1 * Math.sin(Math.PI * beat) * l);
+    x.scale(1 + 0.045 * land * l, 1 - 0.06 * land * l);
+    x.translate(-px, -py);
+  }
+
   /** True while anything is still moving — lets the island stop its RAF loop. */
   get busy(): boolean {
     return (
+      this.isDancing || this.dancingLevel > 0.001 ||
       this.tweens.size > 0 ||
       this.particles.length > 0 ||
       this.cfg.bounces || this.cfg.scans || this.cfg.breathes || this.cfg.zz || this.cfg.sweat ||
@@ -486,6 +520,10 @@ export class BotEngine {
   update(dt: number) {
     const n = now();
     const nowMs = performance.now();
+
+    const dancingTarget = this.isDancing ? 1 : 0;
+    if (this.dancingLevel < dancingTarget) this.dancingLevel = Math.min(dancingTarget, this.dancingLevel + dt / DANCE_IN_S);
+    else if (this.dancingLevel > dancingTarget) this.dancingLevel = Math.max(dancingTarget, this.dancingLevel - dt / DANCE_OUT_S);
 
     for (const tw of [...this.tweens.values()]) {
       const k = tw.keys[tw.index];
@@ -641,6 +679,13 @@ export class BotEngine {
    * `w`×`h` CSS pixels (the caller has already applied the DPR transform).
    */
   draw(x: CanvasRenderingContext2D, W: number, H: number) {
+    x.save();
+    this.applyDance(x, W, H);
+    this.paint(x, W, H);
+    x.restore();
+  }
+
+  private paint(x: CanvasRenderingContext2D, W: number, H: number) {
     const R = W * 0.3;
     const rx = R * 1.14;
     const ry = R * 0.88;
@@ -751,6 +796,10 @@ export class BotEngine {
     if (this.morph > 0.5) {
       if (this.isChewing) shape = "happy";
       else if (this.slotHTarget > 0.05 || this.slotH > 0.1) shape = "cup";
+    }
+    // Dancing with nothing on his mind, he looks it.
+    if (this.isDancing && this.dancingLevel > 0.15 && !this.isMini && (this.state === "idle" || this.state === "finished")) {
+      shape = "happy";
     }
 
     x.save();

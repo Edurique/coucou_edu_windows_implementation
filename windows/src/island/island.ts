@@ -53,6 +53,9 @@ const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 :
 
 /** How fast Mochi's body goes to a new colour, per second: about 90 % of the way in 0.4 s. */
 const TINT_RATE = 5.5;
+/** The states Mochi can dance in: none that asks for the user, or says something went wrong. */
+const CAN_DANCE: ReadonlySet<BotStateName> = new Set<BotStateName>(["idle", "working", "thinking", "searching", "finished"]);
+
 /** Closer than this on every channel (0…1), the body has its colour: a unit of 8-bit colour. */
 const TINT_SETTLED = 0.004;
 
@@ -1149,6 +1152,7 @@ export class Island {
     const ctx = this.botCanvas.getContext("2d");
     if (!ctx) return;
 
+    this.engine.setDancing(this.shouldDance());
     this.engine.bodyColor = this.easeBodyColor(dt);
     this.engine.particleOverhang = BOT_OVERHANG;
     this.engine.lookX = this.lookX();
@@ -1166,6 +1170,18 @@ export class Island {
     ctx.setTransform(dpr, 0, 0, dpr, spare * dpr, spare * dpr);
     wipe(ctx);
     this.engine.draw(ctx, w, hCss);
+  }
+
+  /**
+   * Mochi dances while Spotify plays, in the states where he has nothing more
+   * pressing to show — as he does to Apple Music on the Mac. In the folded
+   * island; unfolded, only on Spotify's own card.
+   */
+  private shouldDance(): boolean {
+    if (!State.settings.activeIntegrations.includes(SPOTIFY_ID) || !nowPlaying().playing) return false;
+    if (!CAN_DANCE.has(State.effectiveState)) return false;
+    if (State.mode === "compact") return true;
+    return State.mode === "expanded" && State.view === "overview" && State.focusId === SPOTIFY_ID;
   }
 
   /** The colour Mochi should be: a view's request, else his pill's colour. */
