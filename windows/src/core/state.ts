@@ -5,6 +5,7 @@ import type { EyeShape } from "../mochi/engine";
 import type { IntegrationNews } from "./bridge";
 import { PROVIDERS, PROVIDER_IDS, type ChatProvider } from "./chat";
 import type { PlanUsage } from "./plan";
+import { asOutfit, seasonal, type Outfit } from "../mochi/wardrobe";
 
 export type AgentSource = "claudeCode" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
@@ -305,6 +306,8 @@ export interface Settings {
   lmstudioServerUrl: string;
   /** The Claude plan gauge shows in the island's header. */
   showPlanInNotch: boolean;
+  /** What Mochi wears: an outfit of the wardrobe, or "auto" for the season's. */
+  mochiOutfit: Outfit;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -330,6 +333,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ollamaServerUrl: "",
   lmstudioServerUrl: "",
   showPlanInNotch: false,
+  mochiOutfit: "auto",
 };
 
 type Listener = () => void;
@@ -340,6 +344,21 @@ class AppState {
 
   tasks: AgentTask[] = [];
   focusId: string | null = null;
+  /** The outfit under the mouse in the wardrobe: Mochi tries it on meanwhile. */
+  wardrobePreview: Outfit | null = null;
+  /** The season's outfit, worked out once a day. */
+  private seasonOf: { day: string; outfit: Outfit } | null = null;
+
+  /** What Mochi has on now: what is being tried on, his own pick, or the season's. */
+  get outfit(): Outfit {
+    if (this.wardrobePreview) return this.wardrobePreview;
+    const picked = asOutfit(this.settings.mochiOutfit);
+    if (picked !== "auto") return picked;
+    const today = new Date();
+    const day = today.toDateString();
+    if (this.seasonOf?.day !== day) this.seasonOf = { day, outfit: seasonal(today) };
+    return this.seasonOf.outfit;
+  }
 
   stateOverride: BotStateName | null = null;
 

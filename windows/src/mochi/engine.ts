@@ -7,6 +7,8 @@
 import { Ease, lerp, type EaseFn } from "../core/anim";
 import { Sound } from "../core/sound";
 import type { BotEmoteName, BotStateName } from "../core/layout";
+import { drawOutfitBehind, drawOutfitFront, mochiH, PUMPKIN_BOTTOM, PUMPKIN_TOP, type OutfitPose } from "./outfits";
+import type { Outfit } from "./wardrobe";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -36,7 +38,7 @@ interface Tween {
 
 type PropKey =
   | "yaw" | "pitch" | "roll" | "tilt" | "open" | "sx" | "sy"
-  | "oy" | "ox" | "tint" | "morph" | "hands" | "blush" | "es" | "badgeS";
+  | "oy" | "ox" | "tint" | "morph" | "hands" | "blush" | "es" | "badgeS" | "outfitPresence";
 
 interface BotStateCfg {
   color: RGB;
@@ -122,6 +124,12 @@ const now = () => performance.now() / 1000;
 const DANCE_BPM = 112;
 const DANCE_IN_S = 0.3;
 const DANCE_OUT_S = 0.5;
+/** An outfit comes on in this long, and goes in that long. */
+const OUTFIT_ON_MS = 350;
+const OUTFIT_OFF_MS = 180;
+/** The spring of what dangles from an outfit. */
+const PHYS_STIFF = 60;
+const PHYS_DAMP = 9;
 
 export function hexToRGB(hex: string): RGB {
   const h = hex.replace("#", "");
@@ -184,6 +192,17 @@ export class BotEngine {
 
   /** Extra canvas height above the body so hearts can fly out without clipping. */
   particleOverhang = 0;
+
+  /** What he wears, and how far on it is: 0 not there, 1 fully on. */
+  outfit: Outfit = "none";
+  outfitPresence = 0;
+  private outfitTarget: Outfit = "none";
+  /** How many turns the roll under way makes. */
+  rollTurns = 1;
+  // The spring behind what dangles — a pompom, a hat's tip: its lag, -1…1.
+  physDx = 0; physDy = 0;
+  private physVx = 0; private physVy = 0;
+  private prevYaw = 0; private prevOy = 0; private prevRoll = 0;
 
   // Mouth spring (fraction of R)
   slotH = 0; slotHTarget = 0; slotHVel = 0; isChewing = false;
@@ -289,6 +308,7 @@ export class BotEngine {
   }
 
   squash() {
+    this.physVy += 0.6;
     this.anim("sy", [[0.78, 70, Ease.out], [1.1, 130, Ease.out], [1, 170, Ease.inOut]]);
     this.anim("sx", [[1.16, 70, Ease.out], [0.95, 130, Ease.out], [1, 170, Ease.inOut]]);
   }
@@ -314,6 +334,8 @@ export class BotEngine {
     this.slapTimes.push(t);
     Sound.play("slap");
     this.squash();
+    this.physVy -= 1.2;
+    this.physVx += Math.random() < 0.5 ? 0.7 : -0.7;
     if (this.slapTimes.length >= 3) {
       this.slapTimes = [];
       this.onDizzy?.();
@@ -326,7 +348,42 @@ export class BotEngine {
 
   doRoll(durationMs: number, turns: number) {
     this.roll = 0;
-    this.anim("roll", [[Math.PI * 2 * turns, durationMs, Ease.inOut]], () => { this.roll = 0; });
+    this.rollTurns = turns;
+    this.anim("roll", [[Math.PI * 2 * turns, durationMs, Ease.inOut]], () => {
+      this.roll = 0;
+      this.squash();
+    });
+  }
+
+  /**
+   * Puts an outfit on, or takes it off. Animated, the old one goes before the
+   * new one comes, and he squashes a little as it settles.
+   */
+  setOutfit(next: Outfit, animated = true) {
+    if (next === this.outfitTarget) return;
+    this.outfitTarget = next;
+    this.tweens.delete("outfitPresence");
+    this.locks.delete("outfitPresence");
+    const putOn = () => {
+      this.outfit = next;
+      this.anim("outfitPresence", [[1, OUTFIT_ON_MS, Ease.inOut]], () => this.squash());
+    };
+    if (!animated) {
+      this.outfit = next;
+      this.outfitPresence = next !== "none" ? 1 : 0;
+    } else if (next === "none") {
+      this.anim("outfitPresence", [[0, OUTFIT_OFF_MS, Ease.inOut]], () => { this.outfit = "none"; });
+    } else if (this.outfit === "none") {
+      this.outfitPresence = 0;
+      putOn();
+    } else {
+      this.anim("outfitPresence", [[0, OUTFIT_OFF_MS, Ease.inOut]], putOn);
+    }
+  }
+
+  /** True while the whole of him turns as one piece: he rolls with something on. */
+  private get rollsRigid(): boolean {
+    return this.outfit !== "none" && this.outfitPresence > 0.05;
   }
 
   /** Peek wave — the "coucou". Timings from BotEngine.greet(). */
@@ -335,6 +392,7 @@ export class BotEngine {
     const tok = ++this.greetToken;
     this.waveStart = t + 0.45;
     this.waveUntil = t + 1.55;
+    this.physVx += 0.2;
 
     this.eyeOverride = "happy";
     this.eyeOverrideUntil = t + 2.0;
@@ -405,6 +463,7 @@ export class BotEngine {
         this.anim("es", [[1.25, 120, Ease.out], [1, 500, Ease.inOut]]);
         break;
       case "proud":
+        this.squash();
         this.emit("star", 5);
         this.anim("tilt", [
           [-0.14, 220, Ease.out], [-0.14, (duration - 0.5) * 1000, Ease.lin], [0, 280, Ease.inOut],
@@ -606,6 +665,24 @@ export class BotEngine {
 
     this.col = mix3(this.col, this.colT, 1 - Math.pow(0.002, dt));
 
+    // What dangles lags behind the head: a spring pulled by how fast he turns,
+    // moves and rolls — and thrown outwards when he rolls with it on.
+    if (dt > 0) {
+      const yawVel = (this.yaw - this.prevYaw) / dt;
+      const oyVel = (this.oy - this.prevOy) / dt;
+      const rollVel = (this.roll - this.prevRoll) / dt;
+      this.prevYaw = this.yaw;
+      this.prevOy = this.oy;
+      this.prevRoll = this.roll;
+      const centrifugal = this.rollsRigid ? rollVel * 0.18 : 0;
+      const toDx = Math.max(-1, Math.min(1, -yawVel * 0.35 - this.tilt * 2 + centrifugal));
+      const toDy = Math.max(-1, Math.min(1, oyVel * 0.5));
+      this.physVx += (PHYS_STIFF * (toDx - this.physDx) - PHYS_DAMP * this.physVx) * dt;
+      this.physVy += (PHYS_STIFF * (toDy - this.physDy) - PHYS_DAMP * this.physVy) * dt;
+      this.physDx += this.physVx * dt;
+      this.physDy += this.physVy * dt;
+    }
+
     if (n > this.nextBlink) {
       if (this.state !== "sleeping" && this.state !== "dizzy") {
         this.blink();
@@ -692,7 +769,25 @@ export class BotEngine {
     const cx = W / 2 + this.ox * R;
     const cy = H / 2 + this.particleOverhang / 2 + this.oy * R + R * 0.06;
 
+    // Rolling with an outfit on, the whole of him turns as one piece, outfit
+    // and hands with the body. His badge and his particles stay upright.
+    const dressed = this.outfit !== "none" && !this.isMini;
+    const rigid = dressed && this.rollsRigid && Math.abs(this.roll) > 0.001;
+    // The outfit then sees no roll of its own: the turn is the context's.
+    const head = mochiH(R, this.yaw, this.pitch, this.physDx, this.physDy, this.rollsRigid ? 0 : this.roll);
+    const pose: OutfitPose = {
+      cx, cy, tilt: this.tilt, sx: this.sx, sy: this.sy,
+      morph: this.morph, presence: this.outfitPresence, rollTurns: this.rollTurns,
+    };
+    x.save();
+    if (rigid) {
+      x.translate(cx, cy);
+      x.rotate(this.roll);
+      x.translate(-cx, -cy);
+    }
+
     this.drawHandsBehind(x, R, rx, ry, cx, cy);
+    if (dressed) drawOutfitBehind(x, this.outfit, head, pose);
 
     x.save();
     x.translate(cx, cy);
@@ -719,6 +814,9 @@ export class BotEngine {
     this.drawEyes(x, body, R, rx, ry);
     if (this.morph > 0.05) this.drawMouth(x, body, R);
 
+    x.restore();
+
+    if (dressed) drawOutfitFront(x, this.outfit, head, pose);
     x.restore();
 
     if (this.badge && this.badgeS > 0.01 && this.morph < 0.25) {
@@ -756,15 +854,17 @@ export class BotEngine {
   }
 
   private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
-    if (this.bodyColor) {
+    // As a pumpkin he is orange through and through, whatever his colour was.
+    const pumpkin = this.outfit === "pumpkin" && !this.isMini;
+    if (this.bodyColor && !pumpkin) {
       // Mini bots: flat solid fill — no gradient, no reflection, no highlight
       x.fillStyle = rgba(this.bodyColor, 1);
       x.fill(body);
       return;
     }
     const g = x.createLinearGradient(rx * 0.7, -ry * 0.85, -rx * 0.8, ry * 0.9);
-    g.addColorStop(0, rgba(BASE_TOP));
-    g.addColorStop(1, rgba(BASE_BOTTOM));
+    g.addColorStop(0, pumpkin ? PUMPKIN_TOP : rgba(BASE_TOP));
+    g.addColorStop(1, pumpkin ? PUMPKIN_BOTTOM : rgba(BASE_BOTTOM));
     x.fillStyle = g;
     x.fill(body);
 
@@ -810,7 +910,8 @@ export class BotEngine {
 
     for (const sd of [-1, 1]) {
       const eyeYaw = sd * EYE_SP + this.yaw;
-      let eyePitch = EYE_P + this.pitch + this.roll;
+      // Turning as one piece, the body carries the eyes round: they add no roll.
+      let eyePitch = EYE_P + this.pitch + (this.rollsRigid ? 0 : this.roll);
       eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
       const cp = Math.cos(eyePitch);
       if (Math.cos(eyeYaw) * cp <= 0.04) continue;

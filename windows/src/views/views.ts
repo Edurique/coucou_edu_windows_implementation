@@ -11,6 +11,7 @@ import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { integrationKey, renderIntegrationCard, type GithubOpening, type IntegrationCardHooks } from "./integrations";
 import { buildGithub, enterGithubPanel, newsFacts } from "./github";
+import { buildWardrobe } from "./wardrobe";
 import { buildSession, sessionName, sessionsChip } from "./session";
 import { diffLine, fileKind, plusMinus, readPatch } from "./code";
 import { hasPreview, stepIcon, stepName, stepPreview } from "./step";
@@ -1198,6 +1199,7 @@ export function buildViews(
   map.set("choose", buildChoose(actions));
   map.set("github", buildGithub(actions));
   map.set("session", buildSession(actions));
+  map.set("wardrobe", buildWardrobe(actions));
   // Not in the Windows v1: sending a file by email, window attach + web result.
   map.set("mail", buildPlaceholder("Sending by email isn't in this version.", ""));
   map.set("searching", buildPlaceholder("Claude is searching…", ""));

@@ -14,6 +14,7 @@ import { Sound } from "../core/sound";
 import { CLAUDE_ID, QUESTION_TOOL, SPOTIFY_ID, State, type SessionStep } from "../core/state";
 import { BotEngine, hexToRGB, type RGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
+import type { Outfit } from "../mochi/wardrobe";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
@@ -39,6 +40,8 @@ const HIT_MARGIN = 14;
  * out, in ms: a mouse on its way to a tab or a title bar crosses it faster.
  */
 const WAKE_DWELL_MS = 400;
+/** MouseEvent.button of the right button. */
+const RIGHT_BUTTON = 2;
 
 /** Views with something being written: a click elsewhere does not fold those. */
 const WRITING_VIEWS: ReadonlySet<IslandViewName> = new Set(["prompt", "mail"]);
@@ -802,13 +805,19 @@ export class Island {
       }
       if (this.isBotHit(e.clientX, e.clientY)) {
         this.cancelBotHover();
+        // The right button opens his wardrobe, and closes it.
+        if (e.button === RIGHT_BUTTON) this.toggleWardrobe();
         // A Mochi with news to tell takes you to it; any other gets his slap.
-        if (!followNews(this)) this.engine.slap();
+        else if (!followNews(this)) this.engine.slap();
       }
     });
+    // The island has no menu of its own, and WebView2's is not one to show.
+    this.islandEl.addEventListener("contextmenu", (e) => e.preventDefault());
 
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && State.mode === "expanded" && !State.isPinned) this.collapse();
+      // Escape leaves the wardrobe for the overview before it folds anything.
+      if (e.key === "Escape" && State.mode === "expanded" && State.view === "wardrobe") this.expand("overview");
+      else if (e.key === "Escape" && State.mode === "expanded" && !State.isPinned) this.collapse();
       State.lastActivity = performance.now();
     });
 
@@ -1153,6 +1162,7 @@ export class Island {
     if (!ctx) return;
 
     this.engine.setDancing(this.shouldDance());
+    this.engine.setOutfit(this.wornOutfit(), State.view !== "wardrobe");
     this.engine.bodyColor = this.easeBodyColor(dt);
     this.engine.particleOverhang = BOT_OVERHANG;
     this.engine.lookX = this.lookX();
@@ -1177,6 +1187,21 @@ export class Island {
    * pressing to show — as he does to Apple Music on the Mac. In the folded
    * island; unfolded, only on Spotify's own card.
    */
+  /**
+   * What Mochi has on. Standing for another pill he is that pill's Mochi, and
+   * goes without: the outfit is his own — and the wardrobe always shows it.
+   */
+  private wornOutfit(): Outfit {
+    const wardrobe = State.mode === "expanded" && State.view === "wardrobe";
+    const himself = State.focusId == null || State.focusId === CLAUDE_ID;
+    return himself || State.mode !== "expanded" || wardrobe ? State.outfit : "none";
+  }
+
+  /** Into the wardrobe, or out of it to the overview. */
+  toggleWardrobe() {
+    this.expand(State.mode === "expanded" && State.view === "wardrobe" ? "overview" : "wardrobe");
+  }
+
   private shouldDance(): boolean {
     if (!State.settings.activeIntegrations.includes(SPOTIFY_ID) || !nowPlaying().playing) return false;
     if (!CAN_DANCE.has(State.effectiveState)) return false;

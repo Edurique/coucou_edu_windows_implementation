@@ -57,6 +57,14 @@ pub struct Settings {
     /// it needs the status line relay in ~/.claude/settings.json.
     #[serde(default)]
     pub show_plan_in_notch: bool,
+    /// What Mochi wears: one of the wardrobe's outfits, or "auto" for the
+    /// season's. The values are the Mac's own (`mochiOutfit`).
+    #[serde(default = "default_outfit")]
+    pub mochi_outfit: String,
+}
+
+fn default_outfit() -> String {
+    "auto".into()
 }
 
 // The models a provider starts on, as on macOS (ChatProvider.defaultModel).
@@ -112,6 +120,7 @@ impl Default for Settings {
             ollama_server_url: String::new(),
             lmstudio_server_url: String::new(),
             show_plan_in_notch: false,
+            mochi_outfit: default_outfit(),
         }
     }
 }

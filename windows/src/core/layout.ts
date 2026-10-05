@@ -23,7 +23,8 @@ export type IslandViewName =
   | "settings"
   | "greeting"
   | "github"
-  | "session";
+  | "session"
+  | "wardrobe";
 
 export type BotStateName =
   | "idle"
@@ -90,6 +91,7 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   note: { height: 160, botX: 60, botY: null, botDiameter: 50, agentMode: "column" },
   settings: { height: 160, botX: 54, botY: null, botDiameter: 46, agentMode: "none" },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0, agentMode: "none" },
+  wardrobe: { height: 160, botX: 68, botY: null, botDiameter: 58, agentMode: "none" },
   // Windows only, no macOS counterpart yet: the GitHub panel, laid out like a
   // Claude Code session's view — the biggest Mochi of any view, centred in the
   // upper part of his own column (its middle is x 67), the screen in a panel

@@ -423,6 +423,77 @@ body {
   overflow: hidden;
 }
 
+/* The wardrobe: a title, what is on, and a grid of small Mochis to pick from. */
+.wardrobe {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 0 108px;
+}
+
+.wardrobe-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px 0;
+}
+
+.wardrobe-title {
+  flex: 0 0 auto;
+  font: 600 12px var(--font);
+  color: #f5f6f8;
+}
+
+.wardrobe-now {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font: 400 11px var(--font);
+  color: #8e939c;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wardrobe-grid {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(14, 30px);
+  gap: 5px;
+  align-content: start;
+  padding: 6px 8px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, #fff 0, #fff 85%, transparent 100%);
+}
+
+.outfit-pill {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.outfit-pill:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.outfit-pill.on {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.outfit-icon {
+  display: block;
+  width: 30px;
+  height: 30px;
+  /* The border is inside the pill's 30 pixels; the drawing is not moved by it. */
+  margin: -1px;
+  pointer-events: none;
+}
+
 .card.wash::after {
   content: "";
   position: absolute;
