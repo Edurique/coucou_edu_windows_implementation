@@ -543,6 +543,9 @@ struct Cache {
     /// The pull requests that were waiting for your review at the last look,
     /// so only one that joins them is news. None until the first refresh.
     to_review: Option<Vec<(String, u64)>>,
+    /// Your open pull requests and how their checks stood at the last look,
+    /// so only a change is news. None until the first refresh.
+    checked: Option<Vec<Checked>>,
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
@@ -685,6 +688,49 @@ fn parse_to_review(data: &Value) -> Vec<ReviewRequest> {
         .collect()
 }
 
+/// One of your open pull requests, and how the checks of its last commit stand.
+#[derive(Clone, Debug, PartialEq)]
+struct Checked {
+    repo: String,
+    number: u64,
+    title: String,
+    url: String,
+    /// The commit the checks ran for.
+    sha: Option<String>,
+    /// success, failure or pending; None when it has no checks, or the token
+    /// may not read them.
+    state: Option<&'static str>,
+}
+
+/// GitHub's roll-up of a commit's checks, in three words.
+fn rollup_state(state: Option<&str>) -> Option<&'static str> {
+    match state? {
+        "SUCCESS" => Some("success"),
+        "FAILURE" | "ERROR" => Some("failure"),
+        "PENDING" | "EXPECTED" => Some("pending"),
+        _ => None,
+    }
+}
+
+fn parse_checked(viewer: &Value) -> Vec<Checked> {
+    nodes(viewer, "/mine/nodes")
+        .iter()
+        .filter_map(|n| {
+            let number = n.get("number")?.as_u64()?;
+            let repo = text(n.pointer("/repository/nameWithOwner"))?;
+            let commit = n.pointer("/commits/nodes/0/commit");
+            Some(Checked {
+                number,
+                title: text(n.get("title")).unwrap_or_default(),
+                url: text(n.get("url")).unwrap_or_else(|| format!("{WEB}/{repo}/pull/{number}")),
+                sha: text(commit.and_then(|c| c.get("oid"))),
+                state: rollup_state(commit.and_then(|c| c.pointer("/statusCheckRollup/state")).and_then(Value::as_str)),
+                repo,
+            })
+        })
+        .collect()
+}
+
 /// A piece of news, and what to ask GitHub about to say more of it on the card.
 type News = (IntegrationEvent, Target);
 
@@ -789,6 +835,37 @@ fn asked(seen: Option<&[(String, u64)]>, to_review: &[ReviewRequest], muted: &[S
     Some((event, pull.target.clone()))
 }
 
+/// The checks of one of your pull requests that ended since the last look, red
+/// (`passed` false) or green. On the commit already seen, red is news once it
+/// was not red, green once it was pending. On a new commit the checks may have
+/// started and ended between two looks: how they ended is news as it is. A
+/// pull request that was not there at the last look has no "before": nothing.
+fn checks_ended(seen: Option<&[Checked]>, now: &[Checked], muted: &[String], passed: bool) -> Option<News> {
+    let seen = seen?;
+    let want = if passed { "success" } else { "failure" };
+    let pull = now.iter().filter(|p| p.state == Some(want) && !muted.contains(&p.repo)).find(|p| {
+        let Some(was) = seen.iter().find(|w| w.repo == p.repo && w.number == p.number) else { return false };
+        if was.sha != p.sha {
+            return true;
+        }
+        if passed { was.state == Some("pending") } else { was.state != Some("failure") }
+    })?;
+    let target = Target::Pull { repo: pull.repo.clone(), number: pull.number };
+    let event = IntegrationEvent {
+        success: passed,
+        label: format!("Checks {} on #{}", if passed { "passed" } else { "failed" }, pull.number),
+        detail: Some(pull.title.clone()).filter(|t| !t.is_empty()),
+        open: Some(json!({
+            "target": target,
+            "label": format!("#{}", pull.number),
+            "url": pull.url,
+            "title": format!("#{} {}", pull.number, pull.title),
+            "says": if passed { "checks passed" } else { "checks failed" },
+        })),
+    };
+    Some((event, target))
+}
+
 /// What the card says under a pull request somebody opened: where, by whom, how big.
 fn opened_facts(pull: &crate::github_detail::PullDetail) -> Vec<Value> {
     let mut facts = vec![json!({ "kind": "repo", "text": short_name(&pull.repo) })];
@@ -891,14 +968,16 @@ pub async fn refresh(app: AppHandle) {
     let Some(_busy) = BusyGuard::take() else { return };
 
     match fetch().await {
-        Ok((snapshot, mut merged, mut opened)) => {
+        Ok((snapshot, mut merged, mut opened, checked)) => {
             log::line(format!(
-                "github refresh: {} events, {} projects, {} with a build, {} contribution days, {} to review",
+                "github refresh: {} events, {} projects, {} with a build, {} contribution days, {} to review, {} of {} open pulls with checks",
                 snapshot.activity.len(),
                 snapshot.repos.len(),
                 snapshot.repos.iter().filter(|r| r.build.is_some()).count(),
                 snapshot.contributions.as_ref().map_or(0, |c| c.counts.len()),
                 snapshot.to_review.len(),
+                checked.iter().filter(|p| p.state.is_some()).count(),
+                checked.len(),
             ));
             let data = serde_json::to_value(&snapshot).unwrap_or_else(|_| json!({}));
             let muted = muted(&app);
@@ -914,12 +993,18 @@ pub async fn refresh(app: AppHandle) {
                     .snapshot
                     .as_ref()
                     .and_then(|before| broke(&before.repos, &snapshot.repos, &muted))
+                    // A build that broke is told as the build, with its step;
+                    // red checks elsewhere — a project the panel does not
+                    // list — are told as the pull request they are on.
+                    .or_else(|| checks_ended(cache.checked.as_deref(), &checked, &muted, false))
                     // A pull request opened on your project with your review
                     // asked is told once, as the review it asks for.
                     .or_else(|| asked(cache.to_review.as_deref(), &snapshot.to_review, &muted))
+                    .or_else(|| checks_ended(cache.checked.as_deref(), &checked, &muted, true))
                     .or_else(|| went_in(cache.merged.as_deref(), &merged))
                     .or_else(|| came_in(cache.opened.as_deref(), &opened, &snapshot.login));
                 cache.to_review = Some(snapshot.to_review.iter().map(|p| (p.repo.clone(), p.number)).collect());
+                cache.checked = Some(checked);
                 let seen = cache.merged.take().filter(|seen| *seen >= newest_merge);
                 cache.merged = Some(seen.unwrap_or(newest_merge));
                 let seen = cache.opened.take().filter(|seen| *seen >= newest_pull);
@@ -980,6 +1065,8 @@ const CONTRIBUTED_REPOS: usize = MAX_REPOS * 2;
 const MERGED_PULLS: usize = 5;
 /// Open pull requests looked at for news, the newest of each project.
 const OPENED_PULLS: usize = 3;
+/// Open pull requests of yours whose checks are watched.
+const CHECKED_PULLS: usize = 10;
 /// Pull requests waiting for your review that are asked for.
 const REVIEW_PULLS: usize = 10;
 /// How long a project whose runs the token may not read is left alone.
@@ -991,7 +1078,7 @@ const REFUSED_FOR: u64 = 3600;
 /// contributed to elsewhere — as far as the token can see, which for a
 /// fine-grained token means your own repositories, organisations it was made
 /// for, and public ones — and asks for no more of them than it shows.
-const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!, $opened: Int!, $review: Int!) { \
+const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int!, $merged: Int!, $opened: Int!, $review: Int!, $mine: Int!) { \
     toReview: search(query: \"is:pr is:open archived:false review-requested:@me sort:updated-desc\", type: ISSUE, first: $review) { \
     nodes { ... on PullRequest { number title url isDraft updatedAt author { login } repository { nameWithOwner } } } } \
     viewer { login url \
@@ -1004,17 +1091,20 @@ const PROFILE_QUERY: &str = "query($stars: Int!, $owned: Int!, $contributed: Int
     repositoriesContributedTo(first: $contributed, includeUserRepositories: true, \
     orderBy: {field: PUSHED_AT, direction: DESC}) { nodes { ...Project } } \
     merged: pullRequests(states: MERGED, first: $merged, orderBy: {field: UPDATED_AT, direction: DESC}) { \
-    nodes { number title url mergedAt repository { nameWithOwner } } } } } \
+    nodes { number title url mergedAt repository { nameWithOwner } } } \
+    mine: pullRequests(states: OPEN, first: $mine, orderBy: {field: UPDATED_AT, direction: DESC}) { \
+    nodes { number title url repository { nameWithOwner } \
+    commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } } } \
     fragment Project on Repository { nameWithOwner url isPrivate isArchived pushedAt \
     stargazerCount primaryLanguage { name color } \
     pullRequests(states: OPEN, first: $opened, orderBy: {field: CREATED_AT, direction: DESC}) { \
     totalCount nodes { number title url createdAt author { login } } } }";
 
-async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>), GhError> {
+async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>, Vec<Checked>), GhError> {
     let gh = Gh::from_store()?;
     let sizes = json!({
         "stars": STAR_REPOS, "owned": MAX_REPOS, "contributed": CONTRIBUTED_REPOS,
-        "merged": MERGED_PULLS, "opened": OPENED_PULLS, "review": REVIEW_PULLS,
+        "merged": MERGED_PULLS, "opened": OPENED_PULLS, "review": REVIEW_PULLS, "mine": CHECKED_PULLS,
     });
     let (data, _) = gh.graphql_with(PROFILE_QUERY, sizes).await?;
     let viewer = data.get("viewer").ok_or(GhError::BadResponse)?;
@@ -1032,6 +1122,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>), GhError> {
 
     let merged = parse_merged(viewer);
     let opened = parse_opened(viewer);
+    let checked = parse_checked(viewer);
     Ok((Snapshot {
         profile_url: text(viewer.get("url")).unwrap_or_else(|| format!("{WEB}/{login}")),
         contributions: parse_contributions(viewer.pointer("/contributionsCollection/contributionCalendar")),
@@ -1041,7 +1132,7 @@ async fn fetch() -> Result<(Snapshot, Vec<Merged>, Vec<Opened>), GhError> {
         repos,
         to_review: parse_to_review(&data),
         fetched_at: unix_now() * 1000,
-    }, merged, opened))
+    }, merged, opened, checked))
 }
 
 fn parse_contributions(calendar: Option<&Value>) -> Option<Contributions> {
@@ -1976,6 +2067,45 @@ mod tests {
         assert_eq!(target, Target::Pull { repo: "edu/coucou".into(), number: 7 });
         // Nothing but your own since.
         assert!(came_in(Some("2026-10-01T15:00:00Z"), &opened, "edu").is_none());
+    }
+
+    #[test]
+    fn checks_that_end_are_news() {
+        let viewer = json!({ "mine": { "nodes": [
+            { "number": 57, "title": "The panel", "url": "https://github.com/louis/coucou/pull/57",
+              "repository": { "nameWithOwner": "louis/coucou" },
+              "commits": { "nodes": [{ "commit": { "oid": "abc", "statusCheckRollup": { "state": "SUCCESS" } } }] } },
+            { "number": 3, "title": "No checks", "repository": { "nameWithOwner": "edu/tools" },
+              "commits": { "nodes": [{ "commit": { "oid": "def", "statusCheckRollup": null } }] } },
+            {},
+        ] } });
+        let now = parse_checked(&viewer);
+        assert_eq!(now.len(), 2);
+        assert_eq!((now[0].sha.as_deref(), now[0].state), (Some("abc"), Some("success")));
+        assert_eq!((now[1].url.as_str(), now[1].state), ("https://github.com/edu/tools/pull/3", None));
+
+        let was = |sha: &str, state: Option<&'static str>| vec![Checked { sha: Some(sha.into()), state, ..now[0].clone() }];
+        // The first look only learns how things stand; so does a pull request's first.
+        assert!(checks_ended(None, &now, &[], true).is_none());
+        assert!(checks_ended(Some(&[]), &now, &[], true).is_none());
+        // Same commit: green is news after pending, not after green or nothing.
+        let (event, target) = checks_ended(Some(&was("abc", Some("pending"))), &now, &[], true).unwrap();
+        assert_eq!(event.label, "Checks passed on #57");
+        assert!(event.success);
+        assert_eq!(target, Target::Pull { repo: "louis/coucou".into(), number: 57 });
+        assert!(checks_ended(Some(&was("abc", Some("success"))), &now, &[], true).is_none());
+        assert!(checks_ended(Some(&was("abc", None)), &now, &[], true).is_none());
+        // A new commit whose checks already ended: news as it is.
+        assert!(checks_ended(Some(&was("old", Some("success"))), &now, &[], true).is_some());
+        // Green is not red, and a muted project stays quiet.
+        assert!(checks_ended(Some(&was("abc", Some("pending"))), &now, &[], false).is_none());
+        assert!(checks_ended(Some(&was("abc", Some("pending"))), &now, &["louis/coucou".to_string()], true).is_none());
+
+        let red = vec![Checked { state: Some("failure"), ..now[0].clone() }];
+        let (event, _) = checks_ended(Some(&was("abc", Some("pending"))), &red, &[], false).unwrap();
+        assert_eq!(event.label, "Checks failed on #57");
+        assert!(!event.success);
+        assert!(checks_ended(Some(&red), &red, &[], false).is_none());
     }
 
     #[test]
