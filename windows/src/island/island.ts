@@ -180,6 +180,10 @@ export class Island {
   private confusedRecovery: number | null = null;
   private prevViewBeforeConfused: IslandViewName = "overview";
   private lastSyncedView: IslandViewName | null = null;
+  /** A shortcut gave the island the keyboard: it keeps it until it folds. */
+  private keyboardHeld = false;
+  /** The line of the view picked from the keyboard, among those it can open; null: none. */
+  private picked: number | null = null;
 
   /** Drop sequence bookkeeping: last tick played, and whether the ✓ has fired. */
   private uploadTens = 0;
@@ -815,6 +819,10 @@ export class Island {
     this.islandEl.addEventListener("contextmenu", (e) => e.preventDefault());
 
     window.addEventListener("keydown", (e) => {
+      if (State.mode === "expanded" && this.islandKey(e)) {
+        e.preventDefault();
+        return;
+      }
       // Escape leaves the wardrobe for the overview before it folds anything.
       if (e.key === "Escape" && State.mode === "expanded" && State.view === "wardrobe") this.expand("overview");
       else if (e.key === "Escape" && State.mode === "expanded" && !State.isPinned) this.collapse();
@@ -1197,6 +1205,141 @@ export class Island {
     return himself || State.mode !== "expanded" || wardrobe ? State.outfit : "none";
   }
 
+  // ── Shortcuts ───────────────────────────────────────────────────────────────
+
+  /** Opens the island on a view because the user asked from the keyboard, and gives it the keys. */
+  private openOn(view: IslandViewName) {
+    this.alert(view, true);
+    this.keyboardHeld = true;
+    void Bridge.focusWindow(true);
+  }
+
+  /** Mochi says no: there is nothing to do what was asked on. */
+  private refuse() {
+    this.engine.triggerEmote("annoyed");
+    Sound.play("error");
+  }
+
+  /** A shortcut pressed in any app — HotKeyCenter's actions, as the Mac handles them. */
+  shortcut(action: string) {
+    if (State.paused) return;
+    Sound.resume();
+    State.lastActivity = performance.now();
+    switch (action) {
+      case "toggleIsland":
+        if (State.mode === "expanded") this.collapse();
+        else this.openOn(State.defaultView());
+        break;
+      case "openChat":
+        this.openOn("prompt");
+        break;
+      case "goToAlert":
+        if (State.pendingApproval) this.openOn("approval");
+        else if (State.pendingQuestion) this.openOn("question");
+        else this.refuse();
+        break;
+      case "jumpToTerminal":
+        if (!State.focusTask) {
+          this.refuse();
+          break;
+        }
+        this.openClient();
+        this.collapse();
+        break;
+      case "nextPill":
+        this.cyclePill(1);
+        break;
+      case "prevPill":
+        this.cyclePill(-1);
+        break;
+      case "muteToggle":
+        State.settings.soundEnabled = !State.settings.soundEnabled;
+        Sound.setEnabled(State.settings.soundEnabled);
+        void Bridge.saveSettings(State.settings);
+        if (State.settings.soundEnabled) Sound.play("tick");
+        this.engine.triggerEmote(State.settings.soundEnabled ? "happy" : "annoyed");
+        State.notify();
+        break;
+      case "wardrobeToggle":
+        if (State.mode === "expanded" && State.view === "wardrobe") this.collapse();
+        else this.openOn("wardrobe");
+        break;
+    }
+  }
+
+  /**
+   * A key pressed while the island has the keyboard — the Mac's ⌘ shortcuts,
+   * on Ctrl. True when it was one of them.
+   */
+  private islandKey(e: KeyboardEvent): boolean {
+    if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return false;
+    switch (e.key) {
+      case "ArrowRight": this.cyclePill(1); return true;
+      case "ArrowLeft": this.cyclePill(-1); return true;
+      case "ArrowDown": this.pickBy(1); return true;
+      case "ArrowUp": this.pickBy(-1); return true;
+      case ",": void Bridge.openSettingsWindow(); return true;
+    }
+    switch (e.key.toLowerCase()) {
+      case "o":
+        this.pickable()[this.picked ?? -1]?.click();
+        return true;
+      case "e":
+        // What Claude changed, and back.
+        if (State.view === "overview" && State.sessionFiles.length > 0) {
+          enterSessionPanel("changes");
+          this.setView("session");
+        } else if (State.view === "session") this.setView("overview");
+        return true;
+      case "p":
+        State.isPinned = !State.isPinned;
+        this.fsm.pinned = State.isPinned;
+        State.notify();
+        return true;
+    }
+    const number = e.key.length === 1 ? Number.parseInt(e.key, 10) : Number.NaN;
+    if (number >= 1 && number <= State.tasks.length) {
+      this.showPill(State.tasks[number - 1].id);
+      return true;
+    }
+    return false;
+  }
+
+  private showPill(id: string) {
+    State.setFocus(id);
+    this.pick(null);
+    if (State.mode === "expanded") this.setView("overview");
+    else this.openOn("overview");
+  }
+
+  private cyclePill(delta: number) {
+    const ids = State.tasks.map((t) => t.id);
+    if (ids.length === 0) return;
+    const at = Math.max(0, ids.indexOf(State.focusId ?? ""));
+    this.showPill(ids[(at + delta + ids.length) % ids.length]);
+  }
+
+  /** The lines of the view on screen that a click opens. */
+  private pickable(): HTMLElement[] {
+    return [...this.contentEl.querySelectorAll<HTMLElement>(".view.on button.gh-row")];
+  }
+
+  private pick(index: number | null) {
+    this.contentEl.querySelector(".gh-row.picked")?.classList.remove("picked");
+    this.picked = index;
+    const row = index == null ? null : this.pickable()[index];
+    row?.classList.add("picked");
+    row?.scrollIntoView({ block: "nearest" });
+  }
+
+  /** One line down or up; from none, the first going down and the last going up. */
+  private pickBy(delta: number) {
+    const count = this.pickable().length;
+    if (count === 0) return;
+    const next = this.picked == null ? (delta > 0 ? 0 : count - 1) : Math.max(0, Math.min(count - 1, this.picked + delta));
+    this.pick(next);
+  }
+
   /** Into the wardrobe, or out of it to the overview. */
   toggleWardrobe() {
     this.expand(State.mode === "expanded" && State.view === "wardrobe" ? "overview" : "wardrobe");
@@ -1292,9 +1435,14 @@ export class Island {
       if (State.view === "prompt") {
         void Bridge.focusWindow(true);
         window.setTimeout(() => this.views.get("prompt")?.focus?.(), 120);
-      } else if (wasChat) {
+      } else if (wasChat && !this.keyboardHeld) {
         void Bridge.focusWindow(false);
       }
+      this.pick(null);
+    }
+    if (this.keyboardHeld && State.mode !== "expanded") {
+      this.keyboardHeld = false;
+      void Bridge.focusWindow(false);
     }
 
     // Compact mini grid

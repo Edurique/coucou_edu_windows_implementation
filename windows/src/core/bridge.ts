@@ -107,6 +107,12 @@ export const Bridge = {
   chatSend: (query: string, context: ChatContext | null) =>
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
+
+  // ── Shortcuts ─────────────────────────────────────────────────────────────
+  /** The shortcuts that work from any app, each with the keys it is on. */
+  shortcutsList: () => call<Shortcuts>("shortcuts_list"),
+  /** Puts one on new keys or switches it; without `key`, back on its own. Throws for an unknown action. */
+  shortcutSet: (action: string, key: ShortcutKey | null) => callOrThrow<Shortcuts>("shortcut_set", { action, key }),
   /** What a provider offers, fetched with its stored key or from its local server. Throws what the picker says instead. */
   chatModels: (provider: ChatProvider) => callOrThrow<ChatModel[]>("chat_models", { provider }),
   /** Settings → Chat → Connect: the server answers at this address and has a model, or the reason it does not. */
@@ -421,6 +427,27 @@ export interface GithubDeploy {
   creator: string | null;
   sha: string | null;
   at: string;
+}
+
+/** Keys a shortcut is on: a Windows virtual-key code and Win32's MOD_* bits (shortcuts.rs). */
+export interface ShortcutKey {
+  vk: number;
+  mods: number;
+  enabled: boolean;
+}
+
+export interface ShortcutState extends ShortcutKey {
+  /** The Mac's name for the action: "openChat", "muteToggle"… */
+  action: string;
+  isDefault: boolean;
+  /** "duplicate": another of Coucou's is on these keys. "taken": another app has them. */
+  conflict: "duplicate" | "taken" | null;
+}
+
+export interface Shortcuts {
+  /** False where the system gives an app no shortcut to register. */
+  supported: boolean;
+  items: ShortcutState[];
 }
 
 /** `State.integrations.integration_github.data` — the Snapshot in github.rs. */

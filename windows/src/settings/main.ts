@@ -1,5 +1,6 @@
 // Settings window — a sidebar of sections and the one that is picked, laid out
-// like SettingsView.swift: General, Active pills, Agents, Chat, Integrations.
+// like SettingsView.swift: General, Active pills, Agents, Chat, Integrations,
+// Shortcuts.
 // Anything that writes outside Coucou's own files is confirmed here first.
 
 import "./settings.css";
@@ -8,6 +9,7 @@ import { PROVIDERS, PROVIDER_IDS, serverUrl, type ChatProvider } from "../core/c
 import { DEFAULT_SETTINGS, INTEGRATION_AGENTS, CLAUDE_ID, type Settings } from "../core/state";
 import { h, svg, clear } from "../views/dom";
 import { ICONS } from "../views/icons";
+import { shortcutsSection } from "./shortcuts";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let version = "";
@@ -824,6 +826,7 @@ async function main() {
     { id: "agents", title: "Agents", icon: ICONS.terminal, color: "#3B9EFF", build: () => [hooksGroup(hooks), planGroup(relay)] },
     { id: "chat", title: "Chat", icon: ICONS.bubble, color: "#E07950", build: () => [anthropicGroup(), otherProvidersGroup(), localModelsGroup()] },
     { id: "integrations", title: "Integrations", icon: ICONS.plus, color: "#7C5CFF", build: integrationsSection },
+    { id: "shortcuts", title: "Shortcuts", icon: ICONS.keyboard, color: "#2EC4A0", build: () => shortcutsSection(say) },
   ];
 
   const title = h("h1", {});

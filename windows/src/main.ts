@@ -55,6 +55,7 @@ async function main() {
   await onEvent<null>("screen-changed", () => void Bridge.reposition());
   await onEvent<boolean>("fullscreen", (full) => island.setFullscreen(full));
   await onEvent<null>("outside-press", () => island.outsidePress());
+  await onEvent<string>("shortcut", (action) => island.shortcut(action));
 
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {

@@ -265,6 +265,59 @@ section > h2 {
   flex: 1 1 auto;
 }
 
+/* Shortcuts: a switch, what it does, and the keys it is on. */
+.shortcut-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.shortcut-row.off > span:not(.spacer) {
+  color: var(--dim-2);
+}
+
+.shortcut-keys {
+  flex: 0 0 auto;
+  min-width: 124px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font: 500 12px var(--mono);
+  text-align: center;
+}
+
+.shortcut-keys.recording {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* The island's own, which are not changed: the same look, without the button. */
+span.shortcut-keys.fixed {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+}
+
+.shortcut-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 500 11px var(--font);
+}
+
+.shortcut-tag.taken {
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  color: var(--amber);
+}
+
+.shortcut-tag.duplicate {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  color: var(--red);
+}
+
 .dot {
   width: 8px;
   height: 8px;

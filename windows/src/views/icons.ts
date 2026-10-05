@@ -66,6 +66,8 @@ export const ICONS = {
   // a rocket, for deployments, stroked
   rocket: "M12 3c3 2.2 4.5 5.2 4.5 9l-1.8 3h-5.4l-1.8-3c0-3.8 1.5-6.8 4.5-9zM12 9.2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 1 1 0-3.2M9.3 15l-1.8 4.5 2.8-1.6M14.7 15l1.8 4.5-2.8-1.6",
   // a pulse, for activity, stroked
+  /** A keyboard: its frame and a few keys. */
+  keyboard: "M3 6.5h18v11H3v-11zm2 2v7h14v-7H5zm2 1.5h2v1.5H7V10zm3 0h2v1.5h-2V10zm3 0h2v1.5h-2V10zm3 0h1v1.5h-1V10zm-8 3h8v1.5H8V13z",
   pulse: "M3 12h4l2.5-6 5 12 2.5-6H21",
   // What was said: a speech bubble, drawn as a line like the other GitHub marks.
   comment: "M4 5.5h16v10.5h-8.5L7 20v-4H4z",

@@ -286,10 +286,20 @@ export function buildPrompt(onHeightChange: () => void, openUrl: (url: string) =
   }
 
   send.addEventListener("click", () => void submit());
-  input.addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter") {
+  input.addEventListener("keydown", (event) => {
+    const e = event as KeyboardEvent;
+    if (e.key === "Enter") {
       e.preventDefault();
       void submit();
+    } else if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      // Ctrl+K: a new conversation, the field ready for its first words.
+      e.preventDefault();
+      if (sending) return;
+      input.value = "";
+      State.chatHistory = [];
+      void Bridge.chatReset();
+      State.notify();
+      onHeightChange();
     }
     e.stopPropagation(); // Escape closes the island, not the chat
   });

@@ -2385,6 +2385,11 @@ button.gh-step:hover {
   background: var(--gh-hover);
 }
 
+/* The line picked from the keyboard (Ctrl+↓, Ctrl+↑). */
+.gh-row.picked {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .gh-row-icon {
   width: 14px;
   display: grid;

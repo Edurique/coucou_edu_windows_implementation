@@ -17,6 +17,7 @@ mod platform;
 mod providers;
 mod secrets;
 mod settings;
+mod shortcuts;
 mod tray;
 
 use std::process::Command;
@@ -69,13 +70,17 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
-    let (screen_changed, autostart_changed) = {
+    let (screen_changed, autostart_changed, shortcuts_changed) = {
         let mut current = shared.settings.lock().unwrap();
         let screen_changed = current.screen != settings.screen;
         let autostart_changed = current.autostart != settings.autostart;
+        let shortcuts_changed = current.shortcuts != settings.shortcuts;
         *current = settings.clone();
-        (screen_changed, autostart_changed)
+        (screen_changed, autostart_changed, shortcuts_changed)
     };
+    if shortcuts_changed {
+        shortcuts::apply(&app, &settings.shortcuts);
+    }
     if let Err(err) = settings::save(&settings) {
         eprintln!("[coucou] could not save settings: {err}");
     }
@@ -92,6 +97,35 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
     }
     // Keep the other window in step (island ⇄ settings window).
     let _ = app.emit("settings-changed", settings);
+}
+
+/// The shortcuts that work from any app, with the keys each is on.
+#[tauri::command]
+fn shortcuts_list(shared: State<Shared>) -> shortcuts::Shortcuts {
+    shortcuts::list(&shared.settings.lock().unwrap().shortcuts)
+}
+
+/// Puts a shortcut on new keys, switches it, or — without `key` — gives it its
+/// own keys back. Registered at once; the answer says what the system made of it.
+#[tauri::command]
+fn shortcut_set(
+    app: AppHandle,
+    shared: State<Shared>,
+    action: String,
+    key: Option<shortcuts::Shortcut>,
+) -> Result<shortcuts::Shortcuts, String> {
+    let updated = {
+        let mut current = shared.settings.lock().unwrap();
+        if !shortcuts::set(&mut current.shortcuts, &action, key) {
+            return Err(format!("No shortcut is called {action}."));
+        }
+        let _ = settings::save(&current);
+        current.clone()
+    };
+    shortcuts::apply(&app, &updated.shortcuts);
+    let listed = shortcuts::list(&updated.shortcuts);
+    let _ = app.emit("settings-changed", updated);
+    Ok(listed)
 }
 
 /// Hidden island → shrink the window to the invisible wake strip and park the
@@ -552,6 +586,8 @@ pub fn run() {
             open_settings_window,
             open_settings_section,
             set_paused,
+            shortcuts_list,
+            shortcut_set,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -577,6 +613,7 @@ pub fn run() {
             hooks::ensure_hook_exe(&handle);
             pipe::start(handle.clone());
             integrations::start(handle.clone());
+            shortcuts::apply(&handle, &loaded.shortcuts);
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -225,6 +225,17 @@ fn gtk_window_ptr(win: &gtk::ApplicationWindow) -> *mut gtk::ffi::GtkWindow {
 /// WebKitGTK has no competing drop target to remove.
 pub fn unblock_webview_drops(_app: &AppHandle) {}
 
+/// A Wayland compositor gives an app no shortcut to register for itself.
+pub const GLOBAL_HOTKEYS: bool = false;
+
+/// A shortcut to register: its id, its virtual-key code, its modifier bits.
+pub type Hotkey = (i32, u32, u32);
+
+/// None can be held here: every one is refused.
+pub fn set_hotkeys(keys: Vec<Hotkey>, _on_press: impl Fn(i32) + Send + 'static) -> Vec<i32> {
+    keys.into_iter().map(|(id, _, _)| id).collect()
+}
+
 /// Turns the island into an overlay surface on the top edge that never takes
 /// the keyboard. Must run before the window is first shown: a layer surface
 /// cannot be made out of a window the compositor already knows.

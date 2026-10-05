@@ -61,6 +61,10 @@ pub struct Settings {
     /// season's. The values are the Mac's own (`mochiOutfit`).
     #[serde(default = "default_outfit")]
     pub mochi_outfit: String,
+    /// The shortcuts the user moved or switched, by action; the others are on
+    /// their defaults (shortcuts.rs).
+    #[serde(default)]
+    pub shortcuts: std::collections::BTreeMap<String, crate::shortcuts::Shortcut>,
 }
 
 fn default_outfit() -> String {
@@ -121,6 +125,7 @@ impl Default for Settings {
             lmstudio_server_url: String::new(),
             show_plan_in_notch: false,
             mochi_outfit: default_outfit(),
+            shortcuts: Default::default(),
         }
     }
 }

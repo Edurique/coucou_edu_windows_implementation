@@ -16,12 +16,15 @@ use ::windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use ::windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use ::windows::Win32::System::Ole::RevokeDragDrop;
 use ::windows::Win32::System::SystemInformation::GetLocalTime;
-use ::windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+use ::windows::Win32::Foundation::WPARAM;
+use ::windows::Win32::System::Threading::{GetCurrentProcess, GetCurrentThreadId, OpenProcessToken};
+use ::windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT, VK_LBUTTON,
+};
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, SetWindowLongPtrW,
-    GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    EnumChildWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW,
+    GetWindowRect, PeekMessageW, PostThreadMessageW, SetWindowLongPtrW,
+    GWL_EXSTYLE, MSG, PM_NOREMOVE, WM_APP, WM_HOTKEY, WM_USER, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
 use super::LocalTime;
@@ -291,3 +294,81 @@ pub fn fullscreen_in_front(island: &WebviewWindow) -> bool {
 
 /// Click-through here is the poll's WS_EX_TRANSPARENT toggle, not a region.
 pub fn set_input_region(_win: &WebviewWindow, _rect: Option<(f64, f64, f64, f64)>) {}
+
+// ── Shortcuts from any app ────────────────────────────────────────────────────
+
+/// The system registers shortcuts for us.
+pub const GLOBAL_HOTKEYS: bool = true;
+
+/// A shortcut to register: its id, its virtual-key code, its MOD_* bits.
+pub type Hotkey = (i32, u32, u32);
+
+/// Posted to the shortcuts' thread: the list it holds was replaced.
+const HOTKEYS_CHANGED: u32 = WM_APP;
+/// How long the answer to a new list is waited for.
+const HOTKEYS_ANSWER: std::time::Duration = std::time::Duration::from_secs(1);
+
+struct Hotkeys {
+    thread: u32,
+    wanted: std::sync::Mutex<std::sync::mpsc::Sender<Vec<Hotkey>>>,
+    refused: std::sync::Mutex<std::sync::mpsc::Receiver<Vec<i32>>>,
+}
+
+static HOTKEYS: std::sync::OnceLock<Hotkeys> = std::sync::OnceLock::new();
+
+/// A shortcut registered without a window is delivered to the thread that
+/// registered it: one thread holds them all and sleeps in GetMessage until one
+/// is pressed, or the list changes. It costs nothing while nothing happens.
+fn start_hotkeys(on_press: Box<dyn Fn(i32) + Send>) -> Hotkeys {
+    let (wanted_tx, wanted_rx) = std::sync::mpsc::channel::<Vec<Hotkey>>();
+    let (refused_tx, refused_rx) = std::sync::mpsc::channel::<Vec<i32>>();
+    let (thread_tx, thread_rx) = std::sync::mpsc::channel::<u32>();
+    std::thread::spawn(move || unsafe {
+        let mut msg = MSG::default();
+        // Asking for a message is what gives a thread its queue.
+        let _ = PeekMessageW(&mut msg, None, WM_USER, WM_USER, PM_NOREMOVE);
+        let _ = thread_tx.send(GetCurrentThreadId());
+        let mut held: Vec<i32> = Vec::new();
+        while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+            if msg.message == WM_HOTKEY {
+                on_press(msg.wParam.0 as i32);
+            } else if msg.message == HOTKEYS_CHANGED {
+                // Only the newest list counts.
+                let Some(keys) = wanted_rx.try_iter().last() else { continue };
+                for id in held.drain(..) {
+                    let _ = UnregisterHotKey(None, id);
+                }
+                let mut refused = Vec::new();
+                for (id, vk, mods) in keys {
+                    // No repeat: holding the keys down is one press.
+                    if RegisterHotKey(None, id, HOT_KEY_MODIFIERS(mods) | MOD_NOREPEAT, vk).is_ok() {
+                        held.push(id);
+                    } else {
+                        refused.push(id);
+                    }
+                }
+                let _ = refused_tx.send(refused);
+            }
+        }
+    });
+    Hotkeys {
+        thread: thread_rx.recv().unwrap_or(0),
+        wanted: std::sync::Mutex::new(wanted_tx),
+        refused: std::sync::Mutex::new(refused_rx),
+    }
+}
+
+/// Replaces the shortcuts held with `keys`, and returns the ids the system
+/// refused — another app has those keys. `on_press` is kept from the first
+/// call on, and is called on the shortcuts' own thread.
+pub fn set_hotkeys(keys: Vec<Hotkey>, on_press: impl Fn(i32) + Send + 'static) -> Vec<i32> {
+    let hot = HOTKEYS.get_or_init(|| start_hotkeys(Box::new(on_press)));
+    let refused = hot.refused.lock().unwrap();
+    if hot.wanted.lock().unwrap().send(keys).is_err() {
+        return Vec::new();
+    }
+    if unsafe { PostThreadMessageW(hot.thread, HOTKEYS_CHANGED, WPARAM(0), LPARAM(0)) }.is_err() {
+        return Vec::new();
+    }
+    refused.recv_timeout(HOTKEYS_ANSWER).unwrap_or_default()
+}
