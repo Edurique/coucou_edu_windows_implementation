@@ -27,6 +27,7 @@ import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
 import { FloatingCover, type CoverPlace } from "./cover";
 import { Flock, STACK_BODY, STACK_GAP } from "./flock";
+import { DesktopMochi } from "./desktop";
 import { nowPlaying } from "../views/integrations";
 
 const BOT_OVERHANG = 40;
@@ -42,6 +43,8 @@ const HIT_MARGIN = 14;
 const WAKE_DWELL_MS = 400;
 /** MouseEvent.button of the right button. */
 const RIGHT_BUTTON = 2;
+/** How far the mouse pulls Mochi, held, before he comes out of the island. */
+const BOT_PULL_PX = 10;
 
 /** Views with something being written: a click elsewhere does not fold those. */
 const WRITING_VIEWS: ReadonlySet<IslandViewName> = new Set(["prompt", "mail"]);
@@ -180,6 +183,10 @@ export class Island {
   private confusedRecovery: number | null = null;
   private prevViewBeforeConfused: IslandViewName = "overview";
   private lastSyncedView: IslandViewName | null = null;
+  /** Mochi's comings and goings between the island and the desktop; null until the boot says he can. */
+  private desktop: DesktopMochi | null = null;
+  /** Where the mouse went down on Mochi, while it is still down: moved far enough, it pulls him out. */
+  private botPress: { x: number; y: number } | null = null;
   /** A shortcut gave the island the keyboard: it keeps it until it folds. */
   private keyboardHeld = false;
   /** The line of the view picked from the keyboard, among those it can open; null: none. */
@@ -195,7 +202,11 @@ export class Island {
     this.wireFsm();
     this.wireInput();
     this.engine.onDizzy = () => this.handleDizzy();
-    this.greeting.onComplete = () => this.fsm.greetComplete();
+    this.greeting.onComplete = () => {
+      this.fsm.greetComplete();
+      // Back to the desktop if that is where he was when Coucou was last quit.
+      this.desktop?.launchIfNeeded();
+    };
     State.subscribe(() => {
       this.dirty = true;
       this.ensureRunning();
@@ -815,6 +826,24 @@ export class Island {
         else if (!followNews(this)) this.engine.slap();
       }
     });
+    // Held and pulled away, he leaves the island for the desktop. The pointer
+    // is captured so the pull is followed past the island's edge.
+    this.islandEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || State.mode !== "expanded" || !this.desktop || !this.isBotHit(e.clientX, e.clientY)) return;
+      this.botPress = { x: e.clientX, y: e.clientY };
+      this.islandEl.setPointerCapture(e.pointerId);
+    });
+    this.islandEl.addEventListener("pointermove", (e) => {
+      if (!this.botPress || Math.hypot(e.clientX - this.botPress.x, e.clientY - this.botPress.y) < BOT_PULL_PX) return;
+      this.botPress = null;
+      this.islandEl.releasePointerCapture(e.pointerId);
+      this.desktop?.takeOut();
+    });
+    for (const done of ["pointerup", "pointercancel"] as const) {
+      this.islandEl.addEventListener(done, () => {
+        this.botPress = null;
+      });
+    }
     // The island has no menu of its own, and WebView2's is not one to show.
     this.islandEl.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -914,6 +943,8 @@ export class Island {
   }
 
   private isBotHit(x: number, y: number): boolean {
+    // Out on the desktop, there is no Mochi here to touch.
+    if (State.mochiOnDesktop) return false;
     const rect = this.islandRect();
     const cx = rect.x + this.botCx.value;
     const cy = rect.y + this.botCy.value;
@@ -1126,7 +1157,8 @@ export class Island {
       covered ||
       (State.mode === "expanded" && State.view === "overview" &&
         State.focusId === SPOTIFY_ID && State.integrations[SPOTIFY_ID]?.loaded === true);
-    const visible = p.opacity > 0 && !greetingActive && !this.uploadActive && !coverUp;
+    // Out on the desktop, he is not here either.
+    const visible = p.opacity > 0 && !greetingActive && !this.uploadActive && !coverUp && !State.mochiOnDesktop;
     this.botCanvas.style.opacity = visible ? "1" : "0";
 
     if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive && !coverUp) {
@@ -1264,7 +1296,25 @@ export class Island {
         if (State.mode === "expanded" && State.view === "wardrobe") this.collapse();
         else this.openOn("wardrobe");
         break;
+      case "desktopToggle":
+        if (this.desktop) this.desktop.toggle();
+        else this.refuse();
+        break;
     }
+  }
+
+  /** Mochi can live on the desktop where the boot says a window can be placed freely. */
+  desktopMochi(supported: boolean) {
+    if (!supported) return;
+    this.desktop = new DesktopMochi(true, () => this.shouldDance());
+    State.subscribe(() => this.desktop?.sync());
+  }
+
+  /** What desktop.rs says of Mochi's window, and what his page asks. */
+  desktopNews(what: string) {
+    if (what === "wardrobe") this.toggleWardrobe();
+    else this.desktop?.on(what);
+    this.ensureRunning();
   }
 
   /**

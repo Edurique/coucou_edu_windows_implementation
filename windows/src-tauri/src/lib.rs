@@ -1,6 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod claude;
+mod desktop;
 mod files;
 mod github;
 mod github_detail;
@@ -469,18 +470,20 @@ fn log_line(message: String) {
 /// for the *same* arguments as the island (see `additionalBrowserArgs` in
 /// tauri.conf.json) — a mismatch makes the second window come up blank, with no
 /// error anywhere.
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+pub(crate) const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
 
 /// In a dev build the pages are served by Vite, so the second window needs the
 /// absolute dev URL; a bundled build resolves it inside the app bundle.
-fn settings_page_url(app: &AppHandle) -> WebviewUrl {
+/// One of the app's own pages: from the dev server while developing, from the
+/// bundle otherwise.
+pub(crate) fn page_url(app: &AppHandle, page: &str) -> WebviewUrl {
     #[cfg(dev)]
     if let Some(mut base) = app.config().build.dev_url.clone() {
-        base.set_path("/settings.html");
+        base.set_path(&format!("/{page}"));
         return WebviewUrl::External(base);
     }
     let _ = app;
-    WebviewUrl::App("settings.html".into())
+    WebviewUrl::App(page.into())
 }
 
 /// The settings window is created hidden at launch and only ever shown and
@@ -488,7 +491,7 @@ fn settings_page_url(app: &AppHandle) -> WebviewUrl {
 /// not — silently comes up blank in this app, so the window that works is the
 /// one that exists before the island's webview does.
 fn create_settings_window(app: &AppHandle) {
-    let url = settings_page_url(app);
+    let url = page_url(app, "settings.html");
     match WebviewWindowBuilder::new(app, "settings", url)
         .additional_browser_args(BROWSER_ARGS)
         .title("Settings — Coucou")
@@ -588,12 +591,19 @@ pub fn run() {
             set_paused,
             shortcuts_list,
             shortcut_set,
+            desktop::mochi_fly_out,
+            desktop::mochi_fly_home,
+            desktop::mochi_grab,
+            desktop::mochi_take_out,
+            desktop::mochi_tell,
+            desktop::mochi_ask,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
             create_settings_window(&handle);
+            desktop::create(&handle);
 
             if let Some(win) = island::window(&handle) {
                 platform::make_non_activating(&win);

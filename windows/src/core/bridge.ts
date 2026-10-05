@@ -108,6 +108,20 @@ export const Bridge = {
     callOrThrow<{ text: string }>("chat_send", { query, context }),
   chatReset: () => call<void>("chat_reset"),
 
+  // ── Mochi on the desktop (desktop.rs) ─────────────────────────────────────
+  /** Out of the island to his place. False when he is out already, or cannot be here. */
+  mochiFlyOut: () => call<boolean>("mochi_fly_out"),
+  /** Back into the island; with `keep` he still lives on the desktop and returns later. */
+  mochiFlyHome: (keep: boolean) => call<boolean>("mochi_fly_home", { keep }),
+  /** The mouse went down on him, out there: he follows it until it is let go. */
+  mochiGrab: () => call<void>("mochi_grab"),
+  /** He was dragged out of the island: his window appears under the mouse, already held. */
+  mochiTakeOut: () => call<boolean>("mochi_take_out"),
+  /** What the island knows and his page draws. */
+  mochiTell: (what: unknown) => call<void>("mochi_tell", { what }),
+  /** What his page asks of the island: "wardrobe", "askHome". */
+  mochiAsk: (what: string) => call<void>("mochi_ask", { what }),
+
   // ── Shortcuts ─────────────────────────────────────────────────────────────
   /** The shortcuts that work from any app, each with the keys it is on. */
   shortcutsList: () => call<Shortcuts>("shortcuts_list"),

@@ -308,6 +308,8 @@ export interface Settings {
   showPlanInNotch: boolean;
   /** What Mochi wears: an outfit of the wardrobe, or "auto" for the season's. */
   mochiOutfit: Outfit;
+  /** Mochi lives on the desktop rather than in the island; kept by desktop.rs. */
+  mochiOnDesktop: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -334,6 +336,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lmstudioServerUrl: "",
   showPlanInNotch: false,
   mochiOutfit: "auto",
+  mochiOnDesktop: false,
 };
 
 type Listener = () => void;
@@ -344,6 +347,8 @@ class AppState {
 
   tasks: AgentTask[] = [];
   focusId: string | null = null;
+  /** Mochi is out on the desktop right now: the island shows none. */
+  mochiOnDesktop = false;
   /** The outfit under the mouse in the wardrobe: Mochi tries it on meanwhile. */
   wardrobePreview: Outfit | null = null;
   /** The season's outfit, worked out once a day. */

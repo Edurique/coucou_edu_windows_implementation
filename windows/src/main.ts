@@ -56,6 +56,8 @@ async function main() {
   await onEvent<boolean>("fullscreen", (full) => island.setFullscreen(full));
   await onEvent<null>("outside-press", () => island.outsidePress());
   await onEvent<string>("shortcut", (action) => island.shortcut(action));
+  await onEvent<string>("mochi", (what) => island.desktopNews(what));
+  island.desktopMochi(boot?.cursorPoll ?? false);
 
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {

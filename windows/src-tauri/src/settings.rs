@@ -65,6 +65,12 @@ pub struct Settings {
     /// their defaults (shortcuts.rs).
     #[serde(default)]
     pub shortcuts: std::collections::BTreeMap<String, crate::shortcuts::Shortcut>,
+    /// Mochi lives on the desktop rather than in the island (desktop.rs).
+    #[serde(default)]
+    pub mochi_on_desktop: bool,
+    /// Where on the desktop, in physical pixels; None until he has been there.
+    #[serde(default)]
+    pub desktop_mochi_at: Option<[i32; 2]>,
 }
 
 fn default_outfit() -> String {
@@ -126,6 +132,8 @@ impl Default for Settings {
             show_plan_in_notch: false,
             mochi_outfit: default_outfit(),
             shortcuts: Default::default(),
+            mochi_on_desktop: false,
+            desktop_mochi_at: None,
         }
     }
 }
