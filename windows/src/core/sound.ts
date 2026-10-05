@@ -1,5 +1,5 @@
 // SoundEngine — port of SoundEngine.swift.
-// The 28 WAVs are the macOS app's own files (see SOUNDS_DIR in vite.config.ts);
+// The 29 WAVs are the macOS app's own files (see SOUNDS_DIR in vite.config.ts);
 // they are served at /sounds/<name>.wav. Default volume 0.12, slider range 0–0.2,
 // exactly like the Mac player, and several sounds may overlap.
 
@@ -7,7 +7,7 @@ export const SOUND_NAMES = [
   "peek", "open", "close", "hover", "blip", "slap", "annoyed", "dizzy", "greet",
   "work", "finish", "error", "approval", "question", "approve", "gulp", "tick",
   "send", "love", "pop", "proud", "wink", "yawn", "attach", "think", "search",
-  "rate", "sleep",
+  "rate", "sleep", "greeting",
 ] as const;
 
 export type SoundName = (typeof SOUND_NAMES)[number];
@@ -21,6 +21,8 @@ class SoundEngine {
   private buffers = new Map<string, AudioBuffer>();
   private loading: Promise<void> | null = null;
   private idleTimer: number | null = null;
+  /** What is sounding now, by name: the last one started, so it can be faded out. */
+  private sounding = new Map<string, { src: AudioBufferSourceNode; gain: GainNode }>();
 
   /** Creates the context and decodes every WAV. Safe to call more than once. */
   preload(): Promise<void> {
@@ -97,8 +99,27 @@ class SoundEngine {
     if (ctx.state === "suspended") void ctx.resume();
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(master);
+    const gain = ctx.createGain();
+    src.connect(gain);
+    gain.connect(master);
+    const voice = { src, gain };
+    this.sounding.set(name, voice);
+    src.onended = () => {
+      gain.disconnect();
+      if (this.sounding.get(name) === voice) this.sounding.delete(name);
+    };
     src.start();
+  }
+
+  /** Lets a sound that is still going die away over `seconds` rather than cutting it. */
+  fadeOut(name: SoundName, seconds: number) {
+    const ctx = this.ctx;
+    const voice = this.sounding.get(name);
+    if (!ctx || !voice) return;
+    const now = ctx.currentTime;
+    voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
+    voice.gain.gain.linearRampToValueAtTime(0, now + seconds);
+    voice.src.stop(now + seconds);
   }
 }
 

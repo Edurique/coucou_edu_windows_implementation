@@ -5,30 +5,26 @@ import { wipe } from "../core/canvas";
 import { Sound } from "../core/sound";
 import { COMPACT_W, NOTCH_H, NOTCH_W } from "../core/layout";
 
-// ── Timing (mirrors greeting-v2.html `T`) ─────────────────────────────────────
+// ── Timing (mirrors `GT` in GreetingCanvasView.swift) ─────────────────────────
 
 const T = {
-  grow: 0.45,
-  squint0: 0.6,
-  squint1: 0.82,
-  dip0: 1.25,
-  dip1: 1.4,
-  pop0: 1.36,
-  pop1: 1.52,
-  content0: 2.45,
-  content1: 2.58,
-  tuck0: 2.58,
-  tuck1: 2.8,
+  pop0: 1.3,
+  pop1: 1.45,
+  content0: 2.4,
+  tuck0: 2.45,
+  tuck1: 2.7,
   badge: 2.72,
   down0: 2.85,
-  down1: 3.2,
-  blink2: 3.8,
+  down1: 3.45,
+  blink2: 3.7,
   tint0: 3.85,
   tint1: 4.15,
   end: 4.6,
   autoLeave: 4.9,
   COLLAPSE: 0.34,
 };
+/** How fast the hand waves, and the body bobs with it (Hz). */
+const WAVE_HZ = 5;
 
 export const GREETING_END = T.end;
 
@@ -82,51 +78,90 @@ function greetPose(t: number): Pose {
   const iw = lerp(NOTCH_W, 640, g);
   const ih = lerp(NOTCH_H, 150, g);
 
-  const gg = E.back(seg(t, 0.02, T.grow));
-  const hb = lerp(3, HB, gg);
-  let x = C0.x;
-  let y = lerp(16, C0.y, E.out(seg(t, 0.02, T.grow)));
-  let sx = 1;
-  let sy = 1;
-  let tilt = 0;
+  // He is not there before 0.20; then he grows as he falls in.
+  const hb = t < 0.2 ? 0 : lerp(HB * 0.15, HB, E.back(seg(t, 0.2, 0.6)));
 
-  if (t >= T.dip0 && t < T.pop1) {
-    const k = Math.sin(Math.PI * seg(t, T.dip0, T.pop1));
-    y += hb * 0.22 * k;
-    sy = 1 - 0.06 * k;
-    sx = 1 + 0.04 * k;
-  }
-  if (t >= T.pop1 && t < T.tuck1) {
+  // Where he goes, in body heights from his place at rest.
+  const landY = C0.y + 0.12 * HB;
+  const peakY = C0.y - 0.15 * HB;
+  const dipY = C0.y + 0.36 * HB;
+  const springY = C0.y - 0.1 * HB;
+  const sinkY = C0.y + 0.3 * HB;
+  const drift1 = C0.x - 0.16 * HB;
+  const drift2 = C0.x - 0.45 * HB;
+  const drift3 = C0.x - 0.57 * HB;
+  const drift4 = C0.x - 0.85 * HB;
+
+  // Sideways: a drift to the left, held while he waves, then back.
+  let x: number;
+  if (t < 0.85) x = C0.x;
+  else if (t < 1.2) x = lerp(C0.x, drift1, E.inOut(seg(t, 0.85, 1.2)));
+  else if (t < 1.3) x = lerp(drift1, drift2, E.easeIn(seg(t, 1.2, 1.3)));
+  else if (t < 1.45) x = lerp(drift2, drift3, E.inOut(seg(t, 1.3, 1.45)));
+  else if (t < 2.4) x = lerp(drift3, drift4, E.inOut(seg(t, 1.45, 2.4)));
+  else if (t < 2.85) x = drift4;
+  else x = lerp(drift4, C0.x, E.inOut(seg(t, 2.85, 3.45)));
+
+  // Up and down: the fall, the bounce, the plunge and its spring, the sink.
+  let y: number;
+  if (t < 0.2) y = EAR_Y;
+  else if (t < 0.6) y = lerp(EAR_Y, landY, E.easeIn(seg(t, 0.2, 0.6)));
+  else if (t < 0.73) y = lerp(landY, peakY, E.out(seg(t, 0.6, 0.73)));
+  else if (t < 0.9) y = lerp(peakY, C0.y, E.inOut(seg(t, 0.73, 0.9)));
+  else if (t < 1.2) y = C0.y;
+  else if (t < 1.3) y = lerp(C0.y, dipY, E.easeIn(seg(t, 1.2, 1.3)));
+  else if (t < 1.45) y = lerp(dipY, springY, E.out(seg(t, 1.3, 1.45)));
+  else if (t < 1.6) y = lerp(springY, C0.y, E.inOut(seg(t, 1.45, 1.6)));
+  else if (t < 2.4) y = C0.y;
+  else if (t < 2.7) y = lerp(C0.y, sinkY, E.inOut(seg(t, 2.4, 2.7)));
+  else if (t < 2.85) y = sinkY;
+  else y = lerp(sinkY, C0.y, E.inOut(seg(t, 2.85, 3.45)));
+
+  // He bobs with his waving hand.
+  if (t >= T.pop1 && t < T.tuck0) {
     const w = t - T.pop1;
-    const fade = 1 - seg(t, T.tuck0, T.tuck1);
-    x += Math.sin(w * 2 * Math.PI * 0.9) * hb * ASP * 0.05 * fade;
-    tilt = Math.sin(w * 2 * Math.PI * 0.9 + 0.6) * 0.05 * fade;
-    y += Math.sin(w * 2 * Math.PI * 1.8) * 0.8 * fade;
+    y += Math.sin(w * 2 * Math.PI * WAVE_HZ) * 0.02 * HB * clamp(w / 0.08, 0, 1);
   }
-  if (t >= T.tuck0 && t < T.down1) {
-    y += hb * 0.12 * Math.sin(Math.PI * seg(t, T.tuck0, T.down1));
-  }
+
+  const pulse = (a: number, b: number) => (t >= a && t < b ? Math.sin(Math.PI * seg(t, a, b)) : 0);
+  // Squashed on landing, stretched at the top of the bounce.
+  const landing = pulse(0.52, 0.68);
+  const bounce = pulse(0.62, 0.84);
+  let sx = 1 + 0.14 * landing - 0.1 * bounce;
+  let sy = 1 - 0.14 * landing + 0.18 * bounce;
+  // The same for the plunge and the spring out of it.
+  const plunge = pulse(1.18, 1.42);
+  const spring = pulse(1.3, 1.46);
+  sx += 0.12 * plunge - 0.18 * spring;
+  sy -= 0.12 * plunge - 0.25 * spring;
+  // Sinking to tuck his hands away, then up again.
+  const sink = t >= 2.38 && t < 2.7 ? E.inOut(seg(t, 2.38, 2.7)) : t >= 2.7 && t < 2.85 ? 1 - E.inOut(seg(t, 2.7, 2.85)) : 0;
+  sx += 0.18 * sink;
+  sy -= 0.14 * sink;
+  // A last small one, with a blink.
+  const micro = pulse(3.7, 3.82);
+  sx += 0.08 * micro;
+  sy -= 0.07 * micro;
+  const tilt = 0;
 
   let eye: EyeType = "dot";
-  if (t >= T.squint0 && t < T.squint1) eye = "happy";
-  if (t >= T.content0 && t < T.content1) eye = "content";
-  if (t >= T.down0 && t < T.down1) eye = "content";
-  let eyeRoll = 0;
-  if (t >= T.dip0 && t < T.pop1) eyeRoll = Math.sin(Math.PI * seg(t, T.dip0, T.pop1));
+  if (t >= 0.55 && t < 0.8) eye = "happy";
+  if (t >= T.content0 && t < T.tuck1) eye = "content";
+  const eyeRoll = 0;
   const blink = (tb: number) => {
     const k = seg(t, tb, tb + 0.12);
     return k > 0 && k < 1 ? 1 - Math.sin(Math.PI * k) * 0.94 : 1;
   };
-  const open = Math.min(blink(1.95), blink(T.blink2));
+  const open = Math.min(blink(1.95), blink(3.05), blink(T.blink2));
 
   let lookX = 0;
   let lookY = 0;
-  if (t >= T.squint1 && t < T.dip0) lookY = -0.2;
   if (t >= T.pop1 && t < T.content0) { lookX = 0.55; lookY = -0.45; }
-  if (t >= T.content0 && t < T.down1) { lookX = -0.3; lookY = 0.6; }
-  if (t >= T.down1) {
+  else if (t >= T.content0 && t < T.down0) { lookX = -0.3; lookY = 0.6; }
+  else if (t >= T.down0 && t < T.down1) { lookX = 0.3; lookY = 0.6; }
+  else if (t >= T.down1) {
     const k = E.inOut(seg(t, T.down1, T.down1 + 0.35));
-    lookX = lerp(-0.3, 0, k);
+    lookX = lerp(0.3, 0, k);
     lookY = lerp(0.6, 0, k);
   }
 
@@ -190,6 +225,7 @@ function pose(t: number, tc: number): Pose {
   p.card = a.card * (1 - seg(t, tc, tc + 0.18));
   p.handL = a.handL * (1 - seg(t, tc, tc + 0.15));
   p.handR = a.handR * (1 - seg(t, tc, tc + 0.15));
+  p.wave = a.wave >= 0 ? a.wave : -1;
   p.tilt = a.tilt * (1 - e);
   p.sx = lerp(a.sx, 1, e);
   p.sy = lerp(a.sy, 1, e);
@@ -207,8 +243,10 @@ function pose(t: number, tc: number): Pose {
 // ── Particles (seeded LCG, seed = 7, identical sequence to the Swift version) ──
 
 interface RingDot { a: number; j: number; s: number; al: number }
-interface Ring { t0: number; dots: RingDot[] }
-interface Streak { a: number; sp: number; len: number; t0: number; col: string }
+interface Warp { xNorm: number; speed: number; len: number; thick: number; alpha: number; t0: number }
+
+/** When the ring bursts, as he lands. */
+const RING_T0 = 0.45;
 
 const PARTICLES = (() => {
   let seed = 7;
@@ -216,24 +254,22 @@ const PARTICLES = (() => {
     seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
-  const rings: Ring[] = [0.1, 0.2, 0.3, 0.45, 0.6].map((t0) => ({
-    t0,
-    dots: Array.from({ length: 170 }, () => ({
-      a: rnd() * Math.PI * 2,
-      j: (rnd() - 0.5) * 0.22,
-      s: 0.7 + rnd() * 0.9,
-      al: 0.45 + rnd() * 0.55,
-    })),
+  // White streaks falling with him, across the island's width.
+  const warps: Warp[] = Array.from({ length: 70 }, () => ({
+    xNorm: rnd(),
+    speed: 400 + rnd() * 300,
+    len: 6 + rnd() * 16,
+    thick: 1 + rnd() * 0.5,
+    alpha: 0.25 + rnd() * 0.55,
+    t0: rnd() * 0.35,
   }));
-  const cols = ["#3B9EFF", "#F29B38", "#FF5A4E", "#2EC4A0", "#A78BFA"];
-  const streaks: Streak[] = Array.from({ length: 16 }, (_, i) => ({
-    a: (i / 16) * Math.PI * 2 + (rnd() - 0.5) * 0.3,
-    sp: 230 + rnd() * 260,
-    len: 6 + rnd() * 9,
-    t0: 0.08 + rnd() * 0.14,
-    col: cols[i % 5],
+  const ring: RingDot[] = Array.from({ length: 90 }, () => ({
+    a: rnd() * Math.PI * 2,
+    j: (rnd() - 0.5) * 0.22,
+    s: 0.7 + rnd() * 0.9,
+    al: 0.45 + rnd() * 0.55,
   }));
-  return { rings, streaks };
+  return { warps, ring };
 })();
 
 // ── Drawing ───────────────────────────────────────────────────────────────────
@@ -286,7 +322,12 @@ function drawHandL(x: CanvasRenderingContext2D, hw: number, hh: number, p: Pose)
   const r = hb * 0.15 * k;
   const rx = lerp(-hw * 0.35, -hw - hb * 0.22, k);
   let ry = lerp(hh * 0.85, hh * 0.62, k);
-  if (p.wave >= 0) ry += Math.sin(p.wave * 6) * hb * 0.02;
+  if (p.wave >= 0) {
+    // The wave: it comes in over 0.08 s and goes as the hand is tucked away.
+    const rampIn = clamp(p.wave / 0.08, 0, 1);
+    const rampOut = 1 - clamp((p.wave - (T.tuck0 - T.pop1)) / (T.tuck1 - T.tuck0), 0, 1);
+    ry += Math.sin(p.wave * 2 * Math.PI * WAVE_HZ) * hb * 0.14 * rampIn * rampOut;
+  }
   x.save();
   x.translate(rx, ry);
   const circ = new Path2D();
@@ -304,15 +345,10 @@ function drawHandR(x: CanvasRenderingContext2D, hw: number, hh: number, p: Pose)
   const hb = hh * 2;
   const L = hb * 0.4 * k;
   const T2 = hb * 0.22 * k;
-  let rx = lerp(hw * 0.35, hw + hb * 0.2, k);
-  let ry = lerp(hh * 0.85, hh * 0.2, k);
-  let ang = -0.61;
-  if (p.wave >= 0) {
-    const w = p.wave * 2 * Math.PI * 2.5;
-    ang += Math.sin(w) * 0.21;
-    ry += Math.sin(w + 0.8) * hb * 0.04;
-    rx += Math.cos(w) * hb * 0.015;
-  }
+  const rx = lerp(hw * 0.35, hw + hb * 0.2, k);
+  const ry = lerp(hh * 0.85, hh * 0.2, k);
+  // This one stays where it is and only breathes while the other waves.
+  const ang = p.wave >= 0 ? -0.61 + Math.sin(p.wave * 2 * Math.PI * 2.5) * 0.04 : -0.61;
   x.save();
   x.translate(rx, ry);
   x.rotate(ang);
@@ -434,30 +470,32 @@ function drawMochi(x: CanvasRenderingContext2D, p: Pose) {
 
 function drawParticles(x: CanvasRenderingContext2D, t: number, p: Pose) {
   if (!(p.card > 0 || p.fx < 1)) return;
-  for (const ring of PARTICLES.rings) {
-    const k = seg(t, ring.t0, ring.t0 + 1.35);
-    if (k <= 0 || k >= 1) continue;
+  if (t < 0.55) {
+    const fadeOut = 1 - seg(t, 0.4, 0.55);
+    x.lineCap = "butt";
+    for (const s of PARTICLES.warps) {
+      if (t < s.t0) continue;
+      const bottom = (t - s.t0) * s.speed;
+      if (bottom <= 0) continue;
+      const at = 320 - p.iw / 2 + s.xNorm * p.iw;
+      x.strokeStyle = `rgba(255,255,255,${s.alpha * p.fx * fadeOut})`;
+      x.lineWidth = s.thick;
+      x.beginPath();
+      x.moveTo(at, Math.max(0, bottom - s.len));
+      x.lineTo(at, Math.min(150, bottom));
+      x.stroke();
+    }
+  }
+  const k = seg(t, RING_T0, RING_T0 + 1.35);
+  if (k > 0 && k < 1) {
     const rx = lerp(14, 380, E.out(k));
     const ry = rx * 0.34;
     const fade = (1 - k) * (k < 0.08 ? k / 0.08 : 1) * p.fx * p.card;
-    for (const dot of ring.dots) {
+    for (const dot of PARTICLES.ring) {
       const r = 1 + dot.j;
       x.fillStyle = `rgba(255,255,255,${dot.al * fade})`;
       x.fillRect(C0.x + Math.cos(dot.a) * rx * r, C0.y + Math.sin(dot.a) * ry * r, dot.s, dot.s);
     }
-  }
-  for (const s of PARTICLES.streaks) {
-    const k = seg(t, s.t0, s.t0 + 0.6);
-    if (k <= 0 || k >= 1) continue;
-    const dist = s.sp * E.out(k) * 0.9 + 10;
-    const alpha = (1 - k) * p.fx;
-    x.strokeStyle = s.col + Math.round(alpha * 255).toString(16).padStart(2, "0");
-    x.lineWidth = 1.6;
-    x.lineCap = "round";
-    x.beginPath();
-    x.moveTo(C0.x + Math.cos(s.a) * (dist - s.len), C0.y + Math.sin(s.a) * (dist - s.len) * 0.42);
-    x.lineTo(C0.x + Math.cos(s.a) * dist, C0.y + Math.sin(s.a) * dist * 0.42);
-    x.stroke();
   }
 }
 
@@ -498,11 +536,9 @@ export class Greeting {
     this.tc = Number.POSITIVE_INFINITY;
     this.fired = false;
     this.cancelTimers();
-    this.timers.push(
-      window.setTimeout(() => Sound.play("greet"), T.pop0 * 1000),
-      window.setTimeout(() => Sound.play("blip"), T.badge * 1000),
-      window.setTimeout(() => this.fire(), (T.end + 0.05) * 1000),
-    );
+    // His own sound runs the length of the greeting, from its first frame.
+    Sound.play("greeting");
+    this.timers.push(window.setTimeout(() => this.fire(), (T.end + 0.05) * 1000));
   }
 
   /** Mouse entered the island during the greeting — hold it open. */
@@ -515,6 +551,7 @@ export class Greeting {
     const t = (performance.now() - this.startMs) / 1000;
     if (!Number.isFinite(this.tc) || this.tc > t) this.tc = t;
     this.cancelTimers();
+    Sound.fadeOut("greeting", 0.25);
   }
 
   get elapsed(): number {
