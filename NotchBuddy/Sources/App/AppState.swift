@@ -29,6 +29,9 @@ final class AppState: ObservableObject {
     // Bot drag-attach state (hides original bot while ghost follows cursor)
     @Published var isDraggingBot: Bool = false
 
+    // Desktop Mochi: true while Mochi lives on the desktop instead of the notch
+    @Published var mochiOnDesktop: Bool = false
+
     // Mouse tracking
     var mousePosition: CGPoint = .zero
     var lastMouseMove: Date = .now
@@ -37,6 +40,11 @@ final class AppState: ObservableObject {
 
     // Pinned (alerts that stay open, never auto-close)
     var isPinned: Bool = false
+
+    // Keyboard navigation — index of the selected item within the current card's list (nil = none)
+    @Published var cardSelection: Int? = nil
+    // Number of navigable items in the card currently on screen (0 = no list)
+    @Published var cardItemCount: Int = 0
 
     // Upload progress (0-1) — set to 1.0 only at completion; animation is time-based
     @Published var uploadProgress: Double = 0
@@ -51,6 +59,27 @@ final class AppState: ObservableObject {
     // Sound enabled — persisted
     @Published var soundEnabled: Bool = true {
         didSet { UserDefaults.standard.set(soundEnabled, forKey: "soundEnabled") }
+    }
+
+    // Mochi outfit selection — persisted
+    @Published var mochiOutfitSelection: Outfit = .auto {
+        didSet { Outfit.stored = mochiOutfitSelection }
+    }
+    // Transient: outfit preview while hovering in wardrobe (overrides resolvedOutfit in BotCanvasView)
+    var wardrobePreviewOutfit: Outfit? = nil
+    // Per-day seasonal cache — avoids recomputing Easter and date math on every frame
+    private var _seasonalCache: (dayOfYear: Int, year: Int, outfit: Outfit)?
+    var resolvedOutfit: Outfit {
+        if let preview = wardrobePreviewOutfit { return preview }
+        guard mochiOutfitSelection == .auto else { return mochiOutfitSelection }
+        let cal = Calendar.current
+        let now = Date()
+        let day  = cal.ordinality(of: .day, in: .year, for: now) ?? 0
+        let year = cal.component(.year, from: now)
+        if let c = _seasonalCache, c.dayOfYear == day && c.year == year { return c.outfit }
+        let outfit = Outfit.seasonal(for: now, calendar: cal)
+        _seasonalCache = (dayOfYear: day, year: year, outfit: outfit)
+        return outfit
     }
 
     // Claude model used by the chat and the search — persisted
@@ -248,6 +277,11 @@ final class AppState: ObservableObject {
             if let data = try? JSONEncoder().encode(Array(activeIntegrations)) {
                 UserDefaults.standard.set(data, forKey: "activeIntegrations")
             }
+            // Clear stale GitHub data when the integration is disabled
+            if !activeIntegrations.contains("integration_github") && oldValue.contains("integration_github") {
+                githubPulse = nil
+                githubActivity = nil
+            }
         }
     }
 
@@ -261,8 +295,10 @@ final class AppState: ObservableObject {
     @Published var resendEmails: [ResendEmail] = []
     @Published var resendTotal: Int? = nil
 
-    // GitHub stats (populated by GithubPoller)
+    // GitHub stats + pulse + activity (populated by GithubPoller)
     @Published var githubStats: GitHubStats? = nil
+    @Published var githubPulse: GitHubPulse? = nil
+    @Published var githubActivity: GitHubActivity? = nil
 
     // Stripe (populated by StripePoller)
     @Published var stripePayments: [StripePayment] = []
@@ -282,6 +318,9 @@ final class AppState: ObservableObject {
     @Published var notionLoaded: Bool = false
     @Published var notionError: String? = nil
 
+    // n8n — the last executions, newest first (for the iPhone; the notch shows only the latest)
+    @Published var n8nRuns: [N8nRun] = []
+
     // Chat conversation history
     @Published var chatHistory: [ChatMessage] = []
 
@@ -290,6 +329,44 @@ final class AppState: ObservableObject {
 
     // Pending AskUserQuestion from Claude Code hook
     @Published var pendingQuestion: AskQuestion? = nil
+
+    // Per-pill flat list of FileDiffs, in order of reception.
+    // Not @Published — steps[] changes already trigger redraws.
+    var sessionDiffs: [String: [FileDiff]] = [:]
+    private var sessionDiffTimers: [String: DispatchWorkItem] = [:]
+    // Monotonically increasing — never reset, not even in clearSessionDiffs.
+    private var nextDiffId: Int = 0
+
+    @discardableResult
+    func appendSessionDiff(_ diff: FileDiff, for pillId: String) -> Int {
+        var d = diff
+        d.id = nextDiffId
+        nextDiffId += 1
+        if sessionDiffs[pillId] == nil { sessionDiffs[pillId] = [] }
+        sessionDiffs[pillId]!.append(d)
+        // Keep at most 50 diffs per pill; drop oldest first
+        while sessionDiffs[pillId]!.count > 50 {
+            sessionDiffs[pillId]!.removeFirst()
+        }
+        resetSessionDiffTimer(for: pillId)
+        return d.id
+    }
+
+    func clearSessionDiffs(for pillId: String) {
+        sessionDiffTimers[pillId]?.cancel()
+        sessionDiffTimers.removeValue(forKey: pillId)
+        sessionDiffs.removeValue(forKey: pillId)
+        // nextDiffId intentionally NOT reset — ids remain unique across sessions
+    }
+
+    private func resetSessionDiffTimer(for pillId: String) {
+        sessionDiffTimers[pillId]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async { self?.clearSessionDiffs(for: pillId) }
+        }
+        sessionDiffTimers[pillId] = work
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3600, execute: work)
+    }
 
     #if !APPSTORE
     @Published var musicPlaying: Bool = false
@@ -328,6 +405,7 @@ final class AppState: ObservableObject {
 
         if let v = ud.object(forKey: "soundEnabled") as? Bool   { soundEnabled = v }
         if let v = ud.object(forKey: "soundVolume")  as? Double { soundVolume  = v }
+        mochiOutfitSelection = Outfit.stored
         if let v = ud.string(forKey: "claudeModel"),
            !v.trimmingCharacters(in: .whitespaces).isEmpty { claudeModel = v }
         if let v = ud.string(forKey: "chatProvider"), let p = ChatProvider(rawValue: v) { chatProvider = p }
@@ -422,6 +500,33 @@ final class AppState: ObservableObject {
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
         focusId = id
         tasks[idx].pillBadge = nil  // clear badge when user brings task to focus
+    }
+
+    func setPillBadge(_ badge: PillBadge, for id: String) {
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        tasks[idx].pillBadge = badge
+    }
+
+    /// Called on main thread after each GitHub pulse poll. Fires badge + sound based on events.
+    func handleGitHubEvents(_ events: [GitHubEvent]) {
+        guard !events.isEmpty else { return }
+        // Priority: error > question (reviewRequested) > finish (ciPassed)
+        var level = 0          // 0 = none, 1 = finish, 2 = question, 3 = error
+        var badge: PillBadge?
+        var sound: String?
+        for event in events {
+            switch event {
+            case .ciFailed, .mainFailed:
+                if level < 3 { level = 3; badge = .error;    sound = "error"    }
+            case .reviewRequested:
+                if level < 2 { level = 2; badge = .finished; sound = "question" }
+            case .ciPassed:
+                if level < 1 { level = 1; badge = .finished; sound = "finish"   }
+            }
+        }
+        // Only set badge when the GitHub pill is not currently in focus
+        if let b = badge, focusId != "integration_github" { setPillBadge(b, for: "integration_github") }
+        if let s = sound { SoundEngine.shared.play(s) }
     }
 
     func syncMode() {
@@ -635,6 +740,13 @@ struct CalcomBooking: Identifiable, Equatable {
 }
 
 // MARK: - Notion
+
+struct N8nRun: Equatable {
+    let workflow: String
+    let detail: String?
+    let success: Bool
+    let date: Date
+}
 
 struct NotionPage: Identifiable {
     let id: String
