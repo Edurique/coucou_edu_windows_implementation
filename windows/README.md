@@ -338,6 +338,70 @@ That is also where it stops:
 The idea of a keyless Spotify pill comes from corefusiion's pull request on the
 main repository (Louis-CFM/coucou#80).
 
+## Mochi
+
+### His wardrobe
+
+<img src="screenshots/wardrobe.png" width="640" alt="The wardrobe: Mochi in a witch hat, and a row of small Mochis each wearing one outfit">
+
+**Right-click Mochi** and the island opens on his wardrobe: a party hat, a
+beanie, a crown, a witch hat, a Santa hat, bunny ears, a bow, sunglasses, round
+glasses, a scarf or a pumpkin, all drawn in code. The mouse on one tries it on
+him, a click keeps it. **Auto** dresses him for the season on his own: a witch
+hat in October, a Santa hat in December, a party hat for the New Year, bunny
+ears at Easter, sunglasses in summer.
+
+<img src="screenshots/wardrobe-outfits.png" width="640" alt="Mochi in each of his eleven outfits">
+
+Only Mochi himself wears them: standing for another pill, he goes without.
+
+### On the desktop
+
+**Pull Mochi out of the island** — press on him, drag — and drop him anywhere
+on the desktop. He stays there in a small window of his own, on top of the
+others: he follows the mouse with his eyes, wears his outfit, dances to the
+music, and falls asleep when nothing has gone on for two minutes. The mouse
+goes through his window everywhere but on his body.
+
+- **Drag him** to move him; he remembers his place between launches.
+- **Click him** to poke him, **right-click** for the wardrobe.
+- **Double-click him**, or drop him back on the island, to bring him home.
+- When Claude needs an answer he flies back to the island with the request,
+  and returns to his place once it is given. A task that ends gets a happy jump.
+
+While he is out, his window follows the mouse sixty times a second and draws
+thirty frames a second (ten asleep): the island's "nothing at all while hidden"
+holds only while he is home. Not on Linux, where a window cannot place itself.
+
+### Shortcuts
+
+<img src="screenshots/shortcuts.png" width="640" alt="Settings: the list of shortcuts, each with its switch and its keys, one flagged as taken by another app">
+
+From any app:
+
+| Keys | What it does |
+|---|---|
+| Ctrl+Alt+Space | Open the chat |
+| Ctrl+Alt+A | Go to the request that is waiting |
+| Ctrl+Alt+T | Bring Claude's window forward |
+| Ctrl+Alt+→ / Ctrl+Alt+← | Next / previous pill |
+| Ctrl+Alt+M | Mute / unmute Mochi |
+| Ctrl+Alt+D | Send Mochi to the desktop, or bring him back |
+| Ctrl+Alt+G | Open / close the wardrobe |
+| Ctrl+Alt+N | Open / close the island — off until switched on |
+
+Each can be moved or switched off in **Settings… → Shortcuts**, which flags
+keys another app already has. Once a shortcut has opened the island it has the
+keyboard, and answers to: Ctrl+→ / Ctrl+← and Ctrl+1–9 for the pills, Ctrl+↓ /
+Ctrl+↑ to pick a line and Ctrl+O to open it, Ctrl+E for what Claude changed,
+Ctrl+P to pin, Ctrl+, for the settings, Ctrl+K in the chat for a new
+conversation, Esc to close.
+
+They are the Mac's, on Ctrl+Alt for its ⌃⌥. The pills are on the arrows rather
+than on [ and ] — on many keyboards those are typed with AltGr, which is
+Ctrl+Alt — and the island on Ctrl+Alt+N rather than Ctrl+Shift+N, which
+browsers use. Not on Linux, where an app is given no shortcut to register.
+
 ## Build it yourself
 
 You need [Rust](https://rustup.rs), [Node 20+](https://nodejs.org), and the
@@ -420,7 +484,11 @@ problems. It stays on your machine.
 - The [Spotify](#spotify) pill is Windows-only for now; it is what Mochi dances
   to here, where the Mac has Apple Music.
 - Not here yet: the Codex, Cursor, Gemini CLI and Antigravity pills, the choice
-  of a main coding tool, and the shortcut that shows the island.
+  of a main coding tool, and Coucou on iPhone.
+- [Shortcuts](#shortcuts) are on Ctrl+Alt, with the pills on the arrows; the one
+  that attaches the front window is not here.
+- Mochi on the [desktop](#on-the-desktop) is pulled out of the island rather than
+  dropped from a drag that could also attach a window.
 - GitHub goes further than the Mac's card: the [panel](#github), the news of a
   broken build or a merged pull request, and comments are Windows-only for now.
 
